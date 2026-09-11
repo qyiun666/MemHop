@@ -1,9 +1,9 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// Offline interface tests: exercise the public API surface through
-// memhop.OpenMulti with a mock OpenAI-compatible LLM server. No external
-// services required; run with `go test ./test/...`.
+// Offline interface tests: exercise the public API surface through memhop.Open
+// with a mock OpenAI-compatible LLM server. No external services required; run
+// with `go test ./test/...`.
 
 package test
 
@@ -18,54 +18,49 @@ import (
 )
 
 // testDB is the offline test handle: an agent-domain session plus the
-// file-level lifecycle methods of the underlying MultiAgentDB.
+// file-level lifecycle methods of the underlying DB.
 type testDB struct {
 	*memhop.Session
-	m *memhop.MultiAgentDB
+	m *memhop.DB
 }
 
 func (h *testDB) Checkpoint() error { return h.m.Checkpoint() }
 func (h *testDB) Close() error      { return h.m.Close() }
 func (h *testDB) IsClosed() bool    { return h.m.IsClosed() }
 
-// CompactTo is a file-level operation, so it lives on the MultiAgentDB handle
-// rather than the session.
+// CompactTo is a file-level operation, so it lives on the DB handle rather than
+// the session.
 func (h *testDB) CompactTo(newPath string) error { return h.m.CompactTo(newPath) }
 
-// openMockMulti opens a multi-agent DB with the mock LLM at path; multi-agent
-// is the only mode, so every handle goes through CreateAgent + Session.
-// Opts tweak cfg.Defaults per scenario.
-func openMockMulti(t *testing.T, path, llmURL string, opts ...func(*internal.MemHopDefaults)) *memhop.MultiAgentDB {
+// testLLM is the mock endpoint every offline scenario opens against.
+func testLLM(url string) memhop.LlmConfig {
+	return memhop.LlmConfig{APIURL: url, APIKey: "mock", Model: "mock-model"}
+}
+
+// openMockDB opens a database backed by the mock LLM at path. Opening a file
+// that is not there yet needs a primary profile, so every scenario supplies the
+// same fixture one. Opts tweak the tuning knobs per scenario.
+func openMockDB(t *testing.T, path, llmURL string, opts ...func(*memhop.MemHopDefaults)) *memhop.DB {
 	t.Helper()
-	cfg := &internal.MemHopConfig{
-		DBPath: path,
-	}
-	cfg.LLM.APIURL = llmURL
-	cfg.LLM.APIKey = "mock"
-	cfg.LLM.Model = "mock-model"
-	cfg.Defaults = internal.DefaultMemHopDefaults
+	defaults := memhop.DefaultMemHopDefaults
 	for _, opt := range opts {
-		opt(&cfg.Defaults)
+		opt(&defaults)
 	}
-	m, err := memhop.OpenMulti(cfg)
+	m, err := memhop.Open(path, testLLM(llmURL), defaults,
+		&memhop.ProfileSlot{Name: "test-primary", Role: "offline fixture"})
 	if err != nil {
-		t.Fatalf("OpenMulti: %v", err)
+		t.Fatalf("Open: %v", err)
 	}
 	return m
 }
 
-// newTestDB binds a session (tenant "test") to an opened multi-agent DB.
-func newTestDB(t *testing.T, m *memhop.MultiAgentDB) *testDB {
+// newTestDB binds a session on the file's primary domain to an opened DB.
+func newTestDB(t *testing.T, m *memhop.DB) *testDB {
 	t.Helper()
-	id, err := m.CreateAgent("test")
+	sess, err := m.Primary()
 	if err != nil {
 		m.Close()
-		t.Fatalf("CreateAgent: %v", err)
-	}
-	sess, err := m.Session(id)
-	if err != nil {
-		m.Close()
-		t.Fatalf("Session: %v", err)
+		t.Fatalf("Primary: %v", err)
 	}
 	return &testDB{Session: sess, m: m}
 }
@@ -74,7 +69,7 @@ func newTestDB(t *testing.T, m *memhop.MultiAgentDB) *testDB {
 func openTestDB(t *testing.T) (*testDB, *mockLLM) {
 	t.Helper()
 	llm := newMockLLM(t)
-	m := openMockMulti(t, filepath.Join(t.TempDir(), "test.meh"), llm.srv.URL)
+	m := openMockDB(t, filepath.Join(t.TempDir(), "test.meh"), llm.srv.URL)
 	h := newTestDB(t, m)
 	t.Cleanup(func() { _ = h.Close() })
 	return h, llm
@@ -123,7 +118,7 @@ func turn(db *memhop.Session, sceneID, topicID, user, agent string) error {
 func TestInterfaceOpenClose(t *testing.T) {
 	db, _ := openTestDB(t)
 	if db.IsClosed() {
-		t.Fatal("db should be open after OpenMulti")
+		t.Fatal("db should be open after Open")
 	}
 	if err := db.Close(); err != nil {
 		t.Fatalf("Close: %v", err)

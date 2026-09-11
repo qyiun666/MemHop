@@ -1,10 +1,11 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// Offline interface tests for the file-level surface a host holds: the tenant
-// registry (CreateAgent / ListAgents / Session) and CompactTo.
-// These are the MultiAgentDB methods, so this file works against the handle
-// directly rather than through the single-domain testDB used elsewhere.
+// Offline interface tests for the file-level surface a host holds: the two kinds
+// of domain (the primary a file is opened on, and sub-agents addressed by name)
+// and CompactTo. These are the DB handle's methods, so this file works against
+// the handle directly rather than through the single-domain testDB used
+// elsewhere.
 
 package test
 
@@ -16,11 +17,12 @@ import (
 	internal "github.com/qyiun666/MemHop/internal"
 )
 
-func mustSession(t *testing.T, m *memhop.MultiAgentDB, agentID string) *memhop.Session {
+// mustSub returns the sub-agent domain of one name, creating it the first time.
+func mustSub(t *testing.T, m *memhop.DB, llmURL, name string) *memhop.Session {
 	t.Helper()
-	sess, err := m.Session(agentID)
+	sess, err := m.SubAgent(testLLM(llmURL), memhop.ProfileSlot{Name: name})
 	if err != nil {
-		t.Fatalf("Session(%s): %v", agentID, err)
+		t.Fatalf("SubAgent(%s): %v", name, err)
 	}
 	return sess
 }
@@ -48,23 +50,17 @@ func queryFor(keyword string) internal.L4Query {
 
 func TestInterfaceAgentDomainsAreIsolated(t *testing.T) {
 	llm := newMockLLM(t)
-	m := openMockMulti(t, filepath.Join(t.TempDir(), "multi.meh"), llm.srv.URL)
+	m := openMockDB(t, filepath.Join(t.TempDir(), "multi.meh"), llm.srv.URL)
 	t.Cleanup(func() { _ = m.Close() })
 
-	alpha, err := m.CreateAgent("alpha")
-	if err != nil {
-		t.Fatalf("CreateAgent alpha: %v", err)
+	sa := mustSub(t, m, llm.srv.URL, "alpha")
+	sb := mustSub(t, m, llm.srv.URL, "beta")
+
+	// A name is the domain's address, so asking twice is one domain: a host calls
+	// this at every startup and treats the name as the key to its own records.
+	if again := mustSub(t, m, llm.srv.URL, "alpha"); again == nil {
+		t.Fatal("SubAgent(alpha) again returned no handle")
 	}
-	beta, err := m.CreateAgent("beta")
-	if err != nil {
-		t.Fatalf("CreateAgent beta: %v", err)
-	}
-	// Registering the same name again must be idempotent — a host calls this at
-	// every startup and treats the id as the key to its own records.
-	if again, err := m.CreateAgent("alpha"); err != nil || again != alpha {
-		t.Fatalf("CreateAgent(alpha) again = %s/%v, want %s", again, err, alpha)
-	}
-	sa, sb := mustSession(t, m, alpha), mustSession(t, m, beta)
 
 	sceneA := settleOneTurn(t, sa, "alpha 的专属话题", "记录 alpha 的事实")
 	sceneB := settleOneTurn(t, sb, "beta 的专属话题", "记录 beta 的事实")
@@ -86,17 +82,47 @@ func TestInterfaceAgentDomainsAreIsolated(t *testing.T) {
 		t.Fatalf("beta cannot read its own originals: %+v err %v", arcs, err)
 	}
 
-	// A profile belongs to one domain too.
-	profile := &memhop.ProfileSlot{Name: "Only alpha"}
-	if err := sa.UpdateL0(profile); err != nil {
+	// A profile belongs to one domain too, and each sub-agent domain is stamped
+	// as one: the identity is the library's, not the caller's.
+	if err := sa.UpdateL0(&memhop.ProfileSlot{Name: "Only alpha"}); err != nil {
 		t.Fatalf("UpdateL0: %v", err)
 	}
-	if got, err := sb.GetL0(); err != nil || got.Name != "" {
-		t.Fatalf("beta saw alpha's profile: %+v err %v", got, err)
+	alphaL0, err := sa.GetL0()
+	if err != nil {
+		t.Fatalf("alpha GetL0: %v", err)
+	}
+	if alphaL0.Name != "Only alpha" || alphaL0.AgentType != memhop.AgentTypeSub {
+		t.Fatalf("alpha's profile = %+v, want its own name stamped as a sub-agent", alphaL0)
+	}
+	betaL0, err := sb.GetL0()
+	if err != nil {
+		t.Fatalf("beta GetL0: %v", err)
+	}
+	if betaL0.Name == "Only alpha" {
+		t.Fatalf("beta saw alpha's profile: %+v", betaL0)
+	}
+	if betaL0.AgentType != memhop.AgentTypeSub {
+		t.Fatalf("beta is not stamped as a sub-agent: %+v", betaL0)
 	}
 
-	// L3 is the one file-wide pool: a graph alpha imports is visible to beta
-	// through list and query.
+	// The primary is a third domain, apart from both, and stamped as the primary.
+	primary, err := m.Primary()
+	if err != nil {
+		t.Fatalf("Primary: %v", err)
+	}
+	primaryL0, err := primary.GetL0()
+	if err != nil {
+		t.Fatalf("primary GetL0: %v", err)
+	}
+	if primaryL0.AgentType != memhop.AgentTypePrimary {
+		t.Fatalf("the file's primary is not stamped as one: %+v", primaryL0)
+	}
+	if scenes, err := primary.ListScenes(""); err != nil || len(scenes) != 0 {
+		t.Fatalf("the primary sees a sub-agent's scenes: %+v err %v", scenes, err)
+	}
+
+	// L3 is the one file-wide pool: a graph alpha imports is visible to beta and
+	// to the primary through list and query.
 	if _, err := sa.ImportL3([]internal.L3ImportItem{
 		{Title: "append-only", Domain: "engine", NodeType: "concept", Content: "single .meh"},
 	}, internal.L3ImportSkip); err != nil {
@@ -109,35 +135,35 @@ func TestInterfaceAgentDomainsAreIsolated(t *testing.T) {
 	if nodes, err := sb.QueryL3Nodes(internal.L3NodeQuery{GraphID: graphs[0].IDHash}); err != nil || len(nodes) != 1 {
 		t.Fatalf("beta query over alpha's graph: %+v err %v", nodes, err)
 	}
+	if shared, err := primary.ListL3(); err != nil || len(shared) != 1 {
+		t.Fatalf("the primary cannot see the shared pool: %+v err %v", shared, err)
+	}
+}
 
-	// The registry lists every tenant by hex id and never the implicit default
-	// domain, which has no name to report.
-	agents, err := m.ListAgents()
-	if err != nil {
-		t.Fatalf("ListAgents: %v", err)
-	}
-	if len(agents) != 2 {
-		t.Fatalf("ListAgents = %+v, want the two tenants", agents)
-	}
-	names := map[string]string{}
-	for _, a := range agents {
-		if len(a.ID) != 16 || a.ID == memhop.DefaultAgentID {
-			t.Fatalf("agent id %q is not a minted hex id", a.ID)
-		}
-		names[a.Name] = a.ID
-	}
-	if names["alpha"] != alpha || names["beta"] != beta {
-		t.Fatalf("registry lost a mapping: %+v", agents)
-	}
-	for i := 1; i < len(agents); i++ {
-		if agents[i-1].ID > agents[i].ID {
-			t.Fatalf("ListAgents is not sorted by id: %+v", agents)
-		}
+// A sub-agent domain is addressed by name, so a restart finds the same one
+// instead of minting a second — that is what lets a host treat the name as the
+// key to its own records. A name nobody registered is a new empty domain, not an
+// error and not somebody else's memory.
+func TestInterfaceSubAgentDomainSurvivesReopen(t *testing.T) {
+	llm := newMockLLM(t)
+	path := filepath.Join(t.TempDir(), "reopen.meh")
+	m := openMockDB(t, path, llm.srv.URL)
+	sa := mustSub(t, m, llm.srv.URL, "alpha")
+	sceneA := settleOneTurn(t, sa, "alpha 的记忆", "记下了")
+	if err := m.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
 	}
 
-	// An id the registry never issued is refused at the handle boundary.
-	if _, err := m.Session("ffffffffffffffff"); err == nil {
-		t.Fatal("Session on an unknown agent id should be refused")
+	reopened := openMockDB(t, path, llm.srv.URL)
+	t.Cleanup(func() { _ = reopened.Close() })
+	back := mustSub(t, reopened, llm.srv.URL, "alpha")
+	scenes, err := back.ListScenes("")
+	if err != nil || len(scenes) != 1 || scenes[0].SceneID != sceneA {
+		t.Fatalf("the reopened domain lost its scene: %+v err %v", scenes, err)
+	}
+	fresh := mustSub(t, reopened, llm.srv.URL, "gamma")
+	if scenes, err := fresh.ListScenes(""); err != nil || len(scenes) != 0 {
+		t.Fatalf("a fresh name inherited memory: %+v err %v", scenes, err)
 	}
 }
 
@@ -145,7 +171,7 @@ func TestInterfaceCompactTo(t *testing.T) {
 	llm := newMockLLM(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "meow.meh")
-	m := openMockMulti(t, path, llm.srv.URL)
+	m := openMockDB(t, path, llm.srv.URL)
 	db := newTestDB(t, m)
 	sceneID := settleOneTurn(t, db.Session, "将被删除的对话", "回答")
 	if _, err := db.ImportL3([]internal.L3ImportItem{
@@ -187,14 +213,14 @@ func TestInterfaceCompactTo(t *testing.T) {
 	}
 
 	// The copy is a complete database: it opens on its own, carries the live
-	// records and none of what was deleted.
-	reopened := openMockMulti(t, taken, llm.srv.URL)
+	// records and none of what was deleted. It also carries the primary the
+	// original was opened with, which is what lets it open at all.
+	reopened := openMockDB(t, taken, llm.srv.URL)
 	t.Cleanup(func() { _ = reopened.Close() })
-	id, err := reopened.CreateAgent("test")
+	sess, err := reopened.Primary()
 	if err != nil {
-		t.Fatalf("CreateAgent on the compacted copy: %v", err)
+		t.Fatalf("Primary on the compacted copy: %v", err)
 	}
-	sess := mustSession(t, reopened, id)
 	if scenes, err := sess.ListScenes(""); err != nil || len(scenes) != 0 {
 		t.Fatalf("compacted copy still holds the deleted scene: %+v err %v", scenes, err)
 	}

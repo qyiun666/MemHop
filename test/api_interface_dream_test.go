@@ -18,7 +18,7 @@ func TestInterfaceDream(t *testing.T) {
 	// Lower the compress threshold so two turns in one session trigger the
 	// consolidate call.
 	llm := newMockLLM(t)
-	m := openMockMulti(t, filepath.Join(t.TempDir(), "test.meh"), llm.srv.URL,
+	m := openMockDB(t, filepath.Join(t.TempDir(), "test.meh"), llm.srv.URL,
 		func(d *internal.MemHopDefaults) { d.DreamCompressMinTopics = 2 })
 	db := newTestDB(t, m)
 	defer db.Close()
@@ -93,7 +93,7 @@ func TestInterfaceDream(t *testing.T) {
 func TestInterfaceCheckpointPersist(t *testing.T) {
 	llm := newMockLLM(t)
 	path := filepath.Join(t.TempDir(), "persist.meh")
-	m := openMockMulti(t, path, llm.srv.URL)
+	m := openMockDB(t, path, llm.srv.URL)
 
 	db := newTestDB(t, m)
 	sceneID := openSession(t, db)
@@ -110,7 +110,7 @@ func TestInterfaceCheckpointPersist(t *testing.T) {
 
 	// Reopen the same file: the tenant registry persists, so the same name
 	// resolves to the same domain, and the caches rebuild from the records.
-	m2 := openMockMulti(t, path, llm.srv.URL)
+	m2 := openMockDB(t, path, llm.srv.URL)
 	defer m2.Close()
 	db2 := newTestDB(t, m2)
 	scenes, err := db2.ListScenes("")

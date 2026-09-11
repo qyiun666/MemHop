@@ -82,12 +82,12 @@ func loadLLMConfig(cfg *internal.MemHopConfig) error {
 	return nil
 }
 
-// Handle is the test handle of the multi-agent-only API: an agent-domain
-// session plus the file-level lifecycle methods of the underlying
-// MultiAgentDB (Close / Checkpoint / IsClosed).
+// Handle is the test handle of the public API: an agent-domain session plus the
+// file-level lifecycle methods of the underlying DB (Close / Checkpoint /
+// IsClosed).
 type Handle struct {
 	*memhop.Session
-	m *memhop.MultiAgentDB
+	m *memhop.DB
 }
 
 func (h *Handle) Checkpoint() error { return h.m.Checkpoint() }
@@ -137,7 +137,9 @@ func (h *Handle) SettleTurn(sceneID, turnID, user, agent string, ts int64) error
 	return h.Update(sceneID, turnID)
 }
 
-// open is the shared implementation for testing.T and testing.B.
+// open is the shared implementation for testing.T and testing.B. The handle it
+// returns is bound to the file's primary domain: every scenario gets a fresh
+// temporary directory, so there is nothing else in the file to be primary over.
 func open(tb testing.TB) *Handle {
 	cfg := &internal.MemHopConfig{
 		DBPath:   filepath.Join(tb.TempDir(), "test.meh"),
@@ -147,19 +149,15 @@ func open(tb testing.TB) *Handle {
 		tb.Skipf("跳过真实依赖测试: %v", err)
 	}
 
-	m, err := memhop.OpenMulti(cfg)
+	m, err := memhop.Open(cfg.DBPath, cfg.LLM, cfg.Defaults,
+		&memhop.ProfileSlot{Name: "test-primary", Role: "integration fixture"})
 	if err != nil {
-		tb.Fatalf("memhop.OpenMulti: %v", err)
+		tb.Fatalf("memhop.Open: %v", err)
 	}
-	id, err := m.CreateAgent("test")
+	sess, err := m.Primary()
 	if err != nil {
 		m.Close()
-		tb.Fatalf("CreateAgent: %v", err)
-	}
-	sess, err := m.Session(id)
-	if err != nil {
-		m.Close()
-		tb.Fatalf("Session: %v", err)
+		tb.Fatalf("Primary: %v", err)
 	}
 	return &Handle{Session: sess, m: m}
 }

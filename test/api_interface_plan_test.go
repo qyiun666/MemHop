@@ -345,7 +345,7 @@ func TestInterfaceTurnEventsKeyToTheirOwnTurn(t *testing.T) {
 func TestInterfacePlanAndTrajectorySurviveReopen(t *testing.T) {
 	llm := newMockLLM(t)
 	path := filepath.Join(t.TempDir(), "reopen.meh")
-	db := newTestDB(t, openMockMulti(t, path, llm.srv.URL))
+	db := newTestDB(t, openMockDB(t, path, llm.srv.URL))
 	sceneID := openSession(t, db)
 	turnID := openTurn(t, db, sceneID)
 	ts := time.Now().UnixMilli()
@@ -362,7 +362,7 @@ func TestInterfacePlanAndTrajectorySurviveReopen(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 
-	reopened := newTestDB(t, openMockMulti(t, path, llm.srv.URL))
+	reopened := newTestDB(t, openMockDB(t, path, llm.srv.URL))
 	events := mustEvents(t, reopened, turnID)
 	if len(events) != 2 || events[0].Seq != 3 || events[1].Seq != 4 {
 		t.Fatalf("events after reopen = %+v, want Seq 3 and 4 rebuilt from records", events)

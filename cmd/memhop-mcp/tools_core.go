@@ -39,7 +39,7 @@ type statusResult struct {
 
 // registerCoreTools installs the memory-loop entry points; one register
 // function per tool keeps each declaration list short.
-func registerCoreTools(s *mcp.Server, m *memhop.MultiAgentDB, db *memhop.Session) {
+func registerCoreTools(s *mcp.Server, m *memhop.DB, db *memhop.Session) {
 	registerSearchTool(s, db)
 	registerUpdateTool(s, db)
 	registerDreamTool(s, db)
@@ -98,7 +98,7 @@ func registerDreamTool(s *mcp.Server, db *memhop.Session) {
 }
 
 // registerMaintenanceTools installs the two no-argument lifecycle tools.
-func registerMaintenanceTools(s *mcp.Server, m *memhop.MultiAgentDB, db *memhop.Session) {
+func registerMaintenanceTools(s *mcp.Server, m *memhop.DB, db *memhop.Session) {
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_checkpoint",
 		Description: "将当前状态持久化到磁盘（记录索引 + A/B header），不关闭数据库。",

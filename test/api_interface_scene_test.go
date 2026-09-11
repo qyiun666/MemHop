@@ -176,7 +176,7 @@ func TestInterfaceSceneNameAndAnchor(t *testing.T) {
 // Dream-fused group. Both halves have to hold together.
 func TestInterfaceSceneContextReadsThroughFusion(t *testing.T) {
 	llm := newMockLLM(t)
-	m := openMockMulti(t, filepath.Join(t.TempDir(), "ctx.meh"), llm.srv.URL,
+	m := openMockDB(t, filepath.Join(t.TempDir(), "ctx.meh"), llm.srv.URL,
 		func(d *internal.MemHopDefaults) { d.DreamCompressMinTopics = 2 })
 	db := newTestDB(t, m)
 	t.Cleanup(func() { _ = db.Close() })

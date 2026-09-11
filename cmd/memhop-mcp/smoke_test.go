@@ -30,13 +30,13 @@ func TestSSEMultiTenantIsolation(t *testing.T) {
 	alice := connectTenant(t, srv.URL, "alice")
 	bob := connectTenant(t, srv.URL, "bob")
 
-	// tools/list exposes all 22 tools on the alice session.
+	// tools/list exposes all 24 tools on the alice session.
 	tools, err := alice.ListTools(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("list tools: %v", err)
 	}
-	if len(tools.Tools) != 22 {
-		t.Errorf("expected 22 tools, got %d", len(tools.Tools))
+	if len(tools.Tools) != 24 {
+		t.Errorf("expected 24 tools, got %d", len(tools.Tools))
 	}
 	names := make(map[string]bool, len(tools.Tools))
 	for _, tool := range tools.Tools {
@@ -44,8 +44,9 @@ func TestSSEMultiTenantIsolation(t *testing.T) {
 	}
 	for _, want := range []string{
 		"memhop_search", "memhop_update", "memhop_dream", "memhop_checkpoint", "memhop_status",
+		"memhop_l1_nodes",
 		"memhop_profile_get", "memhop_profile_update", "memhop_scene_list", "memhop_scene_merge",
-		"memhop_scene_topics", "memhop_scene_rename",
+		"memhop_scene_topics", "memhop_scene_rename", "memhop_topic_rename",
 		"memhop_knowledge_get", "memhop_knowledge_list", "memhop_knowledge_import",
 		"memhop_knowledge_update", "memhop_knowledge_delete", "memhop_knowledge_nodes",
 		"memhop_knowledge_subgraph", "memhop_archive_search", "memhop_archive_get",
@@ -90,7 +91,9 @@ func TestSSEMultiTenantIsolation(t *testing.T) {
 		t.Errorf("profile round-trip mismatch: %+v", p)
 	}
 
-	// Bob must not see Alice's data: a fresh profile with empty name.
+	// Bob must not see Alice's data. Bob's own domain does carry an identity —
+	// the tenant name it was created under — so what this pins is that bob's
+	// profile is bob's, with none of alice's three fields in it.
 	profile, err = callClient(t, bob, "memhop_profile_get", map[string]any{})
 	if err != nil {
 		t.Fatalf("bob memhop_profile_get: %v", err)
@@ -98,7 +101,10 @@ func TestSSEMultiTenantIsolation(t *testing.T) {
 	if err := json.Unmarshal([]byte(profile), &p); err != nil {
 		t.Fatalf("unmarshal bob profile: %v", err)
 	}
-	if p.Name != "" || p.Role != "" || p.Personality != "" {
+	if p.Name != "bob" {
+		t.Errorf("bob's profile should carry his own tenant name: %+v", p)
+	}
+	if p.Role == "tester" || p.Personality == "concise" || p.Name == "alice-agent" {
 		t.Errorf("bob sees alice's profile: %+v", p)
 	}
 

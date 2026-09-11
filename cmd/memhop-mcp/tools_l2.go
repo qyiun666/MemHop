@@ -26,6 +26,11 @@ type sceneRenameArgs struct {
 	Name    string `json:"name"`
 }
 
+type topicRenameArgs struct {
+	TopicID string `json:"topic_id"`
+	Name    string `json:"name"`
+}
+
 type sceneMergeArgs struct {
 	PrimaryID    string   `json:"primary_id"`
 	SecondaryIDs []string `json:"secondary_ids"`
@@ -110,6 +115,18 @@ func registerSceneDetailTools(s *mcp.Server, db *memhop.Session) {
 		}, "scene_id", "name"),
 	}, handle[sceneRenameArgs, updateResult](func(a sceneRenameArgs) (updateResult, error) {
 		_, err := db.UpdateScene(a.SceneID, memhop.ScenePatch{Name: &a.Name})
+		return updateResult{OK: true}, err
+	}))
+
+	s.AddTool(&mcp.Tool{
+		Name:        "memhop_topic_rename",
+		Description: "给一轮（一个 L2 话题）起名。话题创建时无名，本工具是宿主给某一轮一个自己能认回来的指称的唯一入口；名字归宿主，引擎不派生，所以后续巩固与合并都不会覆盖它。空名被拒（空是「还没命名」而不是一个名字），未知话题返回错误。",
+		InputSchema: objSchema(map[string]any{
+			"topic_id": strProp("话题 ID（16 位 hex，即 memhop_search 返回的 new_topic_id），必填"),
+			"name":     strProp("新话题名，必填非空"),
+		}, "topic_id", "name"),
+	}, handle[topicRenameArgs, updateResult](func(a topicRenameArgs) (updateResult, error) {
+		_, err := db.RenameTopic(a.TopicID, a.Name)
 		return updateResult{OK: true}, err
 	}))
 

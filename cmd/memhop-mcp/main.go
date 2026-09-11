@@ -31,7 +31,7 @@ import (
 	"time"
 )
 
-const version = "v1.6.0"
+const version = "v1.6.3"
 
 func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
@@ -44,6 +44,13 @@ func main() {
 	}
 
 	reg := newRegistry(cfg.Base, cfg.DBDir, cfg.Tenants, logger)
+	// Open the shared database now: an unusable --db-dir or a half-specified LLM
+	// endpoint should stop the process here rather than answer the first request
+	// with a 500.
+	if err := reg.OpenShared(); err != nil {
+		logger.Error("open shared database", "error", err)
+		os.Exit(1)
+	}
 	handler, err := buildHandler(cfg, reg)
 	if err != nil {
 		logger.Error("unknown transport", "transport", cfg.Transport)

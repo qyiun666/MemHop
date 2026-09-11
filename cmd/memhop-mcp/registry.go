@@ -1,13 +1,12 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// Tenant registry: one shared multi-agent MemHop database serves every
-// tenant. Each tenant maps to an isolated agent domain inside the single
-// <db-dir>/memhop.meh file (CreateAgent hands out a stable agentID per
-// tenant name), so no data is ever shared across tenants while one engine
-// instance carries all domains. The registry is safe for concurrent use;
-// the mutex also guarantees the shared DB is opened exactly once even under
-// simultaneous first connections.
+// Tenant registry: one shared MemHop database serves every tenant. Each tenant
+// maps to an isolated sub-agent domain inside the single <db-dir>/memhop.meh
+// file, addressed by the tenant name and created on first access, so no data is
+// ever shared across tenants while one engine instance carries all domains. The
+// registry is safe for concurrent use; the mutex also guarantees the shared DB
+// is opened exactly once even under simultaneous first connections.
 
 package main
 
@@ -27,19 +26,28 @@ import (
 // dbFileName is the single shared database file inside --db-dir.
 const dbFileName = "memhop.meh"
 
-// tenantRegistry lazily opens the shared multi-agent DB and serves one MCP
-// server per tenant bound to that tenant's agent domain.
+// primaryProfile is the profile the shared file is opened on. Every tenant gets
+// its own sub-agent domain and no tool is bound to the primary, so this exists
+// only because opening a file that does not exist yet needs to know whose memory
+// it is. It is deliberately not configurable: there is nothing to configure.
+var primaryProfile = memhop.ProfileSlot{
+	Name: "memhop-mcp",
+	Role: "primary domain of the shared MCP database file",
+}
+
+// tenantRegistry opens the shared DB and serves one MCP server per tenant bound
+// to that tenant's sub-agent domain.
 type tenantRegistry struct {
 	mu      sync.Mutex
-	base    memhop.MemHopConfig // shared engine config; DBPath set once at open
+	base    memhop.MemHopConfig // LLM endpoint and tuning knobs; DBPath is the registry's
 	dbDir   string
 	allowed map[string]bool // empty means any valid tenant id
-	db      *memhop.MultiAgentDB
+	db      *memhop.DB
 	entries map[string]*mcp.Server
 	logger  *slog.Logger
 	// open is a small injection seam for offline tests; production always
-	// uses memhop.OpenMulti.
-	open func(cfg *memhop.MemHopConfig) (*memhop.MultiAgentDB, error)
+	// uses memhop.Open.
+	open func(path string, llm memhop.LlmConfig, defaults memhop.MemHopDefaults, profile *memhop.ProfileSlot) (*memhop.DB, error)
 }
 
 // newRegistry builds a tenant registry. allowed is the tenant whitelist;
@@ -50,7 +58,7 @@ func newRegistry(base memhop.MemHopConfig, dbDir string, allowed []string, logge
 		dbDir:   dbDir,
 		entries: make(map[string]*mcp.Server),
 		logger:  logger,
-		open:    memhop.OpenMulti,
+		open:    memhop.Open,
 	}
 	if len(allowed) > 0 {
 		r.allowed = make(map[string]bool, len(allowed))
@@ -80,11 +88,9 @@ func (r *tenantRegistry) get(tenant string) (*mcp.Server, error) {
 			return nil, err
 		}
 	}
-	agentID, err := r.db.CreateAgent(tenant)
-	if err != nil {
-		return nil, err
-	}
-	session, err := r.db.Session(agentID)
+	// The tenant name is the domain's address, so a reconnecting tenant lands on
+	// the domain it already had rather than minting a second one.
+	session, err := r.db.SubAgent(r.base.LLM, memhop.ProfileSlot{Name: tenant, Role: "MCP tenant"})
 	if err != nil {
 		return nil, err
 	}
@@ -98,11 +104,23 @@ func (r *tenantRegistry) get(tenant string) (*mcp.Server, error) {
 	return server, nil
 }
 
-// openShared opens the single shared database file inside db-dir. os.Root
-// anchors every file operation to db-dir: the constant database filename is
-// resolved through the root, whose operations can never escape the
-// directory (path-traversal defense in depth on top of the tenant-id
-// whitelist). The engine itself creates the file on first write.
+// OpenShared opens the single shared database file inside db-dir. main calls it
+// at startup so a bad --db-dir or an unusable LLM configuration is a process that
+// refuses to start rather than a 500 on the first request; get also calls it, so
+// a registry used without that step still works.
+//
+// os.Root anchors every file operation to db-dir: the constant database filename
+// is resolved through the root, whose operations can never escape the directory
+// (path-traversal defense in depth on top of the tenant-id whitelist).
+func (r *tenantRegistry) OpenShared() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.db != nil {
+		return nil
+	}
+	return r.openShared()
+}
+
 func (r *tenantRegistry) openShared() error {
 	root, err := os.OpenRoot(r.dbDir)
 	if err != nil {
@@ -115,12 +133,8 @@ func (r *tenantRegistry) openShared() error {
 	if err := root.Close(); err != nil {
 		return err
 	}
-	cfg := r.base
-	cfg.DBPath = filepath.Join(r.dbDir, dbFileName)
-	if err := cfg.Validate(); err != nil {
-		return err
-	}
-	db, err := r.open(&cfg)
+	primary := primaryProfile
+	db, err := r.open(filepath.Join(r.dbDir, dbFileName), r.base.LLM, r.base.Defaults, &primary)
 	if err != nil {
 		return err
 	}
