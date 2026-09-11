@@ -113,7 +113,10 @@ func DeleteGraphL3(engine *core.StorageEngine, agentID uint64, id uint64) bool {
 	return err == nil
 }
 
-// UpdateGraphL3 partially updates a graph slot (currently Name only).
+// UpdateGraphL3 partially updates a graph slot (currently Name only) and always
+// moves UpdatedAt forward. A nil name is therefore a stamp: the way a caller
+// whose write landed on the graph's nodes and edges, not on its label, records
+// that the graph changed.
 func UpdateGraphL3(engine *core.StorageEngine, agentID uint64, id uint64, name *string) (*core.HypergraphSlot, error) {
 	slot, err := core.ReadGraphSlot(engine, agentID, id)
 	if err != nil {

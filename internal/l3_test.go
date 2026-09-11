@@ -153,6 +153,89 @@ func TestImportL3SkipExisting(t *testing.T) {
 	}
 }
 
+// A graph's UpdatedAt is its change clock. It moves for each kind of write a
+// batch can land on the graph — a node created, a node restated, an edge added —
+// and stays put for a batch that only read it. Each case rewinds the stored stamp
+// rather than sleeping, because the clock is millisecond-resolution and two
+// imports can easily fall inside one.
+func TestImportL3StampsGraphClock(t *testing.T) {
+	db := newL3TestDB(t)
+	rewind := func(t *testing.T, hexID string, to int64) {
+		t.Helper()
+		slot, err := repo.ReadSharedGraphL3(db.engine, hexID)
+		if err != nil {
+			t.Fatalf("read graph: %v", err)
+		}
+		slot.UpdatedAt = to
+		if err := core.WriteGraphSlot(db.engine, core.SharedPoolAgentID, slot.IDHash, slot); err != nil {
+			t.Fatalf("rewind graph clock: %v", err)
+		}
+	}
+	stamp := func(t *testing.T, hexID string) int64 {
+		t.Helper()
+		slot, err := repo.ReadSharedGraphL3(db.engine, hexID)
+		if err != nil {
+			t.Fatalf("read graph: %v", err)
+		}
+		return slot.UpdatedAt
+	}
+
+	res, err := db.ImportL3(core.DefaultAgentID, []L3ImportItem{
+		{Title: "clock-a", Domain: "go", Content: "v1"},
+		{Title: "clock-b", Domain: "go", Content: "v1"},
+	}, L3ImportSkip)
+	if err != nil {
+		t.Fatal(err)
+	}
+	graphID := res.GraphIDs[0]
+
+	// Nothing new here: the same two nodes, skipped, and no relation declared.
+	rewind(t, graphID, 1000)
+	if _, err := db.ImportL3(core.DefaultAgentID, []L3ImportItem{
+		{Title: "clock-a", Domain: "go", Content: "v2"},
+		{Title: "clock-b", Domain: "go", Content: "v2"},
+	}, L3ImportSkip); err != nil {
+		t.Fatal(err)
+	}
+	if got := stamp(t, graphID); got != 1000 {
+		t.Fatalf("a batch that wrote nothing moved the clock to %d", got)
+	}
+
+	// A node created into the existing graph.
+	rewind(t, graphID, 2000)
+	if _, err := db.ImportL3(core.DefaultAgentID, []L3ImportItem{
+		{Title: "clock-c", Domain: "go", Content: "v1"},
+	}, L3ImportSkip); err != nil {
+		t.Fatal(err)
+	}
+	if got := stamp(t, graphID); got <= 2000 {
+		t.Fatalf("creating a node left the clock at %d", got)
+	}
+
+	// A node restated, with the graph's slot otherwise untouched.
+	rewind(t, graphID, 3000)
+	if _, err := db.ImportL3(core.DefaultAgentID, []L3ImportItem{
+		{Title: "clock-c", Domain: "go", Content: "v2"},
+	}, L3ImportOverwrite); err != nil {
+		t.Fatal(err)
+	}
+	if got := stamp(t, graphID); got <= 3000 {
+		t.Fatalf("restating a node left the clock at %d", got)
+	}
+
+	// An edge over nodes the graph already holds — no node write at all.
+	rewind(t, graphID, 4000)
+	if _, err := db.ImportL3(core.DefaultAgentID, []L3ImportItem{{
+		Title: "clock-c", Domain: "go", Content: "v2",
+		Related: []L3Relation{{Kind: core.EdgeRelated, Titles: []string{"clock-a"}}},
+	}}, L3ImportSkip); err != nil {
+		t.Fatal(err)
+	}
+	if got := stamp(t, graphID); got <= 4000 {
+		t.Fatalf("adding a hyperedge left the clock at %d", got)
+	}
+}
+
 func TestImportL3RejectsUnknownMode(t *testing.T) {
 	db := newL3TestDB(t)
 	_, err := db.ImportL3(core.DefaultAgentID, []L3ImportItem{{Title: "x", Domain: "d"}}, L3ImportMode("bogus"))

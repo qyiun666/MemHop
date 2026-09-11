@@ -8,6 +8,7 @@
 package graph
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"time"
@@ -28,6 +29,7 @@ type ImportBatch struct {
 	result     *core.L3ImportResult
 	graphIDs   map[string]uint64
 	touched    map[uint64]struct{}
+	changed    map[uint64]struct{}
 	nodeTitles map[uint64]map[string]struct{}
 	edgeKeys   map[uint64]map[string]struct{}
 }
@@ -42,6 +44,7 @@ func NewImportBatch(engine *core.StorageEngine, agentID uint64, mode core.L3Impo
 		result:     &core.L3ImportResult{CreatedIDs: []string{}, UpdatedIDs: []string{}},
 		graphIDs:   make(map[string]uint64),
 		touched:    make(map[uint64]struct{}),
+		changed:    make(map[uint64]struct{}),
 		nodeTitles: make(map[uint64]map[string]struct{}),
 		edgeKeys:   make(map[uint64]map[string]struct{}),
 	}
@@ -82,10 +85,11 @@ func CheckName(engine *core.StorageEngine, agentID uint64, id uint64, name strin
 // Result is the report the batch has accumulated so far.
 func (b *ImportBatch) Result() *core.L3ImportResult { return b.result }
 
-// GraphIDs lists, in hex and sorted, every graph this batch wrote into. A graph
-// id derives from its domain label, and this is the only place a batch reports
-// which graphs it touched — without it a graph written here could only be found
-// again by listing the domain and matching names.
+// GraphIDs lists, in hex and sorted, every graph this batch resolved a domain
+// into — which includes one it imported nothing new into. A graph id derives from
+// its domain label, and this is the only place a batch reports which graphs it
+// visited — without it a graph written here could only be found again by listing
+// the domain and matching names.
 func (b *ImportBatch) GraphIDs() []string {
 	out := make([]string, 0, len(b.touched))
 	for id := range b.touched {
@@ -93,6 +97,26 @@ func (b *ImportBatch) GraphIDs() []string {
 	}
 	slices.Sort(out)
 	return out
+}
+
+// StampChanged moves the stored UpdatedAt forward on every graph whose contents
+// this batch actually wrote — a node created, a node merged or overwritten, a
+// hyperedge added. A graph it merely read (a Skip-mode import over nodes it
+// already holds) keeps its clock, so UpdatedAt answers "when did this graph last
+// change" rather than "when was an import last aimed at it".
+//
+// Call after the whole batch, once: one write per changed graph, not one per
+// record. Failures are joined rather than returned at the first one, and they do
+// not undo the records already stored — a graph whose stamp failed is a graph
+// whose clock reads stale, which the caller reports rather than rolls back.
+func (b *ImportBatch) StampChanged() error {
+	var errs []error
+	for graphID := range b.changed {
+		if _, err := repo.UpdateGraphL3(b.engine, b.agentID, graphID, nil); err != nil {
+			errs = append(errs, fmt.Errorf("stamp graph %s: %w", common.FormatHash(graphID), err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // ImportNode applies one item's node: graph slot create/reuse, then node
@@ -120,6 +144,7 @@ func (b *ImportBatch) ImportNode(item *core.L3ImportItem) error {
 		if err := b.mutateNode(graphID, *item, merge); err != nil {
 			return err
 		}
+		b.changed[graphID] = struct{}{}
 		b.result.UpdatedIDs = append(b.result.UpdatedIDs,
 			common.FormatHash(repo.NodeIDL3(graphID, item.Title)))
 		return nil
@@ -129,6 +154,7 @@ func (b *ImportBatch) ImportNode(item *core.L3ImportItem) error {
 		return err
 	}
 	titles[item.Title] = struct{}{}
+	b.changed[graphID] = struct{}{}
 	b.result.CreatedIDs = append(b.result.CreatedIDs, common.FormatHash(id))
 	return nil
 }
@@ -165,6 +191,7 @@ func (b *ImportBatch) ImportRelations(item *core.L3ImportItem) {
 			continue
 		}
 		keys[key] = struct{}{}
+		b.changed[graphID] = struct{}{}
 		b.result.EdgesCreated++
 	}
 }

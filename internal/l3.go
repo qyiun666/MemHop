@@ -75,6 +75,9 @@ func (db *DB) ListL3(agentID uint64) ([]core.HypergraphSlot, error) {
 // failures are what result.Errors reports. nil is only returned on success.
 // The result carries the graph ids the batch wrote into as well as the node
 // ids, because a host needs the former to hang the graph on a scene.
+// Every graph this batch actually changed gets one slot write at the end, moving
+// its UpdatedAt forward; a graph it only read keeps its clock, and a stamp that
+// fails is reported in result.Errors rather than undoing records already stored.
 // Graphs imported by one agent are visible to every agent of the file.
 func (db *DB) ImportL3(agentID uint64, items []L3ImportItem, mode L3ImportMode) (*L3ImportResult, error) {
 	ac, err := db.lockSharedPool(agentID)
@@ -117,6 +120,9 @@ func (db *DB) ImportL3(agentID uint64, items []L3ImportItem, mode L3ImportMode) 
 	}
 	result := batch.Result()
 	result.GraphIDs = batch.GraphIDs()
+	if err := batch.StampChanged(); err != nil {
+		result.Errors = append(result.Errors, err.Error())
+	}
 	return result, nil
 }
 

@@ -5,7 +5,8 @@
 - 批量导入：`ImportBatch`（`NewImportBatch` 预载本域已有图槽 name→id），方法
   `ImportNode`（图槽建/复用 + 按 Skip/Merge/Overwrite 处理同名节点）、
   `ImportRelations`（Related 解析建超边，未解析项记进 `result.Errors` 不中断批次）、
-  `GraphIDs()`（本批写过的图）。
+  `GraphIDs()`（本批把 domain 解析到的图）、`StampChanged()`（批末给「本批真写过
+  内容」的每张图各推进一次槽的 `UpdatedAt`，一次批量导入一个图只写一次）。
 - 查询步：`NodeFilter.Matches`、`ResolveSubgraphStart`、`SubgraphAdjacency`、
   `BfsWithinDepth`、`AllNodesVisited`。
 - 命名闸：`CheckName`——拒掉改到本域另一张图已占用的标签。
@@ -13,8 +14,9 @@
 
 ## 契约
 
-- 一个批次的 mode、result 与三张缓存（domain→图、图→标题集、图→边键）都收在
-  `ImportBatch` 里；调用方持域锁创建它，结束后读回 result。
+- 一个批次的 mode、result 与状态都收在 `ImportBatch` 里：查表缓存三张
+  （domain→图、图→标题集、图→边键）加两份图集（解析到的 / 写过内容的）；调用方
+  持域锁创建它，整批跑完后调一次 `StampChanged`，再读回 result。
 - `ImportNode` 只返回 error：一条 item 落在哪张图、建没建成都进 `result`，不打断整批。
 - `ResolveSubgraphStart` 对起点不属于该图返回 `ErrInvalidQuery` 而非 `ErrNotFound`
   ——图是查询的范围，不是被查的对象。

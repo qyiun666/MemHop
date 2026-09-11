@@ -151,7 +151,9 @@ type HypergraphSource struct {
 	ContextID string `json:"context_id"`
 }
 
-// HypergraphSlot holds L3 hypergraph container metadata.
+// HypergraphSlot holds L3 hypergraph container metadata. UpdatedAt is the
+// graph's change clock: an import that writes a node or an edge here moves it, as
+// does a rename, while a batch that changed nothing leaves it where it was.
 type HypergraphSlot struct {
 	IDHash    string           `json:"id_hash"`
 	Name      string           `json:"name"`

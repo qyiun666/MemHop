@@ -33,7 +33,7 @@ internal/{domain,scene,turn,dream,graph,plan,content}
 | `scene` | L2 场景读写面：ResolveForRead/Create/FreshID/OpenTurn/SurfaceTopics/ContextTopic/DeleteTopics |
 | `turn` | 轮次归属：SettleTarget（可沉淀的轮次范围）、ReadProfile（Search 的 L0 读面）；进来的 hex 键已在根上解析完，本包不碰内容 |
 | `dream` | 巩固阶段：SceneSet、PruneContentStage(`l4_prune`) 与 PrunePlanStage(`l5_prune`)（共用 `ContentRetention` 窗口、各读自己的时间戳）、CompressScenes(+组回滚)、StructureStages、L1 各阶段、DistillL0Stage；调参常量随阶段在此 |
-| `graph` | L3 导入/查询：`ImportBatch`（一次批次的 mode + result + 三张缓存，方法 ImportNode/ImportRelations/GraphIDs）、NodeFilter.Matches/ResolveSubgraphStart/SubgraphAdjacency/BfsWithinDepth/AllNodesVisited |
+| `graph` | L3 导入/查询：`ImportBatch`（一次批次的 mode + result + 缓存：domain→图、图→标题集、图→边键，外加两份图集「访问过」/「写过内容」；方法 ImportNode/ImportRelations/GraphIDs/StampChanged）、NodeFilter.Matches/ResolveSubgraphStart/SubgraphAdjacency/BfsWithinDepth/AllNodesVisited |
 | `plan` | L5 计划树机制（一棵树归属于打开它的轮次；L5 只剩节点记录）：PlanStatus 面（单张词表、双向都查它）、NodeSpec/Step 两个入参形状、CreateNode/UpdateNode/UpdateNodeSummaryLocked、BuildTree/Forest/ToNodeView/RollupTree |
 | `content` | 话题内容与键：ParseTopicID（轮次键的解析与拒零，读写两侧共用）、ValidateAppend（两种 Kind 各自的写入契约）、Append（宿主侧写一条内容的唯一入口，必要时跨 Kind 分配 Seq）、Read（按 Kind 读回）、RenderForDistill（把一个话题的原文渲染成提炼读的转录）、MaxEventPayload/MaxUtterancePayload |
 
@@ -219,7 +219,10 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    清锚前」窗口内同名重导入（图 id = hash(Domain) 同 id）的锚点会被清成
    未锚定，可经 `UpdateScene` 重挂。`scene.L3ID` 是 L3 图唯一的入边（图槽上没有
    反向清单），所以清锚只能按域扫场景；漏清锚的可见后果是 `ListScenes(l3ID)`
-   继续列出解不开的会话。
+   继续列出解不开的会话。图槽的 `UpdatedAt` 是**这张图内容的变化钟**：一批导入
+   结束时，由根对「本批真写过东西」的每张图各推进一次（`batch.StampChanged`，
+   一个图一次写而不是每条记录一次），改名走同一个偏更新原语（`name=nil`），
+   只读到没写过的图不动它——skip 模式重导同一批节点因此不会让这张图看起来变新。
 10. **内容只有两个写入口，且都落到同一个原语**：宿主侧的内容一律经
    `content.Append`（`AppendArchive` 是它唯一的调用者，对话原文与事件都走这一条，
    `NodeSeq` 就写在记录上）；巩固组那份摘要是唯一不经该边界的写入——
