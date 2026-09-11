@@ -235,7 +235,10 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    答在后」由写入侧选的槽位保证，不需要时间戳、更不需要拿 `Role` 打平（事件的
    `Role` 未设即 0，正是 `RoleUser`，一旦混进对话读法就会把一次工具调用显示成
    用户发言）。`SceneMessage.Seq` 因此是**契约字段**：空洞就是被保留窗裁过的
-   证据，宿主据此把「裁掉了」与「没说过」分开。
+   证据，宿主据此把「裁掉了」与「没说过」分开。**两种宽度两种顺序**：一个话题内
+   `Seq` 就是顺序；跨话题的读（不带 `TopicID` 的 `SearchL4`）没有共同的 `Seq` 可看
+   ——那是轮内序号——按记录自己的时间排、以记录 id 收尾，`Limit` 说的才是「最近的
+   N 条」，同一个查询两次给出同一个子集。
 8. **L0 画像字段所有权在库内强制**：`UpdateL0` 只写宿主四项
    （Name/Role/Personality/Preferences），`EmotionState`/`MBTI` 一律从库里
    现值继承（只有它们的首次建立走蒸馏路径），`UpdatedAtMs` 由库戳写。门面不再靠

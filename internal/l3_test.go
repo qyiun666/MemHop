@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/qyiun666/MemHop/internal/common"
@@ -613,6 +614,41 @@ func TestImportL3NameCollisionRoutesByDerivation(t *testing.T) {
 			t.Fatalf("b2 landed in the shadowing graph %s instead of %s",
 				common.FormatHash(alpha), common.FormatHash(beta))
 		}
+	}
+}
+
+// A graph slot the pool cannot decode is not a label the pool has free. The
+// import batch seeded its label → graph map from a scan that stepped over what it
+// could not read, so importing that slot's label answered "no such graph" and
+// wrote a second slot under the same name — the domain's nodes then live under two
+// ids, and the graph the host named first keeps what it held, unreachable by
+// label. The refusal also names the record, because nothing else in the engine can.
+func TestImportL3RefusesUnreadableGraphSlot(t *testing.T) {
+	db := newL3TestDB(t)
+	alpha := importOne(t, db, "alpha", "a1")
+
+	// Move alpha's label so its slot no longer answers to hash("alpha"): resolving
+	// "beta" now runs through that record.
+	taken := "beta"
+	if _, err := repo.UpdateGraphL3(db.engine, core.SharedPoolAgentID, alpha, &taken); err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+	if _, err := db.engine.WriteRecord(core.SharedPoolAgentID, core.RecL3GraphSlot, alpha,
+		[]byte(`{"na`)); err != nil {
+		t.Fatalf("damage the slot: %v", err)
+	}
+
+	_, err := db.ImportL3(core.DefaultAgentID, []L3ImportItem{
+		{Title: "b1", Domain: "beta", Content: "b1"},
+	}, L3ImportMerge)
+	if common.CodeOf(err) != common.ErrDeserialization {
+		t.Fatalf("importing a label held by an unreadable slot: code=%d err=%v", common.CodeOf(err), err)
+	}
+	if !strings.Contains(err.Error(), common.FormatHash(alpha)) {
+		t.Fatalf("the refusal must name the record it could not read: %v", err)
+	}
+	if n := countRecords(db.engine, core.SharedPoolAgentID, core.RecL3GraphSlot); n != 1 {
+		t.Fatalf("the refusal left %d graph slots, want the one it refused to read around", n)
 	}
 }
 

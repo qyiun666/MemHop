@@ -35,8 +35,17 @@ type ImportBatch struct {
 }
 
 // NewImportBatch seeds a batch with the domain's existing graph names, so a
-// repeated import extends a graph instead of starting a second one.
-func NewImportBatch(engine *core.StorageEngine, agentID uint64, mode core.L3ImportMode) *ImportBatch {
+// repeated import extends a graph instead of starting a second one. The seeding
+// scan is strict because its answer decides a write: a slot that will not read
+// back is not a label the pool has free, and treating it as one mints a second
+// graph under the same label. The domain's nodes are then split across two ids —
+// a node id derives from its graph and title — and the graph the host named first
+// keeps whatever it already held, unreachable by label.
+func NewImportBatch(engine *core.StorageEngine, agentID uint64, mode core.L3ImportMode) (*ImportBatch, error) {
+	slots, err := core.CollectAllGraphSlotsStrict(engine, agentID)
+	if err != nil {
+		return nil, err
+	}
 	b := &ImportBatch{
 		engine:     engine,
 		agentID:    agentID,
@@ -48,12 +57,12 @@ func NewImportBatch(engine *core.StorageEngine, agentID uint64, mode core.L3Impo
 		nodeTitles: make(map[uint64]map[string]struct{}),
 		edgeKeys:   make(map[uint64]map[string]struct{}),
 	}
-	for _, g := range core.CollectAllGraphSlots(engine, agentID) {
+	for _, g := range slots {
 		if cur, ok := b.graphIDs[g.Name]; !ok || preferGraphID(g.Name, cur, g.IDHash) {
 			b.graphIDs[g.Name] = g.IDHash
 		}
 	}
-	return b
+	return b, nil
 }
 
 // preferGraphID arbitrates two slots that share one domain label. A file can
@@ -71,9 +80,15 @@ func preferGraphID(name string, cur, next uint64) bool {
 
 // CheckName refuses a rename onto a label another graph of this domain already
 // carries. The label is how a domain addresses a graph, so two slots under one
-// label would make that domain resolve ambiguously.
+// label would make that domain resolve ambiguously. The scan is strict for the
+// same reason: a slot the engine cannot decode still holds its label, and
+// stepping over it would let a rename take a label that is in use.
 func CheckName(engine *core.StorageEngine, agentID uint64, id uint64, name string) error {
-	for _, g := range core.CollectAllGraphSlots(engine, agentID) {
+	slots, err := core.CollectAllGraphSlotsStrict(engine, agentID)
+	if err != nil {
+		return err
+	}
+	for _, g := range slots {
 		if g.IDHash != id && g.Name == name {
 			return common.NewError(common.ErrInvalidQuery,
 				fmt.Sprintf("graph %s already carries the label %q", common.FormatHash(g.IDHash), name))
@@ -110,8 +125,15 @@ func (b *ImportBatch) GraphIDs() []string {
 // not undo the records already stored — a graph whose stamp failed is a graph
 // whose clock reads stale, which the caller reports rather than rolls back.
 func (b *ImportBatch) StampChanged() error {
-	var errs []error
+	graphIDs := make([]uint64, 0, len(b.changed))
 	for graphID := range b.changed {
+		graphIDs = append(graphIDs, graphID)
+	}
+	// Sorted, so a batch that fails to stamp several graphs reports it in one
+	// order every time — the joined lines reach the host as result.Errors.
+	slices.Sort(graphIDs)
+	var errs []error
+	for _, graphID := range graphIDs {
 		if _, err := repo.UpdateGraphL3(b.engine, b.agentID, graphID, nil); err != nil {
 			errs = append(errs, fmt.Errorf("stamp graph %s: %w", common.FormatHash(graphID), err))
 		}

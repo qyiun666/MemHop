@@ -9,7 +9,6 @@ package internal
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"time"
 
@@ -58,10 +57,9 @@ func (db *DB) RunDream(ctx context.Context, agentID uint64, sceneID uint64) (*Dr
 	}
 	rep.ConsolidatedScenes = len(succeeded)
 	dream.AppendStage(rep, "l2_compress", start, dream.StageCancelled(ctx, "l2_compress"))
-	if cerr := ctx.Err(); cerr != nil {
-		return rep, fmt.Errorf("dream: cancelled after l2_compress stage: %w", cerr)
-	}
-
+	// StructureStages owns the next cancellation checkpoint: it sits after the
+	// rebuilt L2Meta is installed, so a cancelled pass still leaves the read path
+	// serving what compression wrote rather than the tree from before it.
 	if err := dream.StructureStages(ctx, ac, agentID, rep); err != nil {
 		return rep, err
 	}

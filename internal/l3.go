@@ -113,7 +113,10 @@ func (db *DB) ImportL3(agentID uint64, items []L3ImportItem, mode L3ImportMode) 
 		return nil, common.NewError(common.ErrInvalidQuery,
 			"import mode must be Skip, Merge or Overwrite")
 	}
-	batch := graph.NewImportBatch(db.engine, core.SharedPoolAgentID, mode)
+	batch, err := graph.NewImportBatch(db.engine, core.SharedPoolAgentID, mode)
+	if err != nil {
+		return nil, common.NewError(common.CodeOf(err), "import: seed graph names", err)
+	}
 	for i := range items {
 		if err := batch.ImportNode(&items[i]); err != nil {
 			batch.Result().Errors = append(batch.Result().Errors, fmt.Sprintf("%s: %v", items[i].Title, err))

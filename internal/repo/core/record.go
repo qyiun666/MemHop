@@ -9,6 +9,7 @@ package core
 
 import (
 	"encoding/json"
+	"fmt"
 	"iter"
 	"slices"
 
@@ -87,7 +88,11 @@ func CollectAllStrict[T any](engine *StorageEngine, agentID uint64, rt uint8) ([
 			if common.CodeOf(err) == common.ErrNotFound {
 				continue
 			}
-			return nil, err
+			// Named by id: this refusal stops a write, and the engine has no read
+			// face that shows a damaged record, so an unnamed one would leave the
+			// host with no way to find what to repair or compact away.
+			return nil, common.NewError(common.CodeOf(err),
+				fmt.Sprintf("record %s will not read", common.FormatHash(idHash)), err)
 		}
 		out = append(out, *slot)
 	}
@@ -138,12 +143,8 @@ func WriteTopicSlot(engine *StorageEngine, agentID, id uint64, slot *TopicSlot) 
 	return writeJSON(engine, agentID, RecL2Topic, id, slot, "TopicSlot")
 }
 
-func CollectAllTopics(engine *StorageEngine, agentID uint64) []TopicSlot {
-	return slices.Collect(IterAll[TopicSlot](engine, agentID, RecL2Topic))
-}
-
-// CollectAllTopicsStrict is CollectAllTopics for a caller whose next move deletes
-// or rewrites records keyed on this enumeration.
+// CollectAllTopicsStrict is the strict topic scan, for a caller whose next move
+// deletes or rewrites records keyed on this enumeration.
 func CollectAllTopicsStrict(engine *StorageEngine, agentID uint64) ([]TopicSlot, error) {
 	return CollectAllStrict[TopicSlot](engine, agentID, RecL2Topic)
 }
@@ -187,6 +188,14 @@ func WriteGraphSlot(engine *StorageEngine, agentID, id uint64, slot *HypergraphS
 
 func CollectAllGraphSlots(engine *StorageEngine, agentID uint64) []HypergraphSlot {
 	return slices.Collect(IterAll[HypergraphSlot](engine, agentID, RecL3GraphSlot))
+}
+
+// CollectAllGraphSlotsStrict is CollectAllGraphSlots for a caller that decides a
+// write from the list — which graph a domain label resolves to is asked of
+// exactly this enumeration, so a slot that will not read back has to stop the
+// write instead of reading as a label the pool does not hold.
+func CollectAllGraphSlotsStrict(engine *StorageEngine, agentID uint64) ([]HypergraphSlot, error) {
+	return CollectAllStrict[HypergraphSlot](engine, agentID, RecL3GraphSlot)
 }
 
 func CollectAllHypergraphNodes(engine *StorageEngine, agentID uint64) []HypergraphNode {

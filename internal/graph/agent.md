@@ -2,7 +2,8 @@
 
 ## 职责
 
-- 批量导入：`ImportBatch`（`NewImportBatch` 预载本域已有图槽 name→id），方法
+- 批量导入：`ImportBatch`（`NewImportBatch` 预载本域已有图槽 name→id；有槽读不回就
+  整批拒绝，且拒绝发生在任何写入之前），方法
   `ImportNode`（图槽建/复用 + 按 Skip/Merge/Overwrite 处理同名节点）、
   `ImportRelations`（Related 解析建超边，未解析项记进 `result.Errors` 不中断批次）、
   `GraphIDs()`（本批把 domain 解析到的图）、`StampChanged()`（批末给「本批真写过
@@ -35,5 +36,8 @@
   全等平手取较小 id）。`NewImportBatch` 播种是 map 迭代顺序，两张同名槽不加裁决就会让
   同一个 domain 每次导入随机进一张——节点 id 是 `hash(graphID:title)`，换图即换节点 id，
   重导幂等性随之失效。
+- 两处扫描都走严格那份（`core.CollectAllGraphSlotsStrict`）：读不回的槽**仍然占着它的
+  标签**，跳过它就是把「有人占着」答成「没人占」——导入那侧会铸出第二张同名图，两半节点集
+  从此各自独立；改名那侧会把名字改到别人占着的标签上。
 - `graphFor` 用 `repo.EnsureGraphL3` 而不是 `CreateGraphL3`：已存在的槽原样复用，它的
   `Name` 可能已被改过，派生出的 id 不该把那个标签写回去。

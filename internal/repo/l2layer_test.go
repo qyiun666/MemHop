@@ -67,10 +67,9 @@ func TestCreateTurnTopicL2WritesSingleTrack(t *testing.T) {
 	}
 }
 
-// TestListTopicsL2FromL2Meta verifies listing consumes the L2MetaIndex cache
-// with identical semantics to the record scan: depth filtering, scene
-// filtering when asked for one scene, UserTimestamp ascending sort and full
-// field fidelity.
+// TestListTopicsL2FromL2Meta verifies the listing reads the L2MetaIndex mirror:
+// depth filtering, scene filtering when asked for one scene, UserTimestamp
+// ascending sort, and a mirror entry that rebuilds to the stored record exactly.
 func TestListTopicsL2FromL2Meta(t *testing.T) {
 	engine, err := core.Create(filepath.Join(t.TempDir(), "list.meh"))
 	if err != nil {
@@ -104,9 +103,8 @@ func TestListTopicsL2FromL2Meta(t *testing.T) {
 		t.Fatalf("L2MetaIndex entries = %d, want %d", countL2Meta(l2Meta), len(raw))
 	}
 
-	q := func(byScene bool, sceneID uint64, depth uint8) ([]core.TopicSlot, error) {
+	q := func(byScene bool, sceneID uint64, depth uint8) []core.TopicSlot {
 		return ListTopicsL2(TopicListQuery{
-			Engine:  engine,
 			MetaIdx: l2Meta,
 			SceneID: sceneID,
 			Depth:   depth,
@@ -115,10 +113,7 @@ func TestListTopicsL2FromL2Meta(t *testing.T) {
 	}
 
 	t.Run("domain_wide_filters_depth_and_sorts_asc", func(t *testing.T) {
-		got, err := q(false, 0, 2)
-		if err != nil {
-			t.Fatal(err)
-		}
+		got := q(false, 0, 2)
 		wantIDs := []uint64{12, 13, 11} // UserTimestamp 100, 200, 300
 		if len(got) != len(wantIDs) {
 			t.Fatalf("got %d topics, want %d", len(got), len(wantIDs))
@@ -142,10 +137,7 @@ func TestListTopicsL2FromL2Meta(t *testing.T) {
 	})
 
 	t.Run("by_scene_filters", func(t *testing.T) {
-		got, err := q(true, sceneA, 2)
-		if err != nil {
-			t.Fatal(err)
-		}
+		got := q(true, sceneA, 2)
 		wantIDs := []uint64{13, 11} // sceneA only, asc by timestamp
 		if len(got) != len(wantIDs) {
 			t.Fatalf("got %d topics, want %d", len(got), len(wantIDs))
@@ -158,10 +150,7 @@ func TestListTopicsL2FromL2Meta(t *testing.T) {
 	})
 
 	t.Run("fields_match_record_exactly", func(t *testing.T) {
-		got, err := q(false, 0, 2)
-		if err != nil {
-			t.Fatal(err)
-		}
+		got := q(false, 0, 2)
 		for _, tp := range got {
 			record, err := core.ReadTopicSlot(engine, core.DefaultAgentID, tp.ID)
 			if err != nil {
@@ -174,20 +163,6 @@ func TestListTopicsL2FromL2Meta(t *testing.T) {
 		}
 	})
 
-	t.Run("nil_meta_falls_back_to_scan", func(t *testing.T) {
-		gotCache, err := q(false, 0, 2)
-		if err != nil {
-			t.Fatal(err)
-		}
-		gotScan, err := ListTopicsL2(TopicListQuery{Engine: engine, Depth: 2})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !reflect.DeepEqual(gotCache, gotScan) {
-			t.Errorf("cache path differs from scan path:\ncache: %+v\nscan:  %+v", gotCache, gotScan)
-		}
-	})
-
 	t.Run("incremental_updates_reflect_in_listing", func(t *testing.T) {
 		// Simulate write-path sync: new topic inserted via Update, then
 		// removed; listing must follow both.
@@ -195,20 +170,14 @@ func TestListTopicsL2FromL2Meta(t *testing.T) {
 		tp := core.TopicSlot{ID: newID, SceneID: sceneB, Depth: 1,
 			FusedKeywords: []string{"k5"}, UserTimestamp: 50}
 		l2Meta.Update(index.L2MetaFromTopic(&tp))
-		got, err := q(false, 0, 2)
-		if err != nil {
-			t.Fatal(err)
-		}
+		got := q(false, 0, 2)
 		// A domain-wide depth<=2 listing sees 3 of the 4 raw topics; +1 after Update.
 		if len(got) != 4 || got[0].ID != newID {
 			t.Errorf("after Update: got %d topics, first=%d; want 4 topics, first=%d",
 				len(got), got[0].ID, newID)
 		}
 		l2Meta.Remove(newID)
-		got, err = q(false, 0, 2)
-		if err != nil {
-			t.Fatal(err)
-		}
+		got = q(false, 0, 2)
 		if len(got) != 3 {
 			t.Errorf("after Remove: got %d topics, want 3", len(got))
 		}
@@ -405,14 +374,10 @@ func TestListTopicsL2BreaksTiesOnID(t *testing.T) {
 		}
 	}
 	for attempt := range 3 {
-		got, err := ListTopicsL2(TopicListQuery{
-			Engine: engine, AgentID: core.DefaultAgentID,
+		got := ListTopicsL2(TopicListQuery{
 			MetaIdx: index.BuildL2MetaFromEngine(engine, core.DefaultAgentID),
 			SceneID: sceneID, Depth: 1, ByScene: true,
 		})
-		if err != nil {
-			t.Fatalf("attempt %d: %v", attempt, err)
-		}
 		if len(got) != 3 {
 			t.Fatalf("attempt %d: want 3 topics, got %d", attempt, len(got))
 		}

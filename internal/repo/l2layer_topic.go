@@ -15,14 +15,11 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/index"
 )
 
-// TopicListQuery carries ListTopicsL2 inputs. MetaIdx is the L2MetaIndex
-// cache: when set, candidates are rebuilt from it instead of unmarshalling
-// every topic record; a nil MetaIdx falls back to the full record scan
-// with identical semantics. ByScene restricts the listing to SceneID; unset
-// lists the whole domain.
+// TopicListQuery carries ListTopicsL2 inputs. MetaIdx is the L2MetaIndex mirror
+// the listing reads: it is the same table the scene read path serves, so a
+// listing never disagrees with what a scene shows. ByScene restricts the listing
+// to SceneID; unset lists the whole domain.
 type TopicListQuery struct {
-	Engine  *core.StorageEngine
-	AgentID uint64
 	MetaIdx *index.L2MetaIndex
 	SceneID uint64
 	Depth   uint8
@@ -32,7 +29,7 @@ type TopicListQuery struct {
 // ListTopicsL2 lists the topics of one scene (ByScene) or of the whole domain,
 // up to depth. depth is clamped to [1, MaxDepth]; results sorted by
 // UserTimestamp.
-func ListTopicsL2(q TopicListQuery) ([]core.TopicSlot, error) {
+func ListTopicsL2(q TopicListQuery) []core.TopicSlot {
 	depth := q.Depth
 	if depth == 0 {
 		depth = 1
@@ -40,26 +37,14 @@ func ListTopicsL2(q TopicListQuery) ([]core.TopicSlot, error) {
 		depth = MaxDepth
 	}
 	var out []core.TopicSlot
-	if q.MetaIdx != nil {
-		for _, meta := range q.MetaIdx.Iter() {
-			if meta.Depth > depth {
-				continue
-			}
-			if q.ByScene && meta.SceneID != q.SceneID {
-				continue
-			}
-			out = append(out, meta.ToTopicSlot())
+	for _, meta := range q.MetaIdx.Iter() {
+		if meta.Depth > depth {
+			continue
 		}
-	} else {
-		for _, topic := range core.CollectAllTopics(q.Engine, q.AgentID) {
-			if topic.Depth > depth {
-				continue
-			}
-			if q.ByScene && topic.SceneID != q.SceneID {
-				continue
-			}
-			out = append(out, topic)
+		if q.ByScene && meta.SceneID != q.SceneID {
+			continue
 		}
+		out = append(out, meta.ToTopicSlot())
 	}
 	slices.SortFunc(out, func(a, b core.TopicSlot) int {
 		if c := cmp.Compare(a.UserTimestamp, b.UserTimestamp); c != 0 {
@@ -78,7 +63,7 @@ func ListTopicsL2(q TopicListQuery) ([]core.TopicSlot, error) {
 		// it. Without a final key the order is whatever the record scan yielded.
 		return cmp.Compare(a.ID, b.ID)
 	})
-	return out, nil
+	return out
 }
 
 // RenameTopicL2 writes a caller-chosen name onto one topic. The record is

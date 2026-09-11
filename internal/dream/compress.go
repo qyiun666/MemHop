@@ -37,19 +37,12 @@ func CompressScenes(ctx context.Context, ac *domain.Context, scenes []uint64, re
 		wg.Add(1)
 		go func(sceneID uint64) {
 			defer wg.Done()
-			topics, err := repo.ListTopicsL2(repo.TopicListQuery{
-				Engine:  ac.Engine,
-				AgentID: ac.ID,
+			topics := repo.ListTopicsL2(repo.TopicListQuery{
 				MetaIdx: ac.L2Meta,
 				SceneID: sceneID,
 				Depth:   1,
 				ByScene: true,
 			})
-			if err != nil {
-				countFailure()
-				slog.Warn("dream: read scene topics failed", "scene", common.FormatHash(sceneID), "err", err)
-				return
-			}
 			// Skip below the compress threshold: few topics keep raw detail.
 			if len(topics) < ac.Defaults.DreamCompressMinTopics {
 				return

@@ -57,6 +57,16 @@ func StructureStages(ctx context.Context, ac *domain.Context, agentID uint64, re
 	}
 	AppendStage(rep, "index_rebuild", start, nil)
 
+	if cerr := StageCancelled(ctx, "index_rebuild"); cerr != nil {
+		// Reconcile first, then cancel. A pass that sank topics wrote new depths
+		// with no incremental mirror step, so this rebuilt table is the only thing
+		// that puts the read path back in step with the records. Cancelling above the
+		// install would leave the domain still listing turns this pass already
+		// swallowed, until the cache is dropped or the file reopened. What is
+		// skipped here (L1 sync, edges, decay, distill) re-runs on the next pass.
+		return cerr
+	}
+
 	if err := l1Stages(ctx, ac, agentID, newL2Meta, &decayParams, rep); err != nil {
 		return err
 	}

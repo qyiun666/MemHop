@@ -207,3 +207,52 @@ func TestDropExpiredArchivesMirrorsAfterTheDisk(t *testing.T) {
 		t.Fatalf("second sweep should be a no-op, got %d/%v", n, err)
 	}
 }
+
+// A Seq is a slot inside one turn, so a read spanning turns cannot order by it.
+// Ordering by Seq did two damages at once: a host asking for its newest content
+// got the turn with the most slots — an old but long turn beating a short fresh
+// one — and records tied on Seq came back in whatever order the record scan
+// visited them, so the same query twice could return different subsets of
+// itself.
+func TestDomainWideL4ReadOrdersByTimeAndKeepsNewest(t *testing.T) {
+	engine := tempEngine(t)
+	idx := index.NewL4Index()
+	const longOld = uint64(11)
+	const shortNew = uint64(12)
+	const tiedNew = uint64(13)
+	for seq := uint64(1); seq <= 3; seq++ {
+		writeContent(t, engine, idx, longOld, seq, core.KindEvent, "旧轮的槽位", int64(1000+seq))
+	}
+	writeContent(t, engine, idx, shortNew, 1, core.KindEvent, "新轮", 5000)
+	tiedA := writeContent(t, engine, idx, shortNew, 2, core.KindEvent, "同刻之一", 6000)
+	tiedB := writeContent(t, engine, idx, tiedNew, 1, core.KindEvent, "同刻之二", 6000)
+
+	got, err := QueryArchivesL4(engine, core.DefaultAgentID, ArchiveQuery{Limit: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("limit 2 returned %d records", len(got))
+	}
+	for _, arc := range got {
+		if arc.TopicID != shortNew && arc.TopicID != tiedNew {
+			t.Fatalf("the newest two are not the newest: %+v", got)
+		}
+	}
+	// A tie on one instant has exactly one order, and it is the record id.
+	first, second := min(tiedA, tiedB), max(tiedA, tiedB)
+	if got[0].IDHash != first || got[1].IDHash != second {
+		t.Fatalf("a tie must break by id, got %x then %x", got[0].IDHash, got[1].IDHash)
+	}
+
+	// A turn's own slot order survives: its events come back 1,2,3 rather than
+	// shuffled by id or timestamp.
+	scoped := longOld
+	older, err := QueryArchivesL4(engine, core.DefaultAgentID, ArchiveQuery{TopicID: &scoped})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(older) != 3 || older[0].Seq != 1 || older[1].Seq != 2 || older[2].Seq != 3 {
+		t.Fatalf("a turn lost its slot order: %+v", older)
+	}
+}

@@ -210,17 +210,12 @@ func (db *DB) SceneContext(agentID uint64, sceneID string) (*SceneContext, error
 	if len(scenes) == 0 {
 		return nil, common.NewError(common.ErrNotFound, "scene not found", nil)
 	}
-	topics, err := repo.ListTopicsL2(repo.TopicListQuery{
-		Engine:  db.engine,
-		AgentID: agentID,
+	topics := repo.ListTopicsL2(repo.TopicListQuery{
 		MetaIdx: ac.L2Meta,
 		SceneID: sceneHash,
 		Depth:   2,
 		ByScene: true,
 	})
-	if err != nil {
-		return nil, err
-	}
 	children := make(map[uint64]int)
 	for _, t := range topics {
 		if t.ParentID != nil {

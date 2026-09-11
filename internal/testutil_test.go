@@ -4,6 +4,7 @@
 package internal
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -97,6 +98,38 @@ func mockLLMServerSeq(t *testing.T, contents ...string) *httptest.Server {
 				"message": map[string]any{"role": "assistant", "content": content},
 			}},
 		})
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// cancellingLLMServer answers like mockLLMServerSeq and cancels cancel right
+// after replying to the cancelOn-th request (1-based). A test needs that timing
+// when the cancellation must land after a stage has already written: then it is
+// the next checkpoint that exits the pipeline, not a failed model call.
+func cancellingLLMServer(t *testing.T, cancel context.CancelFunc, cancelOn int, contents ...string) *httptest.Server {
+	t.Helper()
+	var mu sync.Mutex
+	idx := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			http.NotFound(w, r)
+			return
+		}
+		mu.Lock()
+		at := idx + 1
+		idx = at
+		content := contents[(at-1)%len(contents)]
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{{
+				"message": map[string]any{"role": "assistant", "content": content},
+			}},
+		})
+		if at == cancelOn {
+			cancel()
+		}
 	}))
 	t.Cleanup(srv.Close)
 	return srv

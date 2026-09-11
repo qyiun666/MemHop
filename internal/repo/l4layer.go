@@ -110,14 +110,16 @@ type ArchiveQuery struct {
 	Index    *index.L4Index
 }
 
-// QueryArchivesL4 returns the content records matching every set condition,
-// sorted by Seq. An ID that names no record is skipped (a tombstoned or foreign
-// id simply selects nothing); a record that cannot be read is an error. A lookup
-// that only names IDs takes the record-read fast path instead of scanning the
-// domain. A topic-scoped lookup with an index reads exactly that topic's
-// records, where an id the index names but the engine cannot read is an error
-// rather than a shorter transcript. Limit keeps the newest matches, because the
-// sort order is oldest first.
+// QueryArchivesL4 returns the content records matching every set condition. An
+// ID that names no record is skipped (a tombstoned or foreign id simply selects
+// nothing); a record that cannot be read is an error. A lookup that only names
+// IDs takes the record-read fast path instead of scanning the domain. A
+// topic-scoped lookup with an index reads exactly that topic's records, where an
+// id the index names but the engine cannot read is an error rather than a shorter
+// transcript. The order is the one the query width has: one topic comes back by
+// Seq, anything wider by the record's own timestamp — and Limit keeps the last
+// entries of that order, which is the newest content only because the order is
+// oldest first. See compareArchives for why the two differ.
 func QueryArchivesL4(engine *core.StorageEngine, agentID uint64, q ArchiveQuery) ([]core.ArchiveSlot, error) {
 	q.Keyword = strings.ToLower(q.Keyword)
 	var out []core.ArchiveSlot
@@ -143,15 +145,31 @@ func QueryArchivesL4(engine *core.StorageEngine, agentID uint64, q ArchiveQuery)
 			filtered = append(filtered, arc)
 		}
 	}
-	slices.SortFunc(filtered, compareBySeq)
+	slices.SortFunc(filtered, compareArchives(q.TopicID != nil))
 	return newest(filtered, q.Limit), nil
 }
 
-func compareBySeq(a, b core.ArchiveSlot) int {
-	return cmp.Compare(a.Seq, b.Seq)
+// compareArchives picks the order a read hands back, and the two cases are not
+// the same order. Inside one topic, Seq is that order: the slot the writer
+// allocated, unique within the topic, and what a turn's transcript is rendered
+// in. Across topics a Seq means nothing — every topic numbers its slots from 1 —
+// so a domain-wide read sorted by it interleaves turns by slot number and
+// keeping the tail of that order retains the longest turn, not the newest
+// content. There the ordering is when the record was said, and its id breaks a
+// tie so one query answers in the same order every time.
+func compareArchives(oneTopic bool) func(a, b core.ArchiveSlot) int {
+	if oneTopic {
+		return func(a, b core.ArchiveSlot) int { return cmp.Compare(a.Seq, b.Seq) }
+	}
+	return func(a, b core.ArchiveSlot) int {
+		if c := cmp.Compare(a.CreatedAt, b.CreatedAt); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.IDHash, b.IDHash)
+	}
 }
 
-// newest keeps the last limit entries of a Seq-ascending result.
+// newest keeps the last limit entries of an ascending result.
 func newest(out []core.ArchiveSlot, limit int) []core.ArchiveSlot {
 	if limit <= 0 || len(out) <= limit {
 		return out
