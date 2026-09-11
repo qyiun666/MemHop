@@ -219,11 +219,16 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    未锚定，可经 `UpdateScene` 重挂。`scene.L3ID` 是 L3 图唯一的入边（图槽上没有
    反向清单），所以清锚只能按域扫场景；漏清锚的可见后果是 `ListScenes(l3ID)`
    继续列出解不开的会话。
-10. **内容只有一个写入口**：`content.Append` 是唯一写路径，`AppendArchive` 是它
-   唯一的调用者（对话原文与事件都走这一条，`NodeSeq` 就写在记录上）。计划写面
-   不碰内容：三个写口只动树，一步做过什么永远是宿主自己 append 的那些记录。
-   `content.ValidateAppend` 是唯一的校验点，且**排在任何落盘之前**——被拒的写入
-   一条记录也不留。事件若绑了 `NodeSeq`，本话题的树上必须已有那一步
+10. **内容只有两个写入口，且都落到同一个原语**：宿主侧的内容一律经
+   `content.Append`（`AppendArchive` 是它唯一的调用者，对话原文与事件都走这一条，
+   `NodeSeq` 就写在记录上）；巩固组那份摘要是唯一不经该边界的写入——
+   `dream.applyOneGroup` 直接落 `repo.AppendArchiveL4`，因为它要占 `Seq=SeqUser`
+   那一格与库自有的 `RoleDream`，而 `ValidateAppend` 恰恰拒调用方给 `RoleDream`
+   （否则宿主能伪造巩固产物）。`RoleDream` 只由巩固那一处戳写，两入口之下的原语只有
+   一个。`content.ValidateAppend` 是宿主侧写入的唯一校验点，且**排在任何落盘之前**——
+   被拒的写入一条记录也不留；巩固侧对应的判据是空摘要不成组，它同样排在组落盘之前。
+   计划写面不碰内容：三个写口只动树，一步做过什么永远是宿主自己 append 的那些记录。
+   事件若绑了 `NodeSeq`，本话题的树上必须已有那一步
    （`ac.Plans.HasSeq`）：一个序号指向计划里没有的步骤，是宿主的计划与它的记录
    对不上，报出来比顺手长出一棵树诚实。这道检查也排在落盘之前。
    两种 Kind 各自的字段归属、
@@ -233,7 +238,7 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    分支（只有读回时原样回显与结晶 prompt 的一行格式化），唯一约束是非空。
    内容只按话题键整体寻址：公开面上没有任何调用接受单条记录的 id 去写，
    所以写入不返回句柄（加了就是一桩没人消费的新契约）。
-11. **`MultiAgentDB.CompactTo`**：core 的 `Compact` 用 `Create`（带
+11. **`DB.CompactTo`**：core 的 `Compact` 用 `Create`（带
    `O_TRUNC`）在新路径写整理副本，故根层先拒空路径、拒当前库文件
    （`sameFile` 走绝对路径归一）与拒已存在的目标，绝不覆盖任何既有文件。
 12. **节点只由创建口带出来，重述口只改字段**：`PlanCreate`/`PlanNodeAdd` 是唯一
@@ -266,4 +271,4 @@ internal/{domain,scene,turn,dream,graph,plan,content}
 
 - 关键词提炼无本地兜底：LLM 输出不可解析即 `ErrLLM`（这一轮不产生话题），`internal` 根不初始化任何分词器。一轮的提炼与 Dream 的融合提炼共用 `llmops.ExtractKeywords`——它只吃一段文本，不认识记录结构。
 - `ImportL3` 的批校验在 composition root 完成（Title/Domain 必填、mode 不接受空值），拒批即一字节不写；`result.Errors` 只表示单条存储失败。
-- 宿主面测试覆盖 26 个会话方法 + 7 个 `MultiAgentDB` 方法，按层分文件：`test/api_interface_scene_test.go`（L2 场景生命周期）、`api_interface_plan_test.go`（L5 按步骤逐个建的树、Model A 折叠与节点字段回读、事件键到自己那一轮、重开后读回）、`api_interface_turn_test.go`（一轮之下原文与事件各归各的读法）、`api_interface_multi_test.go`（租户隔离与 `CompactTo`）。这些用例只使用库铸造并回传给宿主的 id。
+- 宿主面测试覆盖 26 个会话方法 + 6 个 `DB` 方法，按层分文件：`test/api_interface_scene_test.go`（L2 场景生命周期）、`api_interface_plan_test.go`（L5 按步骤逐个建的树、Model A 折叠与节点字段回读、事件键到自己那一轮、重开后读回）、`api_interface_turn_test.go`（一轮之下原文与事件各归各的读法）、`api_interface_multi_test.go`（租户隔离与 `CompactTo`）。这些用例只使用库铸造并回传给宿主的 id。

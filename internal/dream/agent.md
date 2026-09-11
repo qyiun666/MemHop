@@ -7,8 +7,8 @@
   `l5_prune`），共用 `ContentRetention` 这一个 7 天窗口，但各读自己的时间戳。
 - `CompressScenes`：每场景一 goroutine，取回融合组并逐组应用。一组的摘要是父话题
   名下 `Seq=SeqUser`、`Kind=KindUtterance`、`Role=RoleDream` 的一条 L4 内容，
-  `RoleDream` 只由本包戳写；话题上没有引用清单可回填，任一步失败经
-  `discardFusedGroup` 按话题键回滚整组。
+  `RoleDream` 只由本包戳写；空摘要在组落下第一条记录之前就被拒，其后任一步失败才经
+  `discardFusedGroup` 按话题键回滚整组（话题上没有引用清单可回填）。
 - `StructureStages`：L2Meta 重建并即刻装回 → L1 同步/建边/重建/衰减（用装回那份）→ L0 蒸馏。
 - `DistillL0Stage`：L0 蒸馏，只被本包的 `StructureStages` 调用。
 - 阶段报告：`AppendStage`/`StageCancelled`/`stageStatus`。

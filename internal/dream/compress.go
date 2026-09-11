@@ -117,6 +117,12 @@ func applyGroups(ctx context.Context, ac *domain.Context, sceneID uint64, topics
 // applied or leaves nothing behind.
 func applyOneGroup(ctx context.Context, ac *domain.Context, sceneID uint64, g llmops.L2Group, minTS, maxTS int64) error {
 	parentID := core.ComputeTopicID(sceneID, minTS, maxTS)
+	// An empty summary is not a group the engine can fuse: it would sink the
+	// children under a parent carrying nothing. Refused here, ahead of the first
+	// record this group would own, so a rejected proposal leaves nothing to undo.
+	if strings.TrimSpace(g.MergedSummary) == "" {
+		return common.NewError(common.ErrLLM, "dream: merge group proposed an empty merged_summary", nil)
+	}
 	// The fused group's summary is the parent topic's own utterance: it occupies
 	// the slot a turn's user side would, and no reference list points at it.
 	if _, err := repo.AppendArchiveL4(ac.Engine, ac.ID, ac.L4, repo.ArchiveContent{
@@ -126,13 +132,7 @@ func applyOneGroup(ctx context.Context, ac *domain.Context, sceneID uint64, g ll
 		return common.NewError(common.ErrIO, "dream: archive merged summary", err)
 	}
 
-	// Keywords of MergedSummary become the fused topic's single track. An empty
-	// summary is not a group the engine can fuse: it would sink the children
-	// under a parent carrying nothing.
-	if strings.TrimSpace(g.MergedSummary) == "" {
-		discardFusedGroup(ac, parentID)
-		return common.NewError(common.ErrLLM, "dream: merge group proposed an empty merged_summary", nil)
-	}
+	// Keywords of MergedSummary become the fused topic's single track.
 	keywords, err := llmops.ExtractKeywords(ctx, ac.LLM, g.MergedSummary)
 	if err != nil || len(keywords) == 0 {
 		discardFusedGroup(ac, parentID)
