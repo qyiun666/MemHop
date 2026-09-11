@@ -46,6 +46,8 @@ README 的版本表与 git log。
 
 23. **`SubAgent` 换端点真的落到活域上**：`db.llmByAgent` 只被 `contextFor` 在**新建**上下文时读，而 `ac.LLM` 全仓唯一的赋值点在 `domain.NewContext`，于是门面注释承诺的「同名再调一次就换掉它的端点」对一个活着的域永不发生——要等一次 idle 回收，而 `AgentIdleTTLMs=0`（关掉回收）时进程生命周期内都不换。后果落在记忆上：换了 key 或模型的宿主每一轮 `Update` 继续打旧端点，旧 key 一失效就是每轮 `ErrLLM`、那一轮永不沉淀。现在 `setDomainLLM` 交出构造好的 transport，`SubAgent` 在域锁内把它装到现上下文上（`TestSubAgentMovesALiveDomainToItsNewEndpoint` 以关掉回收的方式钉住「只有替换这一条路能移动它」）。
 
+24. **场景链的三处断路补上**：`scene.Create` 此前先落场景记录、再去解析宿主给的 `L3ID`，于是一个拼错的锚 id 会在盘上留下一条 `session:<id>`——它的 id 是在被拒的那次调用里铸出的、从没有交回调用方，宿主既指认不了它也没法删（`Search` 带着未知锚现在一字节不写，`TestSearchRefusesAnUnknownAnchorWithoutLeavingAScene`）。`scene.DeleteCascade` 的三步删除按「最深的先删、场景与话题记录的墓碑殿后」重排：那三步都只照给定 id 落墓碑、不读 payload，还能拒绝的只剩引擎关闭与 IO，而一次落在旧顺序中间的拒绝会留下「记录已墓碑、缓存还在列它」的半成品，且调用方重试时在读场景记录那一步就永远 `ErrNotFound`——再也删不掉。`SearchL4` 补上与 append 同一口径的词表校验：填了未定义的 `Kind`/`Type` 报 `ErrInvalidQuery`，不再用一份空清单去回答「这一轮真没这类内容」和「这个值不存在」两种问题（`TestSearchL4RefusesUndefinedFilterValues`）。另把两处说法改准：「开了没沉淀的轮次不留残渣」限定为 `Search` 自己那一侧（宿主在那把键下写的内容与计划树是真实记录，只能由保留窗收走），而读取带回的 `role 3` 是融合组摘要自己的标记，门面写明它刻意没有名字。
+
 ## v1.6.3 — 2026-09-10 — L4 是一轮唯一的内容层，L5 只剩计划树，`Update` 只蒸馏
 
 一轮发生过什么，此前被劈在两层：L4 存两条对话原文，轨迹层存事件与计划节点。两层早就共用

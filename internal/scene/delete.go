@@ -13,25 +13,28 @@ import (
 // the L4 content and L5 plan trees they own and their cache entries. The id sets
 // come from a strict enumeration the caller has already run, so the only
 // whole-bucket scan left here is the plan-node one, and it runs before the first
-// tombstone: a refusal therefore leaves the disk exactly as it was. After that
-// point the only failures left are the deletes themselves, and the mirrors go
-// last, so a failed pass never leaves an index entry naming a deleted record.
+// tombstone. What is left after that can still refuse on a closed engine, and the
+// order is what makes such a refusal survivable: the deepest records go first, the
+// scene and topic tombstones last. Past that last write the caller's own entry
+// stops finding the scene it asked to delete, so a pass interrupted there would
+// leave a scene no path can delete again while its cache still lists the topics
+// under it. Mirrors go after the disk agrees.
 // Callers hold ac.Mu.
 func DeleteCascade(ac *domain.Context, agentID uint64, scenes, topics []uint64) error {
 	planNodes, err := repo.PlanNodeIDsByTopicIDs(ac.Engine, agentID, topics)
 	if err != nil {
 		return err
 	}
-	records := make([]uint64, 0, len(scenes)+len(topics))
-	records = append(records, topics...)
-	records = append(records, scenes...)
-	if err := repo.DeleteL2Records(ac.Engine, agentID, records); err != nil {
+	if err := repo.DeleteTopicArchives(ac.Engine, agentID, ac.L4, topics); err != nil {
 		return err
 	}
 	if _, err := repo.DeletePlanNodesByIDs(ac.Engine, agentID, planNodes); err != nil {
 		return err
 	}
-	if err := repo.DeleteTopicArchives(ac.Engine, agentID, ac.L4, topics); err != nil {
+	records := make([]uint64, 0, len(scenes)+len(topics))
+	records = append(records, topics...)
+	records = append(records, scenes...)
+	if err := repo.DeleteL2Records(ac.Engine, agentID, records); err != nil {
 		return err
 	}
 	ac.RemoveTopicsFromIndices(topics)

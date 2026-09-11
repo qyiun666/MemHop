@@ -44,6 +44,9 @@ const (
 // These are the roles a host may declare for an utterance it appends. RoleDream is
 // deliberately absent: Dream marks a fused group's summary with it, and the append
 // boundary refuses it, so a host cannot write a record that reads as consolidated.
+// A read still hands that value back — role 3 is the fused group's own summary, sitting
+// in the parent topic's user slot — and it has no exported name on purpose: the number,
+// next to the topic's depth and its children, is how a host tells a consolidated turn.
 const (
 	RoleUser   = internal.RoleUser
 	RoleAgent  = internal.RoleAgent

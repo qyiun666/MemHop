@@ -47,8 +47,18 @@ func ResolveForRead(engine *core.StorageEngine, agentID uint64, q core.SearchQue
 
 // Create allocates a free scene id, persists the scene record under a
 // library-generated name and applies the optional L3 anchor (write-once
-// semantics).
+// semantics). The anchor is resolved before anything is written: a refusal has to
+// leave no scene behind, and the id minted here never reaches the caller on that
+// path.
 func Create(engine *core.StorageEngine, agentID uint64, l3ID string) (*core.SceneSlot, error) {
+	var anchor *core.HypergraphSlot
+	if l3ID != "" {
+		g, err := repo.ReadSharedGraphL3(engine, l3ID)
+		if err != nil {
+			return nil, err
+		}
+		anchor = g
+	}
 	id, err := FreshID(engine, agentID)
 	if err != nil {
 		return nil, err
@@ -57,12 +67,8 @@ func Create(engine *core.StorageEngine, agentID uint64, l3ID string) (*core.Scen
 	if err := repo.CreateSceneL2WithID(engine, agentID, id, name); err != nil {
 		return nil, err
 	}
-	if l3ID != "" {
-		g, err := repo.ReadSharedGraphL3(engine, l3ID)
-		if err != nil {
-			return nil, err
-		}
-		if err := repo.SetSceneL3ID(engine, agentID, id, g.IDHash); err != nil {
+	if anchor != nil {
+		if err := repo.SetSceneL3ID(engine, agentID, id, anchor.IDHash); err != nil {
 			return nil, err
 		}
 	}

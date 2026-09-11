@@ -308,3 +308,21 @@ func TestSearchL4KeywordCaseAndLimit(t *testing.T) {
 		t.Fatalf("limit over an unfiltered read: %+v / %v", all, err)
 	}
 }
+
+// A filter set to a value outside the vocabulary matches nothing, and an empty list
+// is exactly what "this turn holds none" looks like. The append boundary refuses
+// those same values, so a read may not answer them with a shorter list.
+func TestSearchL4RefusesUndefinedFilterValues(t *testing.T) {
+	engine := newTestEngine(t)
+	db := newTestDB(t, engine)
+	mustScene(t, engine, 5, "工作")
+
+	unknownKind := core.ArchiveKind(99)
+	unknownType := core.ContentType(99)
+	if _, err := db.SearchL4(core.DefaultAgentID, L4Query{Kind: &unknownKind}); common.CodeOf(err) != common.ErrInvalidQuery {
+		t.Fatalf("an undefined kind must be refused, got %v", err)
+	}
+	if _, err := db.SearchL4(core.DefaultAgentID, L4Query{Type: &unknownType}); common.CodeOf(err) != common.ErrInvalidQuery {
+		t.Fatalf("an undefined content type must be refused, got %v", err)
+	}
+}

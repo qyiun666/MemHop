@@ -19,12 +19,14 @@ import (
 // SearchL4 reads the content records matching every condition of q; the
 // conditions AND together, so an empty query returns the domain's whole content
 // set — utterances AND events alike, which is why Kind is one of the conditions.
-// Keyword is case-insensitive. Limit keeps the tail of whatever order the read is in:
-// the newest matches across topics, the highest slots inside one. NodeSeq keeps
-// only the work of one plan step — the step and every step nested under it, since
-// splitting a step into sub-steps moves its work onto the children — and a step
-// is addressed inside a turn, so it is refused without TopicID. Zero leaves the
-// condition unset.
+// Keyword is case-insensitive. Limit keeps the tail of whatever order the read is
+// in: the newest matches across topics, the highest slots inside one. NodeSeq
+// keeps only the work of one plan step — the step and every step nested under it,
+// since splitting a step into sub-steps moves its work onto the children — and a
+// step is addressed inside a turn, so it is refused without TopicID. Zero leaves
+// the condition unset. A Kind or Type set to a value outside the vocabulary is
+// refused: the write boundary rejects those same values, and matching nothing is
+// the answer a host would read back as "this turn holds none".
 func (db *DB) SearchL4(agentID uint64, q L4Query) ([]core.ArchiveSlot, error) {
 	ac, err := db.lockAgent(agentID)
 	if err != nil {
@@ -34,6 +36,12 @@ func (db *DB) SearchL4(agentID uint64, q L4Query) ([]core.ArchiveSlot, error) {
 	if q.NodeSeq != 0 && q.TopicID == nil {
 		return nil, common.NewError(common.ErrInvalidQuery,
 			"a step filter needs its turn's topic id")
+	}
+	if q.Kind != nil && !q.Kind.Valid() {
+		return nil, common.NewError(common.ErrInvalidQuery, "unknown archive kind")
+	}
+	if q.Type != nil && !q.Type.Valid() {
+		return nil, common.NewError(common.ErrInvalidQuery, "unknown content type")
 	}
 	rq := repo.ArchiveQuery{Keyword: q.Keyword, Start: q.Start, End: q.End, Type: q.Type,
 		Kind: q.Kind, Limit: q.Limit, Index: ac.L4}

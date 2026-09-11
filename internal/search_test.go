@@ -225,3 +225,20 @@ func TestSearchReturnsProfileBrief(t *testing.T) {
 		t.Errorf("full Profile must stay intact, got %+v", res.Profile)
 	}
 }
+
+// A dangling anchor is refused before the scene exists. The fresh scene id is
+// minted inside this call and never handed back on the refusal path, so a scene
+// written first would stay on disk as a listing entry the host cannot name,
+// re-anchor, or delete.
+func TestSearchRefusesAnUnknownAnchorWithoutLeavingAScene(t *testing.T) {
+	srv := mockLLMServer(t, `{"keywords":["unused"]}`)
+	db := newSearchTestDB(t, srv.URL)
+
+	dangling := common.FormatHash(common.HashID("proj-never-created"))
+	if _, err := db.Search(core.DefaultAgentID, SearchQuery{L3ID: dangling}); common.CodeOf(err) != common.ErrNotFound {
+		t.Fatalf("an unresolvable anchor must be reported, got %v", err)
+	}
+	if n := countRecords(db.engine, core.DefaultAgentID, core.RecL2Scene); n != 0 {
+		t.Fatalf("the refusal left %d scene records behind", n)
+	}
+}
