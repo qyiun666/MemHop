@@ -52,20 +52,6 @@ func TestHyperedgeKindValues(t *testing.T) {
 	}
 }
 
-func TestSourceKindValues(t *testing.T) {
-	kinds := []struct {
-		k   SourceKind
-		val uint8
-	}{
-		{SourcePath, 0}, {SourceContext, 1}, {SourceURL, 2}, {SourceManual, 3},
-	}
-	for _, tt := range kinds {
-		if uint8(tt.k) != tt.val {
-			t.Fatalf("want %d got %d", tt.val, uint8(tt.k))
-		}
-	}
-}
-
 func TestGraphEdgeKindValues(t *testing.T) {
 	kinds := []struct {
 		k   GraphEdgeKind

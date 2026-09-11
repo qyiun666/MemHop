@@ -35,8 +35,8 @@ func TestCompact(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer eng2.Close()
-	if eng2.liveRecordCount() != 3 {
-		t.Fatalf("compact count: %d", eng2.liveRecordCount())
+	if liveCount(eng2) != 3 {
+		t.Fatalf("compact count: %d", liveCount(eng2))
 	}
 	_, data, err := eng2.ReadRecord(DefaultAgentID, 1)
 	if err != nil {

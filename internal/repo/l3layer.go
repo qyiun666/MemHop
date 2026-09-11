@@ -72,13 +72,12 @@ func ListEdgeL3(engine *core.StorageEngine, agentID uint64, graphID uint64) []co
 // CreateGraphL3 imports/creates a hypergraph; ID = hash(name). It writes the
 // slot unconditionally, so it is only for a graph the caller has confirmed
 // does not exist yet — see EnsureGraphL3 for the import path.
-func CreateGraphL3(engine *core.StorageEngine, agentID uint64, name string, source core.HypergraphSource) (uint64, error) {
+func CreateGraphL3(engine *core.StorageEngine, agentID uint64, name string) (uint64, error) {
 	graphID := common.HashID(name)
 	now := time.Now().UnixMilli()
 	slot := &core.HypergraphSlot{
 		IDHash:    graphID,
 		Name:      name,
-		Source:    source,
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
@@ -93,14 +92,14 @@ func CreateGraphL3(engine *core.StorageEngine, agentID uint64, name string, sour
 // asked for, but the stored Name is a label of its own that may have been
 // renamed since. Reusing an existing slot therefore keeps that name and its
 // CreatedAt intact, instead of a repeated call silently undoing the rename.
-func EnsureGraphL3(engine *core.StorageEngine, agentID uint64, name string, source core.HypergraphSource) (uint64, error) {
+func EnsureGraphL3(engine *core.StorageEngine, agentID uint64, name string) (uint64, error) {
 	graphID := common.HashID(name)
 	if slot, err := core.ReadGraphSlot(engine, agentID, graphID); err == nil {
 		return slot.IDHash, nil
 	} else if common.CodeOf(err) != common.ErrNotFound {
 		return 0, err
 	}
-	return CreateGraphL3(engine, agentID, name, source)
+	return CreateGraphL3(engine, agentID, name)
 }
 
 // DeleteGraphL3 cascades: collects all nodes/edges of the graph plus the

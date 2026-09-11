@@ -258,7 +258,7 @@ func (b *ImportBatch) relationMembers(graphID uint64, source string, rel core.L3
 func (b *ImportBatch) graphFor(domain string) (uint64, error) {
 	graphID, ok := b.graphIDs[domain]
 	if !ok {
-		gid, err := repo.EnsureGraphL3(b.engine, b.agentID, domain, core.HypergraphSource{Kind: core.SourceManual})
+		gid, err := repo.EnsureGraphL3(b.engine, b.agentID, domain)
 		if err != nil {
 			return 0, err
 		}

@@ -49,6 +49,12 @@ func (e *StorageEngine) writeRecordBatch(records []RecordEntry) ([]uint64, error
 	if err != nil {
 		return nil, err
 	}
+	// The frames are in the file from here on, so the record-area end moves
+	// before the flush is attempted: a Sync or remap that fails must not leave
+	// nextOffset behind the log, because the checkpoint header writes RecordEnd
+	// from it and a compact truncates at it.
+	last := records[len(records)-1]
+	e.nextOffset = offsets[len(offsets)-1] + uint64(RecordHeaderSize+len(last.Data))
 	if err := e.file.Sync(); err != nil {
 		return nil, common.NewError(common.ErrIO, "sync", err)
 	}
@@ -58,9 +64,6 @@ func (e *StorageEngine) writeRecordBatch(records []RecordEntry) ([]uint64, error
 	}
 	e.mmap = mm
 	e.updateIndexAfterWrite(records, offsets)
-	last := records[len(records)-1]
-	e.nextOffset = offsets[len(offsets)-1] + uint64(RecordHeaderSize+len(last.Data))
-	e.dirty = true
 	return offsets, nil
 }
 
@@ -92,7 +95,7 @@ func (e *StorageEngine) updateIndexAfterWrite(records []RecordEntry, offsets []u
 		}
 		if oldOff, exists := e.index[rec.AgentID][rec.IDHash]; exists {
 			if oldRT, ok := e.recordTypeAt(oldOff); ok && oldRT != rec.RecordType {
-				delete(e.byAgentType[rec.AgentID][oldRT], rec.IDHash)
+				e.removeTypeLocked(rec.AgentID, oldRT, rec.IDHash)
 			}
 		}
 		e.index[rec.AgentID][rec.IDHash] = offsets[i]

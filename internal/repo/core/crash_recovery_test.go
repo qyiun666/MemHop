@@ -38,8 +38,8 @@ func TestTombstoneReplayAfterCrash(t *testing.T) {
 	if !eng2.Contains(DefaultAgentID, 2) {
 		t.Fatal("live record lost after reopen")
 	}
-	if eng2.liveRecordCount() != 1 {
-		t.Fatalf("recordCount: want 1, got %d", eng2.liveRecordCount())
+	if liveCount(eng2) != 1 {
+		t.Fatalf("recordCount: want 1, got %d", liveCount(eng2))
 	}
 }
 

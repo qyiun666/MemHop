@@ -8,8 +8,8 @@
 // what a topic owns.
 //
 // Entries are ordered by Seq ascending. Seq is one space per topic shared by
-// both kinds, and it is a total order: utterances hold 1 and 2, events are
-// allocated above them in append order. So Seq alone gives a transcript its
+// both kinds, and it is a total order: the dialogue's two slots are 1 and 2 by
+// convention, and anything the topic allocates lands above whatever is held. So Seq alone gives a transcript its
 // question-first reading and an event log its chronology, with no tie-break on
 // timestamp or role.
 //

@@ -146,22 +146,14 @@ type SearchResult struct {
 	NewTopicID   string      `json:"new_topic_id"`
 }
 
-// HypergraphSource is the origin of an L3 hypergraph.
-type HypergraphSource struct {
-	Kind      string `json:"kind"`
-	Value     string `json:"value"`
-	ContextID string `json:"context_id"`
-}
-
 // HypergraphSlot holds L3 hypergraph container metadata. UpdatedAt is the
 // graph's change clock: an import that writes a node or an edge here moves it, as
 // does a rename, while a batch that changed nothing leaves it where it was.
 type HypergraphSlot struct {
-	IDHash    string           `json:"id_hash"`
-	Name      string           `json:"name"`
-	Source    HypergraphSource `json:"source"`
-	CreatedAt int64            `json:"created_at"`
-	UpdatedAt int64            `json:"updated_at"`
+	IDHash    string `json:"id_hash"`
+	Name      string `json:"name"`
+	CreatedAt int64  `json:"created_at"`
+	UpdatedAt int64  `json:"updated_at"`
 }
 
 // HypergraphNode is a node within an L3 hypergraph.

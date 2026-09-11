@@ -29,7 +29,7 @@ func TestSearchCreatesSceneWhenIDEmpty(t *testing.T) {
 	db := newSearchTestDB(t, srv.URL)
 	// The anchor must be a project domain that exists; a dangling one is rejected.
 	// Graphs live in the file-wide shared L3 domain.
-	if _, err := repo.CreateGraphL3(db.engine, core.SharedPoolAgentID, "proj-anchor", core.HypergraphSource{Kind: core.SourceManual}); err != nil {
+	if _, err := repo.CreateGraphL3(db.engine, core.SharedPoolAgentID, "proj-anchor"); err != nil {
 		t.Fatalf("create graph: %v", err)
 	}
 	l3ID := common.FormatHash(common.HashID("proj-anchor"))

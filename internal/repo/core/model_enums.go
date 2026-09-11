@@ -80,23 +80,6 @@ func (k HyperedgeKind) String() string {
 	return common.EnumString(k, hyperedgeKindNames, "HyperedgeKind")
 }
 
-// SourceKind identifies how an L3 HypergraphSlot was created.
-type SourceKind uint8
-
-const (
-	SourcePath    SourceKind = 0
-	SourceContext SourceKind = 1
-	SourceURL     SourceKind = 2
-	SourceManual  SourceKind = 3
-)
-
-var sourceKindNames = map[SourceKind]string{
-	SourcePath: "path", SourceContext: "context",
-	SourceURL: "url", SourceManual: "manual",
-}
-
-func (s SourceKind) String() string { return common.EnumString(s, sourceKindNames, "SourceKind") }
-
 // GraphEdgeKind classifies edges within an L3 hypergraph.
 type GraphEdgeKind uint8
 

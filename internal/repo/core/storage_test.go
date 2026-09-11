@@ -13,6 +13,14 @@ import (
 )
 
 // helper: temp path for a .meh file
+// liveCount reads the number of live records off the index under the lock the
+// index itself needs: the engine keeps no counter beside it.
+func liveCount(e *StorageEngine) uint32 {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return uint32(e.totalRecordsLocked())
+}
+
 func tempPath(t *testing.T, name string) string {
 	t.Helper()
 	return filepath.Join(t.TempDir(), name+".meh")
@@ -90,8 +98,8 @@ func TestCheckpointReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer eng2.Close()
-	if eng2.liveRecordCount() != 1 {
-		t.Fatalf("recordCount: want 1, got %d", eng2.liveRecordCount())
+	if liveCount(eng2) != 1 {
+		t.Fatalf("recordCount: want 1, got %d", liveCount(eng2))
 	}
 	rt, data, err := eng2.ReadRecord(DefaultAgentID, 100)
 	if err != nil {
@@ -130,8 +138,8 @@ func TestDeleteRecord(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected not found after delete")
 	}
-	if eng.liveRecordCount() != 2 {
-		t.Fatalf("count: %d", eng.liveRecordCount())
+	if liveCount(eng) != 2 {
+		t.Fatalf("count: %d", liveCount(eng))
 	}
 	// Others still readable.
 	if _, _, err := eng.ReadRecord(DefaultAgentID, 1); err != nil {
@@ -162,8 +170,8 @@ func TestDeleteRecordBatch(t *testing.T) {
 	if n != 2 {
 		t.Fatalf("expected 2 deleted, got %d", n)
 	}
-	if eng.liveRecordCount() != 2 {
-		t.Fatalf("count: %d", eng.liveRecordCount())
+	if liveCount(eng) != 2 {
+		t.Fatalf("count: %d", liveCount(eng))
 	}
 	// Deleted ones unreadable, remaining ones readable
 	for _, id := range []uint64{1, 2} {
@@ -221,8 +229,8 @@ func TestConcurrentReadWrite(t *testing.T) {
 			t.Fatalf("seed record %d missing", i)
 		}
 	}
-	if eng.liveRecordCount() != 100+3*50 {
-		t.Fatalf("count: %d", eng.liveRecordCount())
+	if liveCount(eng) != 100+3*50 {
+		t.Fatalf("count: %d", liveCount(eng))
 	}
 }
 

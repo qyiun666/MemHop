@@ -64,8 +64,9 @@ const (
 
 // ---- L4 content type constants ----
 
-// These are the only valid ContentType values; Update rejects a turn whose
-// user_type or agent_type is anything else.
+// These are the only valid ContentType values. A value outside them is refused
+// where content is appended (Session.AppendArchive and the plan-step writes), which
+// is the only path that stores one.
 const (
 	ContentText     = internal.ContentText
 	ContentImage    = internal.ContentImage

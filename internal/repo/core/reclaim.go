@@ -26,12 +26,14 @@ func snapshotBlobLength(raw []byte) (int, error) {
 	}
 	agentCount := int(binary.LittleEndian.Uint32(raw[5:9]))
 	pos := 9
+	// The agent sections are walked with the decoder that reads them, so the two
+	// cannot drift apart on where one section ends when the layout moves.
 	for range agentCount {
-		if pos+12 > len(raw) {
-			return 0, common.NewError(common.ErrCorruption, "snapshot agent header truncated")
+		_, _, next, err := parseSnapshotAgent(raw, pos)
+		if err != nil {
+			return 0, err
 		}
-		count := int(binary.LittleEndian.Uint32(raw[pos+8 : pos+12]))
-		pos += 12 + count*16
+		pos = next
 	}
 	if pos+4 > len(raw) {
 		return 0, common.NewError(common.ErrCorruption, "snapshot crc truncated")
@@ -90,15 +92,35 @@ func (e *StorageEngine) Compact(newPath string) error {
 			newEng.file.Close()
 		}
 	}()
+	// Compact's cost is the flush and the remap each write does, so the copy runs
+	// in batches: 2000 records written one at a time measured 5.5s on this
+	// machine, minutes for a file of real size. The chunk bounds how many payloads
+	// are held at once, since the whole point is to rewrite a large file.
+	const chunk = 256
 	for agentID, m := range e.index {
+		batch := make([]RecordEntry, 0, chunk)
+		flush := func() error {
+			if len(batch) == 0 {
+				return nil
+			}
+			_, err := newEng.WriteRecordBatch(batch)
+			batch = batch[:0]
+			return err
+		}
 		for idHash, offset := range m {
 			rt, _, data, _, _, readErr := RecordData(e.mmap, offset)
 			if readErr != nil {
 				return common.NewError(common.ErrCorruption, "compact: read live record", readErr)
 			}
-			if _, writeErr := newEng.WriteRecord(agentID, rt, idHash, data); writeErr != nil {
-				return writeErr
+			batch = append(batch, RecordEntry{AgentID: agentID, RecordType: rt, IDHash: idHash, Data: data})
+			if len(batch) == chunk {
+				if err := flush(); err != nil {
+					return err
+				}
 			}
+		}
+		if err := flush(); err != nil {
+			return err
 		}
 	}
 	if err := newEng.Checkpoint(); err != nil {

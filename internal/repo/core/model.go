@@ -147,20 +147,12 @@ func ComputeTopicKey(sceneID uint64, userTS, agentTS int64) string {
 	return fmt.Sprintf("%d:%d:%d", sceneID, userTS, agentTS)
 }
 
-// HypergraphSource represents the origin of an L3 hypergraph.
-type HypergraphSource struct {
-	Kind      SourceKind `json:"kind"`
-	Value     string     `json:"value"`      // path or URL string; empty for Manual
-	ContextID uint64     `json:"context_id"` // used when Kind == SourceContext
-}
-
 // HypergraphSlot holds L3 hypergraph container metadata.
 type HypergraphSlot struct {
-	IDHash    uint64           `json:"id_hash"`
-	Name      string           `json:"name"`
-	Source    HypergraphSource `json:"source"`
-	CreatedAt int64            `json:"created_at"`
-	UpdatedAt int64            `json:"updated_at"`
+	IDHash    uint64 `json:"id_hash"`
+	Name      string `json:"name"`
+	CreatedAt int64  `json:"created_at"`
+	UpdatedAt int64  `json:"updated_at"`
 }
 
 // HypergraphNode is a node within an L3 hypergraph.

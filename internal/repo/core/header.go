@@ -176,23 +176,15 @@ func (h *FileHeader) calculateCRC() uint32 {
 	return crc32.ChecksumIEEE(b[:4088])
 }
 
-// SelectValidHeader picks the header with the highest commitID among valid ones.
-func SelectValidHeader(a, b *FileHeader) (*FileHeader, error) {
-	aValid := a.CRC32 == a.calculateCRC()
-	bValid := b.CRC32 == b.calculateCRC()
-	switch {
-	case aValid && bValid:
-		if a.CommitID >= b.CommitID {
-			return a, nil
-		}
-		return b, nil
-	case aValid:
-		return a, nil
-	case bValid:
-		return b, nil
-	default:
-		return nil, common.NewError(common.ErrCRCMismatch, "crc32 mismatch")
+// SelectValidHeader picks the header with the highest commit id. Both arguments
+// come from FileHeaderFromBytes, which is the one place a CRC mismatch is
+// refused — a header that reached this far cannot also be an invalid one, so
+// re-deriving its checksum here only cost two serializations per Open.
+func SelectValidHeader(a, b *FileHeader) *FileHeader {
+	if a.CommitID >= b.CommitID {
+		return a
 	}
+	return b
 }
 
 func writeHeaderAt(f *os.File, offset int64, buf [HeaderSize]byte) error {
@@ -214,10 +206,7 @@ func loadHeaders(mm []byte) (hA, hB *FileHeader, activeIdx uint8, err error) {
 	b, errB := FileHeaderFromBytes(bufB)
 	switch {
 	case errA == nil && errB == nil:
-		active, err := SelectValidHeader(a, b)
-		if err != nil {
-			return nil, nil, 0, err
-		}
+		active := SelectValidHeader(a, b)
 		if active.CommitID == a.CommitID {
 			return a, b, 0, nil
 		}

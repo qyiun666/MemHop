@@ -279,7 +279,7 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    4 KiB/64 KiB 预算与跨 Kind 的 Seq 覆写语义记在
    `internal/content/agent.md` 与门面注释里，根不复述。
    `EventType` 是宿主自定的步骤名，计划绑定事件与裸事件同口径：引擎从不按它
-   分支（只有读回时原样回显与结晶 prompt 的一行格式化），唯一约束是非空。
+   分支（读回时原样回显那个名字），唯一约束是非空。
    内容只按话题键整体寻址：公开面上没有任何调用接受单条记录的 id 去写，
    所以写入不返回句柄（加了就是一桩没人消费的新契约）。
 11. **`DB.CompactTo`**：core 的 `Compact` 用 `Create`（带

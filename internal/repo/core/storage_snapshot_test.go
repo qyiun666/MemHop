@@ -45,8 +45,8 @@ func TestOpenRecoversRecordsAfterSnapshot(t *testing.T) {
 	if _, data, err := eng2.ReadRecord(DefaultAgentID, 1); err != nil || string(data) != "one-updated" {
 		t.Fatalf("record 1: data=%q err=%v", data, err)
 	}
-	if eng2.liveRecordCount() != 3 {
-		t.Fatalf("recordCount: want 3, got %d", eng2.liveRecordCount())
+	if liveCount(eng2) != 3 {
+		t.Fatalf("recordCount: want 3, got %d", liveCount(eng2))
 	}
 	// nextOffset must be past the recovered tail: a new write must not
 	// clobber recovered records.

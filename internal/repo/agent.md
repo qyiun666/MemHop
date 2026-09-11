@@ -93,7 +93,9 @@
 `internal/agent.md` 中受影响的条目，并保证 `go vet ./...` 与
 `grep -rn 'L7\|RecL7' --include='*.go'` 零残留。
 
-- `EnsureGraphL3`：槽存在就复用其 id、不覆写记录；`CreateGraphL3` 是无条件写槽，只用于确认不存在时。
+- `EnsureGraphL3`：槽存在就复用其 id、不覆写记录；`CreateGraphL3` 是无条件写槽，只用于确认不存在时。两者都不再接收「来源」：图槽记的是标签与两把时钟，而 `source` 那一格的 kind 恒为 manual、另两个字段没有任何写入路径能设置，`SourceKind` 四个值里三个连写点都没有——形状、枚举与对外的 `source` 键一起删，旧文件里多出的键在解码时被忽略，磁盘格式不动。
+- 记录区末端（`nextOffset`）说的是**已经落进文件的帧**，不是「已 fsync 且已能经 mmap 读」的帧：flush 或 remap 失败时末端照旧前移，因为 checkpoint 的 `RecordEnd` 与 compact 的截断点都读它——留在后面就是让 header 宣称一个比日志短的记录区。索引与镜像相反，remap 成功之前一步都不动：指到映射外的字节比少给一条记录糟得多。
+- 头部的 CRC 只在 `FileHeaderFromBytes` 判一次。到 `SelectValidHeader` 手上的两个头必然都已过了那道闸，它只回答「谁的 commit id 高」；在这里重算校验和既买不到安全，又留下两个永不进入的分支。
 - 本层两份扫描各一套：`CollectAll*` 跳过读不回的记录，`core.CollectAllStrict` 把那一次读失败报出来。走严格那份的枚举口都带 error：`TopicClosureL2`/`TopicIDsBySceneL2`/`MergeScenesL2`/`SyncL1NodesFromL2`/`CollectPlanNodes`/`PlanNodeIDsByTopicIDs`，加上按单条读的 `ListScenesL2`/`CollectAllScenesL2`/`QueryArchivesL4`。**枚举与批删是两件事**：`DeleteL2Records`/`DeletePlanNodesByIDs` 只照给定的 id 落墓碑、不读任何东西，「读了才知道要删谁」全在上面那些枚举口里——分开放，删的人才可能把所有枚举排在第一张墓碑之前。严格那套的判据是「这次读决定下一次的写」而不是「决定删除」——「要不要新建哪一条」同样由枚举的答案决定。被拒时错误带着记录 id 出来：引擎没有任何读面能指出「哪条坏了」，不带 id 的拒绝等于让宿主自己去猜。
 - L3 的两份列举（`ListNodeL3`/`ListEdgeL3`）按记录 id 升序返回：底下的 `CollectAll*` 是哈希表迭代，不排序就让同一个调用两次给出两个顺序，调用方带的条数上限也落在任意子集上。
 - L0 有**两个**画像读原语，按调用方要不要 payload 分。`GetProfileL0` 把记录自身的错误码带出来：`ErrNotFound` 只回答「没有这条记录」，读不动与解不开分别报 `ErrIO`、`ErrDeserialization`——拿到它的三处都在这个分界上分道，读侧只在「没有」时给空画像，`UpdateL0` 只在「没有」时才不继承库自有那几项（带着读不回来的 payload 去写，就是把情绪、MBTI 与域身份覆盖掉）。`HasProfileL0` 服务只要「在不在」、根本不读 payload 的调用方：打开文件时靠它决定是否播种主域画像，前者是 `(false, nil)`，后者原样上报。

@@ -31,18 +31,17 @@ var DefaultMemHopDefaults = config.DefaultMemHopDefaults
 // ---- slot models (method signatures of Session / DB) ----
 
 type (
-	ProfileSlot      = core.ProfileSlot
-	SceneSlot        = core.SceneSlot
-	SceneNode        = core.SceneNode
-	HypergraphSlot   = core.HypergraphSlot
-	HypergraphNode   = core.HypergraphNode
-	HypergraphEdge   = core.HypergraphEdge
-	HypergraphSource = core.HypergraphSource
-	ArchiveSlot      = core.ArchiveSlot
-	ArchiveKind      = core.ArchiveKind
-	GraphEdgeKind    = core.GraphEdgeKind
-	TopicSlot        = core.TopicSlot
-	ContentType      = core.ContentType
+	ProfileSlot    = core.ProfileSlot
+	SceneSlot      = core.SceneSlot
+	SceneNode      = core.SceneNode
+	HypergraphSlot = core.HypergraphSlot
+	HypergraphNode = core.HypergraphNode
+	HypergraphEdge = core.HypergraphEdge
+	ArchiveSlot    = core.ArchiveSlot
+	ArchiveKind    = core.ArchiveKind
+	GraphEdgeKind  = core.GraphEdgeKind
+	TopicSlot      = core.TopicSlot
+	ContentType    = core.ContentType
 )
 
 // NewError re-exported so the api facade can build domain errors without
@@ -125,6 +124,3 @@ const (
 // is issued by the library (Search mints turn ids), so a host never has to
 // build one from an integer.
 func FormatID(id uint64) string { return common.FormatHash(id) }
-
-// ParseID parses a 16-char hex ID.
-func ParseID(s string) (uint64, error) { return common.ParseID(s) }

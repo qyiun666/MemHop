@@ -44,8 +44,8 @@ func TestTrimTailSnapshotOnWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer eng2.Close()
-	if eng2.liveRecordCount() != 2 {
-		t.Fatalf("recordCount: want 2, got %d", eng2.liveRecordCount())
+	if liveCount(eng2) != 2 {
+		t.Fatalf("recordCount: want 2, got %d", liveCount(eng2))
 	}
 	if _, data, err := eng2.ReadRecord(DefaultAgentID, 2); err != nil || string(data) != "second" {
 		t.Fatalf("record 2: got %q err=%v", data, err)
@@ -81,8 +81,8 @@ func TestOpenAfterTrimTruncateWindow(t *testing.T) {
 		t.Fatalf("open in reclaim truncate window: %v", err)
 	}
 	defer eng2.Close()
-	if eng2.liveRecordCount() != 2 {
-		t.Fatalf("recordCount: want 2, got %d", eng2.liveRecordCount())
+	if liveCount(eng2) != 2 {
+		t.Fatalf("recordCount: want 2, got %d", liveCount(eng2))
 	}
 	if _, data, err := eng2.ReadRecord(DefaultAgentID, 1); err != nil || string(data) != "first" {
 		t.Fatalf("record 1: got %q err=%v", data, err)
@@ -131,8 +131,8 @@ func TestOpenFallsBackToFullScanOnCorruptSnapshot(t *testing.T) {
 		t.Fatalf("open with corrupt snapshot: %v", err)
 	}
 	defer eng2.Close()
-	if eng2.liveRecordCount() != 2 {
-		t.Fatalf("recordCount: want 2, got %d", eng2.liveRecordCount())
+	if liveCount(eng2) != 2 {
+		t.Fatalf("recordCount: want 2, got %d", liveCount(eng2))
 	}
 	if _, data, err := eng2.ReadRecord(DefaultAgentID, 2); err != nil || string(data) != "second" {
 		t.Fatalf("record 2: got %q err=%v", data, err)

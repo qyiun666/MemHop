@@ -111,19 +111,10 @@ func fromSearchResult(r *internal.SearchResult) *SearchResult {
 	}
 }
 
-func fromHypergraphSource(s internal.HypergraphSource) HypergraphSource {
-	return HypergraphSource{
-		Kind:      s.Kind.String(),
-		Value:     s.Value,
-		ContextID: formatOptionalID(s.ContextID),
-	}
-}
-
 func fromHypergraphSlot(s internal.HypergraphSlot) HypergraphSlot {
 	return HypergraphSlot{
 		IDHash:    formatID(s.IDHash),
 		Name:      s.Name,
-		Source:    fromHypergraphSource(s.Source),
 		CreatedAt: s.CreatedAt,
 		UpdatedAt: s.UpdatedAt,
 	}
