@@ -129,6 +129,45 @@ func TestHandlePropagatesError(t *testing.T) {
 	}
 }
 
+// A failed Dream still hands back the report of what it did before the stage
+// that failed, so the tool must not drop it: content[0] stays the error text and
+// the result JSON rides along behind it.
+func TestHandlePartialKeepsResultAlongsideError(t *testing.T) {
+	h := handlePartial[dreamArgs, dreamResult](func(dreamArgs) (dreamResult, error) {
+		return dreamResult{
+			Consolidated: true,
+			Report:       &memhop.DreamReport{L2TopicsCompressed: 7},
+		}, errors.New("dream: LLM consolidation failed for all scenes")
+	})
+	res, err := h(context.Background(), &mcp.CallToolRequest{
+		Params: &mcp.CallToolParamsRaw{Arguments: json.RawMessage(`{"scene_id":""}`)},
+	})
+	if err != nil {
+		t.Fatalf("handler returned transport error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("a failed Dream must still report as a tool error")
+	}
+	if len(res.Content) != 2 {
+		t.Fatalf("want error text plus the report, got %d content blocks", len(res.Content))
+	}
+	first, ok := res.Content[0].(*mcp.TextContent)
+	if !ok || !strings.HasPrefix(first.Text, "dream: ") {
+		t.Fatalf("first content block is not the error text: %#v", res.Content[0])
+	}
+	second, ok := res.Content[1].(*mcp.TextContent)
+	if !ok {
+		t.Fatalf("second content block is not text: %#v", res.Content[1])
+	}
+	var got dreamResult
+	if err := json.Unmarshal([]byte(second.Text), &got); err != nil {
+		t.Fatalf("unmarshal report: %v", err)
+	}
+	if got.Report == nil || got.Report.L2TopicsCompressed != 7 {
+		t.Fatalf("the partial report did not survive: %s", second.Text)
+	}
+}
+
 func TestHandleNoArgs(t *testing.T) {
 	h := handleNoArgs[statusResult](func() (statusResult, error) {
 		return statusResult{Closed: true, SceneCount: 3}, nil

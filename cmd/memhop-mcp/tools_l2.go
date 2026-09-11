@@ -59,13 +59,13 @@ func registerProfileTools(s *mcp.Server, db *memhop.Session) {
 
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_profile_update",
-		Description: "更新 L0 宿主画像的名称、角色、个性与偏好四项。Dream 蒸馏出的情绪状态与 MBTI 倾向由库内按现值保留，画像更新时间由库内戳写，本工具不碰这两项。",
+		Description: "更新 L0 宿主画像。四项是整写而不是打补丁：这四项写进去就是画像的宿主半区，没填的那几项会被清空（要保留现值就把它一起提交），name 必填——域就靠它被称呼，空白名会被拒绝。Dream 蒸馏出的情绪状态与 MBTI 倾向由库内按现值保留，画像更新时间由库内戳写，域身份在建域时已定，这三项本工具的入参里根本没有，也就传不进来。",
 		InputSchema: objSchema(map[string]any{
-			"name":        strProp("宿主名称"),
+			"name":        strProp("宿主名称，必填非空"),
 			"role":        strProp("角色定位"),
 			"personality": strProp("个性描述"),
 			"preferences": mapProp("偏好键值对"),
-		}),
+		}, "name"),
 	}, handle[profileUpdateArgs, updateResult](func(a profileUpdateArgs) (updateResult, error) {
 		return updateResult{OK: true}, db.UpdateL0(&memhop.ProfileInput{
 			Name:        a.Name,
@@ -79,7 +79,7 @@ func registerProfileTools(s *mcp.Server, db *memhop.Session) {
 func registerSceneListTools(s *mcp.Server, db *memhop.Session) {
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_scene_list",
-		Description: "列出所有 L2 场景（场景 ID、名称与 depth1 话题条数）。",
+		Description: "列出所有 L2 场景（= 宿主会话）：场景 ID、名称，以及它锚定的 L3 项目域（未锚定则结果里没有这个键）。场景不带话题条数——要数一个场景里的话题请用 memhop_scene_topics。",
 		InputSchema: objSchema(nil),
 	}, handleNoArgs[[]memhop.SceneSlot](func() ([]memhop.SceneSlot, error) {
 		return db.ListScenes("")
@@ -89,7 +89,7 @@ func registerSceneListTools(s *mcp.Server, db *memhop.Session) {
 func registerSceneDetailTools(s *mcp.Server, db *memhop.Session) {
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_scene_topics",
-		Description: "读取 L2 场景上下文：场景内 depth-1 话题元信息（不含 L4 消息）；话题下的 L4 对话原文请用 memhop_archive_search（topic_id 参数）单独查询。未知场景返回错误。",
+		Description: "读取 L2 场景上下文：场景内 depth ≤ 2 的话题元信息（不含 L4 消息）——Dream 融合出的父话题与它吞掉的轮次话题都在这份平铺清单里，父子由 parent_id 相认，每条带自己的 child_count。话题下的 L4 对话原文请用 memhop_archive_search（topic_id 参数）单独查询。未知场景返回错误。",
 		InputSchema: objSchema(map[string]any{
 			"scene_id": strProp("场景 ID（16 位 hex），必填"),
 		}, "scene_id"),

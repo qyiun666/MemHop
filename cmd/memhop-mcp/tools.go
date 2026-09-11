@@ -23,11 +23,9 @@ import (
 // tool errors (IsError=true) so the client LLM can see and self-correct.
 func handle[In, Out any](fn func(In) (Out, error)) mcp.ToolHandler {
 	return func(_ context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		var in In
-		if len(req.Params.Arguments) > 0 {
-			if err := json.Unmarshal(req.Params.Arguments, &in); err != nil {
-				return errResult(fmt.Errorf("invalid arguments: %w", err)), nil
-			}
+		in, err := decodeArgs[In](req)
+		if err != nil {
+			return errResult(err), nil
 		}
 		out, err := fn(in)
 		if err != nil {
@@ -35,6 +33,38 @@ func handle[In, Out any](fn func(In) (Out, error)) mcp.ToolHandler {
 		}
 		return okResult(out), nil
 	}
+}
+
+// handlePartial is handle for a tool whose result stands on its own even when
+// the call failed. Only Dream needs it: the report lists what the pipeline
+// already did (the two retention prunes, the stage that failed), so dropping it
+// would leave a host unable to tell "cleaned up, then consolidation failed"
+// from "nothing happened at all".
+func handlePartial[In, Out any](fn func(In) (Out, error)) mcp.ToolHandler {
+	return func(_ context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		in, err := decodeArgs[In](req)
+		if err != nil {
+			return errResult(err), nil
+		}
+		out, err := fn(in)
+		if err != nil {
+			return errResultWith(out, err), nil
+		}
+		return okResult(out), nil
+	}
+}
+
+// decodeArgs turns the raw call arguments into the handler's input type. An
+// absent argument object is an empty input, which is what a no-argument tool
+// and every optional field mean.
+func decodeArgs[In any](req *mcp.CallToolRequest) (In, error) {
+	var in In
+	if len(req.Params.Arguments) > 0 {
+		if err := json.Unmarshal(req.Params.Arguments, &in); err != nil {
+			return in, fmt.Errorf("invalid arguments: %w", err)
+		}
+	}
+	return in, nil
 }
 
 // handleNoArgs wraps a handler that takes no arguments.
@@ -59,6 +89,20 @@ func okResult(v any) *mcp.CallToolResult {
 func errResult(err error) *mcp.CallToolResult {
 	r := &mcp.CallToolResult{}
 	r.SetError(err)
+	return r
+}
+
+// errResultWith reports a tool error and carries the result the handler
+// produced on the way out: the first content block is the error message, the
+// second the result JSON. A result that will not encode is not reported
+// alongside the failure that already outranks it.
+func errResultWith(v any, err error) *mcp.CallToolResult {
+	data, merr := json.Marshal(v)
+	r := errResult(err)
+	if merr != nil {
+		return r
+	}
+	r.Content = append(r.Content, &mcp.TextContent{Text: string(data)})
 	return r
 }
 

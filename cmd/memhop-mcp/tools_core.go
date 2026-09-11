@@ -49,7 +49,7 @@ func registerCoreTools(s *mcp.Server, m *memhop.DB, db *memhop.Session) {
 func registerSearchTool(s *mcp.Server, db *memhop.Session) {
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_search",
-		Description: "读取一个场景（= 宿主会话）的记忆并开启本轮：返回 L0 画像、该场景 depth-1 话题集（每个话题带提炼关键词与 L4 原文 ID，即宿主本轮的上下文），以及 new_topic_id —— 本次读取为即将进行的这一轮铸出的话题 ID，memhop_update、事件追加与计划写入都按它落笔。scene_id 为空时新建场景并返回其 id（16 位 hex，名字由库生成）；非空时必须已存在。l3_id 只在新建时生效。",
+		Description: "读取一个场景（= 宿主会话）的记忆并开启本轮：返回 L0 画像、该场景 depth-1 话题集（每个话题带提炼关键词、两个时间界和宿主给它起的名字，即宿主本轮的上下文；话题记录上不挂原文 id，说了什么按话题 id 用 memhop_archive_search 取回），以及 new_topic_id —— 本次读取为即将进行的这一轮铸出的话题 ID，memhop_update、事件追加与计划写入都按它落笔。scene_id 为空时新建场景并返回其 id（16 位 hex，名字由库生成）；非空时必须已存在。l3_id 只在新建时生效。",
 		InputSchema: objSchema(map[string]any{
 			"scene_id": strProp("场景 ID（16 位 hex），可选；留空 = 新建场景"),
 			"l3_id":    strProp("新建场景挂靠的 L3 项目域 ID（16 位 hex，可选）"),
@@ -82,11 +82,11 @@ func registerUpdateTool(s *mcp.Server, db *memhop.Session) {
 func registerDreamTool(s *mcp.Server, db *memhop.Session) {
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_dream",
-		Description: "执行梦境巩固（睡眠模拟）：L2 话题压缩融合、L1 节点同步、衰减与 L0 画像蒸馏，并清理超出保留窗口的 L4 内容与 L5 计划节点。scene_id 留空即巩固本域的每一个场景——库只在 Dream 里做这些修剪与重建，一个不再写入的域也要至少一次 Dream 才会收缩。耗时较长；返回是否实际发生巩固（consolidated）与结构化报告 report（各阶段名称/状态/耗时、L2 压缩计数、L1 增删计数、L0 是否蒸馏）。",
+		Description: "执行梦境巩固（睡眠模拟）：L2 话题压缩融合、L1 节点同步、衰减与 L0 画像蒸馏，并清理超出保留窗口的 L4 内容与 L5 计划节点。scene_id 留空即巩固本域的每一个场景——库只在 Dream 里做这些修剪与重建，一个不再写入的域也要至少一次 Dream 才会收缩。耗时较长；返回是否实际发生巩固（consolidated）与结构化报告 report（各阶段名称/状态/耗时、L2 压缩计数、L1 增删计数、L0 是否蒸馏）。某个阶段失败时报告也照样带回（错误文本在前，报告 JSON 在后），它是「已经做到哪一步」的唯一凭据——保留窗清理可能已经生效，只是压缩没做成。",
 		InputSchema: objSchema(map[string]any{
 			"scene_id": strProp("场景 ID（16 位 hex），可选；留空即全域巩固"),
 		}),
-	}, handle[dreamArgs, dreamResult](func(a dreamArgs) (dreamResult, error) {
+	}, handlePartial[dreamArgs, dreamResult](func(a dreamArgs) (dreamResult, error) {
 		rep, err := db.Dream(context.Background(), a.SceneID)
 		out := dreamResult{}
 		if rep != nil {
