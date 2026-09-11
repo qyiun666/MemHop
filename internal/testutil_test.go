@@ -6,7 +6,6 @@ package internal
 import (
 	"encoding/json"
 	"io"
-	"math"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -15,7 +14,6 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
@@ -56,8 +54,6 @@ func mustWriteScene(t *testing.T, engine *core.StorageEngine, agentID uint64, sc
 		t.Fatalf("write scene: %v", err)
 	}
 }
-
-func approx(a, b float32) bool { return math.Abs(float64(a-b)) < 1e-4 }
 
 // countingLLMServer answers every chat request with content and records how
 // many times it was called — the read path must leave the counter at zero.
@@ -146,13 +142,4 @@ func countRecords(engine *core.StorageEngine, agentID uint64, recordType uint8) 
 		n++
 	}
 	return n
-}
-
-func mustParse(t *testing.T, s string) uint64 {
-	t.Helper()
-	v, err := common.ParseID(s)
-	if err != nil {
-		t.Fatalf("parse %q: %v", s, err)
-	}
-	return v
 }

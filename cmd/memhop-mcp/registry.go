@@ -27,13 +27,6 @@ import (
 // dbFileName is the single shared database file inside --db-dir.
 const dbFileName = "memhop.meh"
 
-// tenantEntry pairs a tenant's agent session with the MCP server exposing
-// its tools.
-type tenantEntry struct {
-	session *memhop.Session
-	server  *mcp.Server
-}
-
 // tenantRegistry lazily opens the shared multi-agent DB and serves one MCP
 // server per tenant bound to that tenant's agent domain.
 type tenantRegistry struct {
@@ -42,7 +35,7 @@ type tenantRegistry struct {
 	dbDir   string
 	allowed map[string]bool // empty means any valid tenant id
 	db      *memhop.MultiAgentDB
-	entries map[string]*tenantEntry
+	entries map[string]*mcp.Server
 	logger  *slog.Logger
 	// open is a small injection seam for offline tests; production always
 	// uses memhop.OpenMulti.
@@ -55,7 +48,7 @@ func newRegistry(base memhop.MemHopConfig, dbDir string, allowed []string, logge
 	r := &tenantRegistry{
 		base:    base,
 		dbDir:   dbDir,
-		entries: make(map[string]*tenantEntry),
+		entries: make(map[string]*mcp.Server),
 		logger:  logger,
 		open:    memhop.OpenMulti,
 	}
@@ -68,15 +61,16 @@ func newRegistry(base memhop.MemHopConfig, dbDir string, allowed []string, logge
 	return r
 }
 
-// get returns the tenant's entry, creating its agent domain on first access.
-func (r *tenantRegistry) get(tenant string) (*tenantEntry, error) {
+// get returns the tenant's MCP server, creating its agent domain on first
+// access.
+func (r *tenantRegistry) get(tenant string) (*mcp.Server, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if !tenantIDRe.MatchString(tenant) {
 		return nil, fmt.Errorf("invalid tenant id %q", tenant)
 	}
-	if e, ok := r.entries[tenant]; ok {
-		return e, nil
+	if srv, ok := r.entries[tenant]; ok {
+		return srv, nil
 	}
 	if len(r.allowed) > 0 && !r.allowed[tenant] {
 		return nil, fmt.Errorf("tenant %q is not allowed", tenant)
@@ -100,9 +94,8 @@ func (r *tenantRegistry) get(tenant string) (*tenantEntry, error) {
 	})
 	registerTools(server, r.db, session)
 
-	e := &tenantEntry{session: session, server: server}
-	r.entries[tenant] = e
-	return e, nil
+	r.entries[tenant] = server
+	return server, nil
 }
 
 // openShared opens the single shared database file inside db-dir. os.Root
@@ -140,9 +133,7 @@ func (r *tenantRegistry) openShared() error {
 func (r *tenantRegistry) CloseAll() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	for tenant := range r.entries {
-		delete(r.entries, tenant)
-	}
+	clear(r.entries)
 	if r.db == nil {
 		return nil
 	}

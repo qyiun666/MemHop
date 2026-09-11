@@ -91,10 +91,6 @@ func intProp(desc string) map[string]any {
 	return map[string]any{"type": "integer", "description": desc}
 }
 
-func boolProp(desc string) map[string]any {
-	return map[string]any{"type": "boolean", "description": desc}
-}
-
 // mapProp declares a string-to-string object property (e.g. Preferences).
 func mapProp(desc string) map[string]any {
 	return map[string]any{

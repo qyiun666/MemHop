@@ -134,15 +134,3 @@ func TestSyncL1NodesFromL2SkipsCompressed(t *testing.T) {
 		t.Fatal("updated_at in the future")
 	}
 }
-
-// TestBuildL1Hyperedges covers edge creation from keyword-overlap Jaccard,
-// threshold filtering, idempotent refresh and weight strengthening (max wins).
-
-func mustParse(t *testing.T, s string) uint64 {
-	t.Helper()
-	v, err := common.ParseID(s)
-	if err != nil {
-		t.Fatalf("parse %q: %v", s, err)
-	}
-	return v
-}

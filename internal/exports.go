@@ -121,7 +121,6 @@ const (
 	RoleUser   = core.RoleUser
 	RoleAgent  = core.RoleAgent
 	RoleSystem = core.RoleSystem
-	RoleDream  = core.RoleDream
 )
 
 // ---- L4 content kind constants ----
@@ -129,14 +128,6 @@ const (
 const (
 	KindUtterance = core.KindUtterance
 	KindEvent     = core.KindEvent
-)
-
-// ---- L5 plan status constants (read side; the write surface is a string) ----
-
-const (
-	StatusInProgress = core.StatusInProgress
-	StatusDone       = core.StatusDone
-	StatusFailed     = core.StatusFailed
 )
 
 // ---- L4 content type constants ----

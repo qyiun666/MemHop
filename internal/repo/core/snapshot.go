@@ -26,11 +26,6 @@ type IndexSnapshotData struct {
 	BlobByAgent map[uint64][]byte // agentID → opaque section bytes
 }
 
-type indexEntry struct {
-	IDHash uint64
-	Offset uint64
-}
-
 // BuildSnapshot serializes the per-agent index and snapshot data into a
 // single blob. Format: MAGIC(4) VERSION(1) AGENT_COUNT(4) then per agent
 // AGENT_ID(8) COUNT(4) entries(16 each) blob(len+data), CRC32(4).

@@ -119,7 +119,6 @@ func buildBaseConfig(v *flagValues) (memhop.MemHopConfig, error) {
 		return base, err
 	}
 	// DBPath is filled by the registry with the shared <db-dir>/memhop.meh.
-	base = memhop.MemHopConfig{}
 	base.LLM.APIURL = envOr("MEMHOP_LLM_API_URL", "")
 	base.LLM.APIKey = os.Getenv("MEMHOP_LLM_API_KEY")
 	base.LLM.Model = firstNonEmpty(v.llmModel, os.Getenv("MEMHOP_LLM_MODEL"))

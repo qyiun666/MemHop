@@ -8,6 +8,8 @@
 package api
 
 import (
+	"slices"
+
 	"github.com/qyiun666/MemHop/internal"
 )
 
@@ -71,7 +73,7 @@ func fromTopicSlot(t internal.TopicSlot) TopicSlot {
 		ParentID:       formatPtr(t.ParentID),
 		ChildrenIDs:    formatIDs(t.ChildrenIDs),
 		Depth:          t.Depth,
-		FusedKeywords:  cloneStrings(t.FusedKeywords),
+		FusedKeywords:  slices.Clone(t.FusedKeywords),
 		UserTimestamp:  t.UserTimestamp,
 		AgentTimestamp: t.AgentTimestamp,
 	}
@@ -119,7 +121,7 @@ func fromHypergraphNode(n internal.HypergraphNode) HypergraphNode {
 		Title:     n.Title,
 		NodeType:  n.NodeType,
 		Content:   n.Content,
-		Keywords:  cloneStrings(n.Keywords),
+		Keywords:  slices.Clone(n.Keywords),
 		SourceRef: n.SourceRef,
 		CreatedAt: n.CreatedAt,
 		UpdatedAt: n.UpdatedAt,
@@ -239,13 +241,4 @@ func toInternalPlanStep(s PlanStep) internal.PlanStep {
 		Seq: s.Seq, Status: s.Status,
 		Title: s.Title, Summary: s.Summary,
 	}
-}
-
-func cloneStrings(in []string) []string {
-	if in == nil {
-		return nil
-	}
-	out := make([]string, len(in))
-	copy(out, in)
-	return out
 }

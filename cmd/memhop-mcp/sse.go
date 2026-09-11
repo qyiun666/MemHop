@@ -45,11 +45,11 @@ func serverForRequest(reg *tenantRegistry) func(*http.Request) *mcp.Server {
 		if err != nil {
 			return nil
 		}
-		e, err := reg.get(tenant)
+		srv, err := reg.get(tenant)
 		if err != nil {
 			return nil
 		}
-		return e.server
+		return srv
 	}
 }
 

@@ -26,9 +26,10 @@ type DecayParams struct {
 	MinEdgeNodes           int
 }
 
+// DecayReport counts what one decay pass removed. RemovedNodes and
+// RemovedEdges are the two figures Dream rolls into its report; a node whose
+// edges were pruned but which survived is not a removal and is not counted.
 type DecayReport struct {
-	DecayedNodes int
-	PrunedEdges  int
 	RemovedNodes int
 	RemovedEdges int
 }
@@ -143,7 +144,6 @@ func decayOneNode(engine *core.StorageEngine, agentID uint64, cfg *DecayParams, 
 	}
 	node.Importance = newImportance
 	if newImportance < cfg.NodePruneEdgeThreshold {
-		report.PrunedEdges += len(node.EdgeIDs)
 		for _, edgeID := range node.EdgeIDs {
 			if clearedEdges[edgeID] == nil {
 				clearedEdges[edgeID] = make(map[uint64]bool)
@@ -156,7 +156,6 @@ func decayOneNode(engine *core.StorageEngine, agentID uint64, cfg *DecayParams, 
 	if err := core.WriteSceneNode(engine, agentID, node.IDHash, node); err != nil {
 		return err
 	}
-	report.DecayedNodes++
 	return nil
 }
 

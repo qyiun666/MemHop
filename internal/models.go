@@ -44,13 +44,8 @@ type (
 
 	// LLM capability contracts (prompt inputs / parsed outputs) live in the
 	// llmops capability package.
-	L1Sample              = llmops.L1Sample
-	L2Group               = llmops.L2Group
-	NodeEmotion           = llmops.NodeEmotion
 	EmotionScore          = llmops.EmotionScore
 	MBTIScore             = llmops.MBTIScore
-	DistillOutput         = llmops.DistillOutput
-	ConsolidationOutput   = llmops.ConsolidationOutput
 	CrystallizeCapability = llmops.CrystallizeCapability
 	CrystallizeOutput     = llmops.CrystallizeOutput
 )
