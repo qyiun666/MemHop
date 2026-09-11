@@ -1,9 +1,8 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// retry.go is the transport policy: the truncation-aware chat retry used by
-// every LLM capability. Prompt contracts, token budgets and response parsing
-// live in internal/cap/llmops.
+// retry.go is the transport policy: the truncation-aware chat retry. Prompt
+// contracts, token budgets and response parsing are the caller's to decide.
 
 package llm
 

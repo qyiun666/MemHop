@@ -55,7 +55,7 @@ func BuildL4FromEngine(engine *core.StorageEngine, agentID uint64) *L4Index {
 
 // Append records one content slot, replacing whatever held that Seq: re-writing
 // a Seq is an in-place overwrite on the disk too, so the mirror must not grow.
-// An utterance can land after the events of its turn (a host appends events
+// An utterance can land after the events of its turn (a caller records events
 // while it runs and settles the turn afterwards), so entries insert in Seq
 // order rather than at the tail.
 func (idx *L4Index) Append(topicID, seq, idHash uint64, kind core.ArchiveKind, createdAt int64) {

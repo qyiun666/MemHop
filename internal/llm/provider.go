@@ -1,10 +1,9 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// Package llm is the memory engine's LLM transport: Provider implements the
-// cap/llmops injected Chat contract (single chat, truncation-escalation
-// retry, output ceiling). Prompt construction and parsing belong to the
-// capability layer.
+// Package llm is the LLM transport: a Provider is a thin go-openai wrapper
+// offering one chat call, a truncation-escalation retry and an output ceiling.
+// It builds no prompts and parses no responses.
 
 package llm
 
