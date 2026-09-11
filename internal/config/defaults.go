@@ -3,16 +3,12 @@
 
 package config
 
-// MemHopDefaults holds the host-facing business knobs of the memory engine:
-// consolidation thresholds and the idle-domain TTL. Retrieval scoring tuning
-// retired with the scene-scoring subsystem — Search no longer guesses which
-// scene a message belongs to, so there is nothing to calibrate on the read
-// side.
+// MemHopDefaults holds the tuning knobs a caller supplies: the consolidation
+// thresholds and the idle-domain TTL. There is no read-side calibration knob —
+// a read never guesses which scene a message belongs to.
 type MemHopDefaults struct {
 	// SceneDreamTopicThreshold is how many depth-1 topics one scene may
-	// accumulate before Update schedules that scene's Dream (<=0 disables
-	// the trigger). A scene is a host session, so this bounds the context a
-	// host reads back.
+	// accumulate before its Dream is scheduled (<=0 disables the trigger).
 	SceneDreamTopicThreshold int `json:"scene_dream_topic_threshold"`
 	// DreamCompressMinTopics is the smallest depth-1 topic count a Dream pass
 	// compresses; below it a scene keeps raw detail.
@@ -23,9 +19,9 @@ type MemHopDefaults struct {
 
 // DefaultMemHopDefaults is the single hardcoded source of engine defaults.
 // The trigger sits just above the compress floor so a scheduled Dream always
-// has something to consolidate. It is a value, not a pointer: a host that wants
-// different knobs copies it and edits the copy, so no caller can change the
-// defaults every other caller reads.
+// has something to consolidate. It is a value, not a pointer: a caller that
+// wants different knobs copies it and edits the copy, so no caller can change
+// the defaults every other caller reads.
 var DefaultMemHopDefaults = MemHopDefaults{
 	SceneDreamTopicThreshold: 24,
 	DreamCompressMinTopics:   20,

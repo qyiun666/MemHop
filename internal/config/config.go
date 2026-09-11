@@ -1,10 +1,9 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// Package config holds the host-facing configuration types of the memory
-// engine. The composition root (internal) validates and consumes them; the
-// domain and the small-method packages read the business knobs through the
-// same types, so no package re-declares a knob.
+// Package config holds the configuration a caller supplies: the database path,
+// the LLM endpoint and the tuning defaults. Validation lives on the type that
+// owns the rule, so no knob is declared twice.
 
 package config
 
@@ -12,9 +11,9 @@ import (
 	"github.com/qyiun666/MemHop/internal/common"
 )
 
-// MemHopConfig configures a MemHop database. The only external service is the
-// LLM endpoint: the retrieval subsystem that used to consume encoded vectors
-// is gone, so no embedding service is contacted and no dimension is declared.
+// MemHopConfig configures a MemHop database. The LLM endpoint is the only
+// external service the engine contacts, so the struct carries no retrieval or
+// embedding settings.
 type MemHopConfig struct {
 	DBPath   string         `json:"db_path"`
 	LLM      LlmConfig      `json:"llm"`

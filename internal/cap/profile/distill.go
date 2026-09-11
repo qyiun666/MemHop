@@ -1,10 +1,9 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// Profile distillation policy (moved out of the record layer so the
-// repository keeps record reads/writes only): Dream distills emotion/MBTI
-// from L1 samples into the typed L0 profile signals; identity fields stay
-// host-authored.
+// Profile distillation policy: the emotion/MBTI distilled from L1 samples into
+// the typed L0 signals, and the ranking that picks those samples. The identity
+// fields of a profile are not this file's to write.
 
 package profile
 
@@ -31,9 +30,8 @@ const maxDistillKeywordsPerSample = 20
 // decoupled from the LambdaNode decay config).
 const distillSampleLambda = 0.01
 
-// Default builds the first profile of a domain: a neutral assistant
-// identity. Name/Role/Preferences are host-owned; Personality is seeded by
-// the host and evolved by Dream distillation.
+// Default builds the first profile of a domain: a neutral assistant identity
+// with nothing distilled onto it yet.
 func Default() *core.ProfileSlot {
 	return &core.ProfileSlot{
 		Name:        "Agent",
@@ -70,15 +68,15 @@ func SampleRank(s core.DistillSample, nowMs int64) float64 {
 	return float64(s.Importance) * math.Exp(-distillSampleLambda*common.ElapsedHours(nowMs, s.UpdatedAt))
 }
 
-// MergeDistill writes the distilled emotion, MBTI and personality summary
-// into the profile without touching host-owned fields (Name/Role/
-// Preferences). An empty personality keeps the host-seeded value untouched.
+// MergeDistill writes the distilled emotion, MBTI and personality summary into
+// the profile, leaving Name/Role/Preferences as stored. An empty personality
+// keeps the value already on the slot.
 func MergeDistill(engine *core.StorageEngine, agentID uint64, emo core.EmotionScore, mbti core.MBTIScore, personality string) error {
 	slot, err := repo.GetProfileL0(engine, agentID)
 	if err != nil {
 		// Only a profile that was never written seeds a default one: treating a
 		// transient read failure as "absent" would rewrite the profile from an
-		// empty slot and drop the host-owned fields.
+		// empty slot and drop the identity fields.
 		if common.CodeOf(err) != common.ErrNotFound {
 			return err
 		}

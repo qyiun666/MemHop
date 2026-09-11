@@ -1,9 +1,10 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// Package profile is the L0 profile capability: rendering the compact
-// profile digest injected into every Search response. It is a pure
-// projection of the stored profile slot with its own size budget.
+// Package profile is the L0 profile capability: the first profile a domain gets,
+// a compact digest of a stored one, the distillation samples read out of L1, and
+// writing a distillation result back. Every projection here carries its own size
+// budget.
 package profile
 
 import (
@@ -16,9 +17,10 @@ import (
 )
 
 // Brief renders a compact profile digest for prompt injection: identity,
-// personality, MBTI, top preferences and the current emotional state,
-// bounded so the per-turn Search payload stays small. Hosts needing the
-// full profile read it once via GetL0 instead of every turn.
+// personality, MBTI, top preferences and the current emotional state. It is
+// bounded by construction — five preferences, each value truncated — because a
+// digest rides along with every call and must not grow with the profile it came
+// from. An all-empty slot renders as the empty string.
 func Brief(slot core.ProfileSlot) string {
 	if slot.Name == "" && slot.Role == "" && slot.Personality == "" &&
 		slot.MBTI.Type == "" && len(slot.Preferences) == 0 &&

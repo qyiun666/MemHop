@@ -1,9 +1,9 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// consolidate.go: L2 topic compression call point — the Dream cycle
-// asks the LLM which adjacent topics share a conversation thread and
-// reconstructs merged keyword tracks into natural-language summaries.
+// consolidate.go: the L2 consolidation call point — asks the LLM which adjacent
+// topics share a conversation thread and reconstructs merged keyword tracks into
+// natural-language summaries.
 
 package llmops
 
@@ -74,8 +74,8 @@ func Consolidate(ctx context.Context, chat Chat, topics []core.TopicSlot) (*Cons
 	if perr == nil {
 		return out, nil
 	}
-	// One format-constrained retry before failing the Dream stage (same
-	// self-healing pattern as keyword extraction).
+	// One format-constrained retry before failing the call; ExtractKeywords
+	// applies the same self-healing pattern.
 	retry, rerr := chat.Chat(ctx, SystemConsolidate, user+consolidateFormatRetry, ConsolidationMaxTokens)
 	if rerr != nil {
 		return nil, perr

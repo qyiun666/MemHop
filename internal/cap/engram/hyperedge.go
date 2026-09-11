@@ -1,10 +1,9 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// L1 hypergraph edge building: BuildHyperedges creates co-occurrence
-// edges between scenes whose depth-1 keyword sets overlap. SceneNode writes
-// happen only during Dream via SyncL1NodesFromL2 (l1layer_sync.go); decay
-// and rebuild live in l1layer_decay.go.
+// L1 hypergraph edge building: BuildHyperedges creates co-occurrence edges
+// between scenes whose depth-1 keyword sets overlap. This file only adds and
+// refreshes edges — forgetting is decay.go's side.
 
 package engram
 

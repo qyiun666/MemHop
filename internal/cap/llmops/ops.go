@@ -17,10 +17,9 @@ import (
 	"github.com/qyiun666/MemHop/internal/common"
 )
 
-// Chat is the injected chat-completion transport (implemented by the
-// composition root's LLM provider). ChatWithRetry applies the transport's
-// truncation-escalation policy; MaxOutputTokens exposes the configured
-// output ceiling so each capability can budget its own calls.
+// Chat is the injected chat-completion transport. ChatWithRetry applies the
+// transport's truncation-escalation policy; MaxOutputTokens exposes the
+// configured output ceiling so each capability can budget its own calls.
 //
 // Sampling is not a caller input: every capability here parses a strict JSON
 // contract out of the reply, so a run has to be reproducible against the same

@@ -58,9 +58,9 @@ var errKeywordFormat = common.NewError(common.ErrLLM,
 
 // ExtractKeywords extracts semantic keywords whose union represents the
 // text's core meaning (unlimited count). A reply that is not valid JSON gets
-// one format-constrained retry and then surfaces as an error: the keyword
-// track is what a host reads back as its conversation context, so a degraded
-// or empty track would be written into the topic as if it were the real one.
+// one format-constrained retry and then surfaces as an error rather than a
+// degraded result: an empty or partial track would be stored as if it were the
+// real one, and nothing downstream can tell the two apart.
 // Long inputs are chunked first so the JSON constraint stays effective.
 func ExtractKeywords(ctx context.Context, chat Chat, text string) ([]string, error) {
 	trimmed := strings.TrimSpace(text)

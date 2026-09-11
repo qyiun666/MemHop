@@ -27,8 +27,8 @@ type DecayParams struct {
 }
 
 // DecayReport counts what one decay pass removed. RemovedNodes and
-// RemovedEdges are the two figures Dream rolls into its report; a node whose
-// edges were pruned but which survived is not a removal and is not counted.
+// RemovedEdges are the only two figures it reports; a node whose edges were
+// pruned but which survived is not a removal and is not counted.
 type DecayReport struct {
 	RemovedNodes int
 	RemovedEdges int
