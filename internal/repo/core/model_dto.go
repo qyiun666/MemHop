@@ -1,28 +1,23 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// Business DTOs of the storage-layer model package: pure request/response
-// shapes shared by the composition root (internal), the capability packages
-// and the repository layer. No methods, no business logic (G-01: bottom
-// layer holds plain structures only).
+// Business DTOs of the storage-layer model package: pure request and response
+// shapes, no methods and no logic — the bottom layer holds plain structures
+// only, so anything crossing a layer boundary is named here once.
 
 package core
 
-// SearchQuery is one scene-scoped read. SceneID is the host's session id:
-// empty asks the library for a fresh scene, non-empty must already exist.
-// L3ID optionally anchors a newly created scene to a project domain and is
-// read on creation only — an existing scene keeps its anchor. New scenes are
-// named by the library ("session:<id>"), never by the caller; the host
-// renames one afterwards with UpdateScene.
+// SearchQuery is one scene-scoped read. An empty SceneID asks for a fresh scene;
+// a non-empty one must already exist. L3ID optionally anchors a newly created
+// scene to a project domain and is read on creation only — an existing scene
+// keeps the anchor it has.
 type SearchQuery struct {
 	SceneID string `json:"scene_id,omitempty"`
 	L3ID    string `json:"l3_id,omitempty"`
 }
 
 // SearchResult carries the L0 profile plus the read surface of one scene: the
-// scene record, its depth-1 topics (the host's context for that session) and
-// NewTopicID — the turn topic this read opened. The host runs its turn, appends
-// what happened under that id, and hands it back to Update.
+// scene record, its depth-1 topics, and NewTopicID — the topic this read opened.
 type SearchResult struct {
 	Profile      ProfileSlot `json:"profile"`
 	ProfileBrief string      `json:"profile_brief"`
@@ -31,11 +26,11 @@ type SearchResult struct {
 	NewTopicID   uint64      `json:"new_topic_id"`
 }
 
-// SceneMessage is one L4 utterance inside a scene context topic. Type tells the
-// host whether the content is prose or a reference to media. Seq is the slot the
+// SceneMessage is one L4 utterance inside a scene context topic. Type says
+// whether the content is prose or a reference to media. Seq is the slot the
 // utterance holds in its topic, and it is what makes a gap visible: Seq skipping
-// a value means the retention window reclaimed that utterance, which is a legal
-// end state for a turn, not a read that lost a line.
+// a value means that utterance was reclaimed, which is a legal end state for a
+// turn, not a read that lost a line.
 type SceneMessage struct {
 	Role      uint8       `json:"role"`
 	Type      ContentType `json:"type"`
@@ -45,8 +40,8 @@ type SceneMessage struct {
 }
 
 // SceneContextTopic is one topic of a scene context with its L4 messages and
-// its child count. Depth tells a fused parent (1) from a turn Dream sunk (2).
-// Name is the host's own label, empty until somebody sets one.
+// its child count. Depth tells a fused parent (1) from a sunk turn (2).
+// Name is a caller-supplied label, empty until one is set.
 type SceneContextTopic struct {
 	TopicID    string         `json:"topic_id"`
 	Depth      int            `json:"depth"`
@@ -98,9 +93,8 @@ type L3Relation struct {
 }
 
 // L3ImportResult reports one import batch. CreatedIDs/UpdatedIDs are node ids;
-// GraphIDs are the graphs the batch wrote into (created or reused), which a
-// host needs to anchor a scene on the graph — a graph id is hash(Domain) and no
-// other public call derives it.
+// GraphIDs are the graphs the batch wrote into (created or reused) — a graph id
+// derives from its domain label, and this is where a batch reports it.
 type L3ImportResult struct {
 	GraphIDs     []string `json:"graph_ids,omitempty"`
 	CreatedIDs   []string `json:"created_ids"`
@@ -165,9 +159,9 @@ type DreamStage struct {
 	DurationMs int64  `json:"duration_ms"`
 }
 
-// DreamReport is Dream's structured result for host observability; counts
-// describe what this pass actually did. On mid-pipeline failures the
-// partially filled report is returned together with the error.
+// DreamReport is one consolidation pass's structured result; counts describe
+// what this pass actually did. On mid-pipeline failures the partially filled
+// report is returned together with the error.
 type DreamReport struct {
 	ConsolidatedScenes int          `json:"consolidated_scenes"` // 场景数（≥1 个合并组生效）
 	L2TopicsCompressed int          `json:"l2_topics_compressed"`

@@ -20,10 +20,9 @@ const RecordHeaderSize = 26
 
 const FlagDeleted uint8 = 0x01
 
-// Record type constants. 0x0E (a trajectory event) is retired now that a
-// turn's events live in L4. 0x0F carries plan nodes; the number came free when the
-// engine stopped storing capability records, and files written under that older
-// payload are rejected at Open.
+// Record type constants. 0x0F carries plan nodes; a file whose 0x0F frames carry
+// an older payload is rejected at Open. 0x0E is unused — a turn's events are L4
+// content.
 const (
 	RecL0Profile   uint8 = 0x01
 	RecL1SceneNode uint8 = 0x02
@@ -41,8 +40,9 @@ const (
 	RecAgentRegistry uint8 = 0x10
 )
 
-// DefaultAgentID is the implicit single-agent domain used by the api.Open
-// compatibility path and legacy callers.
+// DefaultAgentID is the implicit zero domain — the one a file is opened on, and
+// the domain a single-agent database keeps all of its records in. It carries no
+// registration record: a file can hold it without ever having listed one.
 const DefaultAgentID uint64 = 0
 
 // SharedPoolAgentID is the reserved file-wide domain that holds the shared record

@@ -11,12 +11,11 @@ import (
 	"github.com/qyiun666/MemHop/internal/common"
 )
 
-// ProfileSlot is the L0 profile singleton of one agent domain. Ownership:
-// Name/Role/Preferences are host-authored and never touched by Dream;
-// Personality is seeded by the host and evolved by Dream distillation;
-// EmotionState/MBTI are distilled signals; AgentType is stamped once when the
-// domain is created. The last three are library-owned: a host write inherits
-// the stored value rather than taking the caller's.
+// ProfileSlot is the L0 profile singleton of one agent domain. Field ownership
+// is not uniform: EmotionState/MBTI are distilled signals, AgentType is stamped
+// once when the domain is created, and UpdatedAtMs is written by the library — a
+// write that leaves any of them unset keeps the stored value rather than taking
+// the caller's zero.
 type ProfileSlot struct {
 	IDHash       uint64            `json:"id_hash"`
 	Name         string            `json:"name"`
@@ -52,7 +51,8 @@ type SceneNode struct {
 	EdgeIDs    []uint64 `json:"edge_ids"`
 }
 
-// SceneEdge is an L1 hyperedge used by upper-layer decay logic.
+// SceneEdge is an L1 hyperedge over a set of member nodes, carrying a weight
+// that decays over time.
 type SceneEdge struct {
 	IDHash    uint64        `json:"id_hash"`
 	Kind      HyperedgeKind `json:"kind"`
@@ -65,26 +65,25 @@ type SceneEdge struct {
 
 // SceneNodeID derives the stable L1 node ID of a scene:
 // hash("scene-node:"+hex(sceneID)). The namespace carries no layer number so a
-// renumbering never re-keys it. The node is created/updated only during Dream,
-// but the ID is computable without any index — which is what lets DeleteScene
-// drop it right away.
+// renumbering never re-keys it. The ID follows from the scene id alone, so
+// removing a node needs no index lookup first.
 func SceneNodeID(sceneID uint64) uint64 {
 	return common.HashID("scene-node:" + common.FormatHash(sceneID))
 }
 
-// SceneSlot is an L2 scene container — one host session's conversation. The
-// scene ID is the host's session id, never a hash of its name.
+// SceneSlot is an L2 scene container. Its id is assigned outside the engine and
+// never derived from SceneName.
 type SceneSlot struct {
 	SceneID   uint64 `json:"scene_id"`
 	SceneName string `json:"scene_name"`
-	// TurnSeq counts turns Search has opened here: each read bumps it and
-	// returns hash("turn:"+sceneID:TurnSeq) as the topic id Update settles
-	// into, so turn ids never depend on message timestamps. Absent = 0.
+	// TurnSeq counts the turns opened here: hash("turn:"+sceneID:TurnSeq) is a
+	// turn's topic id, so turn ids never depend on message timestamps.
+	// Absent = 0.
 	TurnSeq uint64 `json:"turn_seq,omitempty"`
 	L3ID    uint64 `json:"l3_id"` // 场景固定挂靠的目录/项目域 L3 图（N:1）
 }
 
-// NewSceneSlot builds a scene record for a host-owned scene ID.
+// NewSceneSlot builds a scene record for a caller-supplied scene id and name.
 func NewSceneSlot(sceneID uint64, name string) SceneSlot {
 	return SceneSlot{
 		SceneID:   sceneID,
@@ -92,14 +91,12 @@ func NewSceneSlot(sceneID uint64, name string) SceneSlot {
 	}
 }
 
-// TopicSlot is one L2 conversation node: a single turn settled by Update, or a
-// Dream-fused group of turns. A scene's depth-1 topic set IS the host's
-// context for that session, so a topic carries exactly one keyword track
-// (FusedKeywords). What was said lives in the L4 archives keyed by this topic's
-// own ID — a topic lists none of them.
-// Tree: parent_id (nil = depth-1 root) + children_ids. Depth 1 = current
-// surface (turns and fused groups), 2+ = sunk history; depth >= 4 is deleted
-// on Dream.
+// TopicSlot is one L2 conversation node: a single turn, or a fused group of
+// turns. A topic carries exactly one keyword track (FusedKeywords); what was
+// said lives in the L4 archives keyed by this topic's own id, which a topic does
+// not list.
+// Tree: parent_id (nil = depth-1 root) + children_ids. Depth 1 is the surface a
+// scene read lists, 2+ is sunk history; depth >= 4 is never kept.
 type TopicSlot struct {
 	ID          uint64   `json:"id"`
 	SceneID     uint64   `json:"scene_id"`
@@ -107,11 +104,11 @@ type TopicSlot struct {
 	ChildrenIDs []uint64 `json:"children_ids"`
 	Depth       uint8    `json:"depth"`
 
-	// Name is the host's own label for this topic. The host is its only writer:
-	// the engine derives nothing into it, so consolidating or merging rewrites
-	// the record around the name and never over it. Empty is a state a reader
-	// can tell apart from a name — it says nobody has named this topic yet —
-	// and omitempty keeps that state off the disk entirely.
+	// Name is a caller-supplied label for this topic. Nothing here derives into
+	// it, so consolidating or rewriting the record goes around the name and never
+	// over it. Empty is a state a reader can tell apart from a name — it says
+	// nobody has named this topic yet — and omitempty keeps that state off the
+	// disk entirely.
 	Name string `json:"name,omitempty"`
 
 	FusedKeywords []string `json:"fused_keywords"`
@@ -121,8 +118,7 @@ type TopicSlot struct {
 }
 
 // CompareTopicOrder orders a scene's topics by the turn they were spoken in,
-// breaking a tie on ID so the order is deterministic. Both the scene read
-// surface and the consolidation prompt render a scene's topics in this order.
+// breaking a tie on ID so the order is deterministic.
 func CompareTopicOrder(a, b TopicSlot) int {
 	if a.UserTimestamp != b.UserTimestamp {
 		return cmp.Compare(a.UserTimestamp, b.UserTimestamp)
@@ -136,11 +132,11 @@ func ComputeTopicID(sceneID uint64, userTS, agentTS int64) uint64 {
 	return common.HashID(ComputeTopicKey(sceneID, userTS, agentTS))
 }
 
-// ComputeTurnTopicID derives the ID of the turn topic Search opened for a
-// scene, from the scene's turn counter rather than its message timestamps:
-// Search issues the ID before the turn's texts exist. The "turn:" namespace
-// keeps it apart from ComputeTopicID, which Dream uses for fused parents over
-// the same (minTS, maxTS) pair.
+// ComputeTurnTopicID derives a turn topic's ID from the scene's turn counter
+// rather than its message timestamps: the counter form is issuable before a
+// turn's texts exist. The "turn:" namespace keeps it apart from ComputeTopicID,
+// the timestamp form, which addresses a fused group over the same
+// (minTS, maxTS) pair.
 func ComputeTurnTopicID(sceneID, seq uint64) uint64 {
 	return common.HashID(fmt.Sprintf("turn:%d:%d", sceneID, seq))
 }
@@ -197,11 +193,10 @@ type HypergraphEdge struct {
 	CreatedAt int64         `json:"created_at"`
 }
 
-// Message roles in an ArchiveSlot. A host declaring an utterance picks one of
-// RoleUser / RoleAgent / RoleSystem; the append boundary refuses RoleDream, which
-// is the library's own stamp on a fused group's summary and stays off the public
-// constants, so a host cannot write a record that reads as consolidated. Role
-// qualifies an utterance — an event record leaves it 0.
+// Message roles in an ArchiveSlot. An utterance carries one of RoleUser /
+// RoleAgent / RoleSystem; RoleDream is the library's own stamp on a fused group's
+// summary and is never an utterance role. Role qualifies an utterance — an event
+// record leaves it 0.
 const (
 	RoleUser   uint8 = 0
 	RoleAgent  uint8 = 1
@@ -210,10 +205,10 @@ const (
 )
 
 // Utterances hold Seq 1 and 2 of their topic. Auto-allocation starts above these
-// two slots: a host records events while the turn runs and appends the originals
-// whenever it chooses, and the dialogue still lands on the slots a reader looks
-// for them on. Naming a reserved Seq explicitly writes that slot, overwriting
-// whatever kind holds it.
+// two slots: a caller records events while the turn runs and appends the
+// originals whenever it chooses, and the dialogue still lands on the slots a
+// reader looks for them on. Naming a reserved Seq explicitly writes that slot,
+// overwriting whatever kind holds it.
 const (
 	SeqUser  uint64 = 1
 	SeqAgent uint64 = 2
@@ -223,12 +218,12 @@ const (
 )
 
 // ArchiveSlot stores one piece of a topic's content: a dialogue original
-// (KindUtterance) or an operation event the host recorded (KindEvent).
+// (KindUtterance) or an operation event (KindEvent).
 // (TopicID, Seq) addresses it, so re-writing one Seq overwrites in place.
 // Role, ContentType and EventType are orthogonal axes, not three names for one
 // thing: Role says who spoke (utterances only), ContentType says what Content
 // *is* (prose or a reference to media), EventType says what *happened* — events
-// only, and the host names it.
+// only, and named by the caller.
 type ArchiveSlot struct {
 	IDHash      uint64      `json:"id_hash"`
 	Kind        ArchiveKind `json:"kind"`
@@ -254,8 +249,8 @@ func HashContent(topicID, seq uint64) uint64 {
 // Plan node status. Three states, and a created node starts in the first one:
 // there is no "planned but not started" state, so the zero value is the state a
 // fresh node is really in. in_progress is the one "this step is being worked on"
-// value: a second synonym would give a host two words the engine cannot tell
-// apart. done and failed are the two terminal states.
+// value: a second synonym would offer two words nothing here can tell apart.
+// done and failed are the two terminal states.
 const (
 	StatusInProgress uint8 = 0
 	StatusDone       uint8 = 1
@@ -267,9 +262,9 @@ const (
 // hands out (1, 2, 3 …), and ParentSeq names the step it hangs on, 0 being a
 // root. TopicID is the turn topic that owns the tree, so naming the turn is all a
 // read needs to get its whole tree back.
-// UpdatedAt is what the retention window reads — every write stamps it, so a plan
-// the host went quiet on stops being exempt once its last write falls outside the
-// window, while an in-flight one keeps its tree mid-task.
+// UpdatedAt is what a retention sweep reads — every write stamps it, so a plan
+// nobody has written to stops being exempt once its last write falls outside the
+// window, while one still being worked on keeps its tree mid-task.
 type PlanNode struct {
 	IDHash     uint64 `json:"id_hash"`
 	TopicID    uint64 `json:"topic_id"`

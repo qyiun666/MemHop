@@ -41,8 +41,8 @@ func (c ContentType) Valid() bool {
 type ArchiveKind uint8
 
 const (
-	KindUtterance ArchiveKind = 0 // a dialogue original, or a Dream-fused summary
-	KindEvent     ArchiveKind = 1 // a host-recorded operation event
+	KindUtterance ArchiveKind = 0 // a dialogue original, or a fused summary
+	KindEvent     ArchiveKind = 1 // an operation event
 )
 
 var archiveKindNames = map[ArchiveKind]string{
