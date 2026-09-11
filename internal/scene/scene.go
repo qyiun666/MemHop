@@ -38,12 +38,7 @@ func ResolveForRead(engine *core.StorageEngine, agentID uint64, q core.SearchQue
 	// named graph has to at least resolve — and a scene that already exists
 	// keeps the anchor it has until UpdateScene moves it.
 	if q.L3ID != "" {
-		l3Hash, err := common.ParseID(q.L3ID)
-		if err != nil {
-			return nil, common.NewError(common.ErrInvalidQuery, "parse l3 id", err)
-		}
-		// Graphs live in the file-wide shared L3 domain, not in the caller's own.
-		if _, err := core.ReadGraphSlot(engine, core.SharedPoolAgentID, l3Hash); err != nil {
+		if _, err := repo.ReadSharedGraphL3(engine, q.L3ID); err != nil {
 			return nil, err
 		}
 		return nil, common.NewError(common.ErrInvalidQuery,
@@ -65,15 +60,11 @@ func Create(engine *core.StorageEngine, agentID uint64, l3ID string) (*core.Scen
 		return nil, err
 	}
 	if l3ID != "" {
-		l3Hash, err := common.ParseID(l3ID)
+		g, err := repo.ReadSharedGraphL3(engine, l3ID)
 		if err != nil {
-			return nil, common.NewError(common.ErrInvalidQuery, "parse l3 id", err)
-		}
-		// Graphs live in the file-wide shared L3 domain, not in the caller's own.
-		if _, err := core.ReadGraphSlot(engine, core.SharedPoolAgentID, l3Hash); err != nil {
 			return nil, err
 		}
-		if err := repo.SetSceneL3ID(engine, agentID, id, l3Hash); err != nil {
+		if err := repo.SetSceneL3ID(engine, agentID, id, g.IDHash); err != nil {
 			return nil, err
 		}
 	}

@@ -70,7 +70,7 @@ func ExtractKeywords(ctx context.Context, chat Chat, text string) ([]string, err
 	if utf8.RuneCountInString(trimmed) > keywordChunkRunes {
 		return extractKeywordsChunked(ctx, chat, trimmed)
 	}
-	return extractKeywordsWithRetry(ctx, chat, trimmed)
+	return extractOne(ctx, chat, "Extract keywords from:\n"+trimmed)
 }
 
 // extractOne runs the full attempt ladder for one prompt: escalating token
@@ -90,7 +90,7 @@ func extractOne(ctx context.Context, chat Chat, user string) ([]string, error) {
 		ConsolidationMaxTokens,
 	}
 	for _, maxTokens := range budgets {
-		response, err := chat.Chat(ctx, systemKeywords, user, maxTokens, 0.0, 1.0)
+		response, err := chat.Chat(ctx, systemKeywords, user, maxTokens)
 		if err != nil {
 			if errors.Is(err, common.ErrTruncated) {
 				continue // a larger budget may fit the whole reply
@@ -101,7 +101,7 @@ func extractOne(ctx context.Context, chat Chat, user string) ([]string, error) {
 			return dedupeKeywords(keywords), nil
 		}
 	}
-	response, err := chat.Chat(ctx, systemKeywords, user+keywordFormatRetry, ConsolidationMaxTokens, 0.0, 1.0)
+	response, err := chat.Chat(ctx, systemKeywords, user+keywordFormatRetry, ConsolidationMaxTokens)
 	if err != nil {
 		if errors.Is(err, common.ErrTruncated) {
 			return nil, errKeywordFormat
@@ -112,11 +112,6 @@ func extractOne(ctx context.Context, chat Chat, user string) ([]string, error) {
 		return dedupeKeywords(keywords), nil
 	}
 	return nil, errKeywordFormat
-}
-
-// extractKeywordsWithRetry runs the single-pass path.
-func extractKeywordsWithRetry(ctx context.Context, chat Chat, trimmed string) ([]string, error) {
-	return extractOne(ctx, chat, "Extract keywords from:\n"+trimmed)
 }
 
 // extractKeywordsChunked extracts per chunk through the same ladder and merges

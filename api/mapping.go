@@ -138,18 +138,26 @@ func fromHypergraphEdge(e internal.HypergraphEdge) HypergraphEdge {
 	}
 }
 
+// mapL3Members renders a graph's node and edge sets into their public DTOs.
+// A whole graph and a queried subgraph carry the same two member sets, so they
+// share this and differ only in what else they return.
+func mapL3Members(nodes []internal.HypergraphNode, edges []internal.HypergraphEdge) ([]HypergraphNode, []HypergraphEdge) {
+	outNodes := make([]HypergraphNode, len(nodes))
+	for i, n := range nodes {
+		outNodes[i] = fromHypergraphNode(n)
+	}
+	outEdges := make([]HypergraphEdge, len(edges))
+	for i, e := range edges {
+		outEdges[i] = fromHypergraphEdge(e)
+	}
+	return outNodes, outEdges
+}
+
 func fromL3Graph(g *internal.L3Graph) *L3Graph {
 	if g == nil {
 		return nil
 	}
-	nodes := make([]HypergraphNode, len(g.Nodes))
-	for i, n := range g.Nodes {
-		nodes[i] = fromHypergraphNode(n)
-	}
-	edges := make([]HypergraphEdge, len(g.Edges))
-	for i, e := range g.Edges {
-		edges[i] = fromHypergraphEdge(e)
-	}
+	nodes, edges := mapL3Members(g.Nodes, g.Edges)
 	return &L3Graph{
 		Slot:  fromHypergraphSlot(g.Slot),
 		Nodes: nodes,
@@ -161,14 +169,7 @@ func fromL3Subgraph(g *internal.L3Subgraph) *L3Subgraph {
 	if g == nil {
 		return nil
 	}
-	nodes := make([]HypergraphNode, len(g.Nodes))
-	for i, n := range g.Nodes {
-		nodes[i] = fromHypergraphNode(n)
-	}
-	edges := make([]HypergraphEdge, len(g.Edges))
-	for i, e := range g.Edges {
-		edges[i] = fromHypergraphEdge(e)
-	}
+	nodes, edges := mapL3Members(g.Nodes, g.Edges)
 	return &L3Subgraph{Nodes: nodes, Edges: edges}
 }
 

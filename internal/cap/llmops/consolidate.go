@@ -1,14 +1,13 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// llm_consolidate.go: L2 topic compression call point — the Dream cycle
+// consolidate.go: L2 topic compression call point — the Dream cycle
 // asks the LLM which adjacent topics share a conversation thread and
 // reconstructs merged keyword tracks into natural-language summaries.
 
 package llmops
 
 import (
-	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -77,7 +76,7 @@ func Consolidate(ctx context.Context, chat Chat, topics []core.TopicSlot) (*Cons
 	}
 	// One format-constrained retry before failing the Dream stage (same
 	// self-healing pattern as keyword extraction).
-	retry, rerr := chat.Chat(ctx, SystemConsolidate, user+consolidateFormatRetry, ConsolidationMaxTokens, 0.0, 1.0)
+	retry, rerr := chat.Chat(ctx, SystemConsolidate, user+consolidateFormatRetry, ConsolidationMaxTokens)
 	if rerr != nil {
 		return nil, perr
 	}
@@ -110,12 +109,7 @@ func BuildConsolidatePrompt(topics []core.TopicSlot) string {
 	fmt.Fprintf(&b, "# L2 Topic Data (%d scenes)\n\n", len(sceneIDs))
 	for _, sid := range sceneIDs {
 		nodes := byScene[sid]
-		slices.SortStableFunc(nodes, func(a, b core.TopicSlot) int {
-			if a.UserTimestamp != b.UserTimestamp {
-				return cmp.Compare(a.UserTimestamp, b.UserTimestamp)
-			}
-			return cmp.Compare(a.ID, b.ID)
-		})
+		slices.SortStableFunc(nodes, core.CompareTopicOrder)
 		fmt.Fprintf(&b, "## scene_id = %d\n", sid)
 		for _, n := range nodes {
 			fmt.Fprintf(&b, "- id=%d depth=%d kw=%v\n", n.ID, n.Depth, n.FusedKeywords)

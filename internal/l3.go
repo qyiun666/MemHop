@@ -32,30 +32,26 @@ func (db *DB) GetL3(agentID uint64, id string) (*L3Graph, error) {
 // getL3Graph is the lock-free impl shared by GetL3 and UpdateL3 (shared
 // pool domain lock held by the caller).
 func (db *DB) getL3Graph(id string) (*L3Graph, error) {
-	graphHash, err := common.ParseID(id)
+	slot, err := repo.ReadSharedGraphL3(db.engine, id)
 	if err != nil {
-		return nil, common.NewError(common.ErrInvalidQuery, "parse l3 id", err)
+		return nil, err
 	}
-	var slot *core.HypergraphSlot
-	graphs := core.CollectAllGraphSlots(db.engine, core.SharedPoolAgentID)
-	for i := range graphs {
-		if graphs[i].IDHash == graphHash {
-			slot = &graphs[i]
-			break
-		}
-	}
-	if slot == nil {
-		return nil, common.NewError(common.ErrNotFound, "graph not found")
-	}
-	nodes := repo.ListNodeL3(db.engine, core.SharedPoolAgentID, graphHash)
-	edges := repo.ListEdgeL3(db.engine, core.SharedPoolAgentID, graphHash)
+	return db.graphView(slot), nil
+}
+
+// graphView assembles the host-facing graph around an already-read slot. An
+// empty member set renders as an empty slice, not nil, so a graph with nothing
+// in it is distinguishable from a field the engine forgot to fill.
+func (db *DB) graphView(slot *core.HypergraphSlot) *L3Graph {
+	nodes := repo.ListNodeL3(db.engine, core.SharedPoolAgentID, slot.IDHash)
+	edges := repo.ListEdgeL3(db.engine, core.SharedPoolAgentID, slot.IDHash)
 	if nodes == nil {
 		nodes = []core.HypergraphNode{}
 	}
 	if edges == nil {
 		edges = []core.HypergraphEdge{}
 	}
-	return &L3Graph{Slot: *slot, Nodes: nodes, Edges: edges}, nil
+	return &L3Graph{Slot: *slot, Nodes: nodes, Edges: edges}
 }
 
 func (db *DB) ListL3(agentID uint64) ([]core.HypergraphSlot, error) {
@@ -142,10 +138,11 @@ func (db *DB) UpdateL3(agentID uint64, id string, name *string) (*L3Graph, error
 			return nil, err
 		}
 	}
-	if _, err := repo.UpdateGraphL3(db.engine, core.SharedPoolAgentID, graphHash, name); err != nil {
+	slot, err := repo.UpdateGraphL3(db.engine, core.SharedPoolAgentID, graphHash, name)
+	if err != nil {
 		return nil, err
 	}
-	return db.getL3Graph(id)
+	return db.graphView(slot), nil
 }
 
 // DeleteL3 cascades: deletes the graph with all its nodes and edges from the
@@ -158,15 +155,12 @@ func (db *DB) DeleteL3(agentID uint64, id string) error {
 	if err != nil {
 		return err
 	}
-	graphHash, err := common.ParseID(id)
+	slot, err := repo.ReadSharedGraphL3(db.engine, id)
 	if err != nil {
-		ac.Mu.Unlock()
-		return common.NewError(common.ErrInvalidQuery, "parse l3 id", err)
-	}
-	if _, err := core.ReadGraphSlot(db.engine, core.SharedPoolAgentID, graphHash); err != nil {
 		ac.Mu.Unlock()
 		return err
 	}
+	graphHash := slot.IDHash
 	if !repo.DeleteGraphL3(db.engine, core.SharedPoolAgentID, graphHash) {
 		ac.Mu.Unlock()
 		return common.NewError(common.ErrIO, "delete graph", nil)
@@ -214,13 +208,11 @@ func (db *DB) DeleteL3Nodes(agentID uint64, graphID string, nodeIDs []string) er
 	if len(nodeIDs) == 0 {
 		return common.NewError(common.ErrInvalidQuery, "delete nodes: no node ids")
 	}
-	graphHash, err := common.ParseID(graphID)
+	slot, err := repo.ReadSharedGraphL3(db.engine, graphID)
 	if err != nil {
-		return common.NewError(common.ErrInvalidQuery, "parse l3 id", err)
-	}
-	if _, err := core.ReadGraphSlot(db.engine, core.SharedPoolAgentID, graphHash); err != nil {
 		return err
 	}
+	graphHash := slot.IDHash
 	targets := make([]uint64, 0, len(nodeIDs))
 	for _, raw := range nodeIDs {
 		id, err := common.ParseID(raw)

@@ -77,7 +77,7 @@ func Crystallize(ctx context.Context, chat Chat, events []core.ArchiveSlot, exis
 		return &CrystallizeOutput{Capabilities: []CrystallizeCapability{}}, nil
 	}
 	user := buildCrystallizePrompt(events, existing)
-	response, err := chat.Chat(ctx, systemCrystallize, user, chat.MaxOutputTokens(), 0.0, 1.0)
+	response, err := chat.Chat(ctx, systemCrystallize, user, chat.MaxOutputTokens())
 	if err != nil {
 		return nil, err
 	}

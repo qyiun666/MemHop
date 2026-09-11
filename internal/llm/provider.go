@@ -70,9 +70,7 @@ func normalizeBaseURL(raw string) string {
 
 // Chat 执行一次非流式 chat completion，对 429/5xx 做指数退避重试
 // （500ms → 2s，共 3 次尝试），其余错误不重试。
-func (p *Provider) Chat(
-	ctx context.Context, system, user string, maxTokens int, temperature, topP float32,
-) (string, error) {
+func (p *Provider) Chat(ctx context.Context, system, user string, maxTokens int) (string, error) {
 	req := openai.ChatCompletionRequest{
 		Model: p.model,
 		Messages: []openai.ChatCompletionMessage{
@@ -80,8 +78,8 @@ func (p *Provider) Chat(
 			{Role: openai.ChatMessageRoleUser, Content: user},
 		},
 		MaxTokens:        maxTokens,
-		Temperature:      temperature,
-		TopP:             topP,
+		Temperature:      0.0,
+		TopP:             1.0,
 		PresencePenalty:  0.0,
 		FrequencyPenalty: 0.0,
 		Stream:           false,

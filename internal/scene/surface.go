@@ -4,7 +4,6 @@
 package scene
 
 import (
-	"cmp"
 	"slices"
 
 	"github.com/qyiun666/MemHop/internal/common"
@@ -25,12 +24,7 @@ func SurfaceTopics(ac *domain.Context, sceneID uint64) []core.TopicSlot {
 		}
 		out = append(out, meta.ToTopicSlot())
 	}
-	slices.SortFunc(out, func(a, b core.TopicSlot) int {
-		if a.UserTimestamp != b.UserTimestamp {
-			return cmp.Compare(a.UserTimestamp, b.UserTimestamp)
-		}
-		return cmp.Compare(a.ID, b.ID)
-	})
+	slices.SortFunc(out, core.CompareTopicOrder)
 	return out
 }
 

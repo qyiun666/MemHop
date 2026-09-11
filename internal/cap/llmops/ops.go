@@ -21,8 +21,12 @@ import (
 // composition root's LLM provider). ChatWithRetry applies the transport's
 // truncation-escalation policy; MaxOutputTokens exposes the configured
 // output ceiling so each capability can budget its own calls.
+//
+// Sampling is not a caller input: every capability here parses a strict JSON
+// contract out of the reply, so a run has to be reproducible against the same
+// records, and the transport fixes deterministic sampling for all of them.
 type Chat interface {
-	Chat(ctx context.Context, system, user string, maxTokens int, temperature, topP float32) (string, error)
+	Chat(ctx context.Context, system, user string, maxTokens int) (string, error)
 	ChatWithRetry(ctx context.Context, system, user string, primaryMax, retryMax int) (string, error)
 	MaxOutputTokens() int
 }

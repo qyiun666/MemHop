@@ -97,7 +97,7 @@ func Distill(ctx context.Context, chat Chat, samples []L1Sample) (*DistillOutput
 		return out, nil
 	}
 	// One format-constrained retry before failing the Dream stage.
-	retry, rerr := chat.Chat(ctx, systemDistill, user+distillFormatRetry, budget, 0.0, 1.0)
+	retry, rerr := chat.Chat(ctx, systemDistill, user+distillFormatRetry, budget)
 	if rerr != nil {
 		return nil, perr
 	}

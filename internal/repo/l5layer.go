@@ -80,6 +80,26 @@ type PlanAggregate struct {
 	HasNonDone   bool
 }
 
+// ComparePlanNodeSeq orders plan nodes by the per-turn ordinal they were
+// created under — the order a tree reads in.
+func ComparePlanNodeSeq(a, b core.PlanNode) int { return cmp.Compare(a.Seq, b.Seq) }
+
+// RecomputePlanAgg rescans an aggregate's two derived figures over its current
+// node set. Both start from zero, so a recompute after nodes were removed
+// cannot keep a figure whose only source is gone.
+func RecomputePlanAgg(agg *PlanAggregate) {
+	agg.LastActiveAt = 0
+	agg.HasNonDone = false
+	for _, n := range agg.Nodes {
+		if n.UpdatedAt > agg.LastActiveAt {
+			agg.LastActiveAt = n.UpdatedAt
+		}
+		if n.Status != core.StatusDone {
+			agg.HasNonDone = true
+		}
+	}
+}
+
 // CollectPlanNodes groups every plan node of one agent domain by the turn topic
 // that opened it. A key yields an aggregate exactly while at least one of its
 // nodes lives: a plan whose whole tree has been pruned is gone. Result is
@@ -96,17 +116,8 @@ func CollectPlanNodes(engine *core.StorageEngine, agentID uint64) []PlanAggregat
 	}
 	out := make([]PlanAggregate, 0, len(byTopic))
 	for _, agg := range byTopic {
-		slices.SortFunc(agg.Nodes, func(a, b core.PlanNode) int {
-			return cmp.Compare(a.Seq, b.Seq)
-		})
-		for _, n := range agg.Nodes {
-			if n.UpdatedAt > agg.LastActiveAt {
-				agg.LastActiveAt = n.UpdatedAt
-			}
-			if n.Status != core.StatusDone {
-				agg.HasNonDone = true
-			}
-		}
+		slices.SortFunc(agg.Nodes, ComparePlanNodeSeq)
+		RecomputePlanAgg(agg)
 		out = append(out, *agg)
 	}
 	slices.SortFunc(out, func(a, b PlanAggregate) int { return cmp.Compare(a.TopicID, b.TopicID) })

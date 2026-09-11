@@ -5,6 +5,7 @@
 package core
 
 import (
+	"cmp"
 	"fmt"
 
 	"github.com/qyiun666/MemHop/internal/common"
@@ -101,6 +102,16 @@ type TopicSlot struct {
 	AgentTimestamp int64 `json:"agent_timestamp"` // turn: agent reply time; fused: latest agent turn in group
 }
 
+// CompareTopicOrder orders a scene's topics by the turn they were spoken in,
+// breaking a tie on ID so the order is deterministic. Both the scene read
+// surface and the consolidation prompt render a scene's topics in this order.
+func CompareTopicOrder(a, b TopicSlot) int {
+	if a.UserTimestamp != b.UserTimestamp {
+		return cmp.Compare(a.UserTimestamp, b.UserTimestamp)
+	}
+	return cmp.Compare(a.ID, b.ID)
+}
+
 // ComputeTopicID derives a topic ID from sceneID and both timestamps.
 // Dream-created fused topics use this form for deterministic replay.
 func ComputeTopicID(sceneID uint64, userTS, agentTS int64) uint64 {
@@ -155,8 +166,9 @@ type HypergraphNode struct {
 
 // HypergraphEdge is a hyperedge within an L3 hypergraph: an unordered relation
 // over its member nodes, identified by members plus Kind (see repo.CreateEdgeL3).
-// Weight and Label have no write path in the engine and stay out of the public
-// DTO; they remain here so older records still decode.
+// Weight is written as a constant and read by nothing — the engine computes no
+// edge weight — while Label has no write path at all. Both stay out of the
+// public DTO and remain here so older records still decode.
 type HypergraphEdge struct {
 	IDHash    uint64        `json:"id_hash"`
 	GraphID   uint64        `json:"graph_id"`

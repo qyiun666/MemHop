@@ -31,13 +31,11 @@ func (db *DB) QueryL3Nodes(agentID uint64, q L3NodeQuery) ([]core.HypergraphNode
 	if q.GraphID == "" {
 		return nil, common.NewError(common.ErrInvalidQuery, "graph_id is required")
 	}
-	graphHash, err := common.ParseID(q.GraphID)
+	slot, err := repo.ReadSharedGraphL3(db.engine, q.GraphID)
 	if err != nil {
 		return nil, err
 	}
-	if _, err := core.ReadGraphSlot(db.engine, core.SharedPoolAgentID, graphHash); err != nil {
-		return nil, err
-	}
+	graphHash := slot.IDHash
 	filter, err := nodeFilter(q)
 	if err != nil {
 		return nil, err

@@ -162,7 +162,7 @@ func (b *ImportBatch) ImportRelations(item *core.L3ImportItem) {
 		if _, exists := keys[key]; exists {
 			continue
 		}
-		if _, err := repo.CreateEdgeL3(b.engine, b.agentID, graphID, rel.Kind, members, 1.0); err != nil {
+		if _, err := repo.CreateEdgeL3(b.engine, b.agentID, graphID, rel.Kind, members); err != nil {
 			b.result.Errors = append(b.result.Errors, fmt.Sprintf("%s: relation %v: %v", item.Title, rel.Titles, err))
 			continue
 		}

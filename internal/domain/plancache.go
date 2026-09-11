@@ -4,7 +4,6 @@
 package domain
 
 import (
-	"cmp"
 	"slices"
 
 	"github.com/qyiun666/MemHop/internal/repo"
@@ -124,10 +123,8 @@ func (pc *PlanCache) UpsertNode(topicID uint64, node *core.PlanNode) {
 	if !found {
 		agg.Nodes = append(agg.Nodes, *node)
 	}
-	slices.SortFunc(agg.Nodes, func(a, b core.PlanNode) int {
-		return cmp.Compare(a.Seq, b.Seq)
-	})
-	recomputePlanAggStat(agg)
+	slices.SortFunc(agg.Nodes, repo.ComparePlanNodeSeq)
+	repo.RecomputePlanAgg(agg)
 }
 
 // RemoveNodes drops specific nodes from the cache, the counterpart of a retention
@@ -150,26 +147,11 @@ func (pc *PlanCache) RemoveNodes(topicID uint64, nodeIDs []uint64) {
 		delete(pc.plans, topicID)
 		return
 	}
-	recomputePlanAggStat(agg)
+	repo.RecomputePlanAgg(agg)
 }
 
 // RemoveTopic drops a whole tree from the cache, the counterpart of deleting the
 // turn that owned it.
 func (pc *PlanCache) RemoveTopic(topicID uint64) {
 	delete(pc.plans, topicID)
-}
-
-// recomputePlanAggStat rescans an aggregate after a node mutation (insert,
-// update, delete), where statuses and the newest timestamp may have changed.
-func recomputePlanAggStat(agg *repo.PlanAggregate) {
-	agg.LastActiveAt = 0
-	agg.HasNonDone = false
-	for _, n := range agg.Nodes {
-		if n.UpdatedAt > agg.LastActiveAt {
-			agg.LastActiveAt = n.UpdatedAt
-		}
-		if n.Status != core.StatusDone {
-			agg.HasNonDone = true
-		}
-	}
 }

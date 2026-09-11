@@ -85,7 +85,7 @@ func SubgraphAdjacency(engine *core.StorageEngine, agentID uint64, graphID uint6
 	adj := make(map[uint64]map[uint64]struct{})
 	var edges []core.HypergraphEdge
 	for _, e := range repo.ListEdgeL3(engine, agentID, graphID) {
-		if len(edgeKinds) > 0 && !containsEdgeKind(edgeKinds, e.Kind) {
+		if len(edgeKinds) > 0 && !slices.Contains(edgeKinds, e.Kind) {
 			continue
 		}
 		edges = append(edges, e)
@@ -131,10 +131,6 @@ func connectNodes(adj map[uint64]map[uint64]struct{}, nodeIDs []uint64) {
 			adj[b][a] = struct{}{}
 		}
 	}
-}
-
-func containsEdgeKind(kinds []core.GraphEdgeKind, k core.GraphEdgeKind) bool {
-	return slices.Contains(kinds, k)
 }
 
 func AllNodesVisited(nodeIDs []uint64, visited map[uint64]struct{}) bool {

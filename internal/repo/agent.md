@@ -63,8 +63,13 @@
    `Rec*`（`readJSON` 比对帧内类型，不符即 `ErrNotFound`）。丢掉这个校验
    会让 `UpdateL3(节点 id)` 读到"空名图槽"再把节点记录改写成图槽。
 3.2 **L3 超边身份 = 排序成员 + kind**：`CreateEdgeL3` 的 id 含 kind，
-   `EdgeKeyL3` 是同一身份的语义键，导入侧按它去重。记录里的
-   `Importance`/`Weight`/`Label` 无写入路径，故意不进公开 DTO。
+   `EdgeKeyL3` 是同一身份的语义键，导入侧按它去重。`Weight` 恒写 1.0
+   （引擎不做任何边权计算，也没有读者），`Importance`/`Label` 无写入路径；
+   三者都故意不进公开 DTO，留在记录里只为旧文件仍能解码。
+3.3 **共享域的图解析只有一个入口**：`ReadSharedGraphL3(engine, hexID)` 把
+   「解析 hex 图 id + 确认图存在于文件级公共域」收成一处，锚点校验与 L3 的
+   读/改/删全部经它取图槽。调用方不得自己 `ParseID` 再 `ReadGraphSlot`——
+   公共域这一半约束漏掉一次，就会拿调用方自己的域去读一张不住在那里的图。
 4. **实现不外露**：记录帧布局、快照格式、回收/压缩细节只在 `core` 内部
    流转；`internal` 业务层只能经本目录导出的函数访问数据，不得直接解析
    帧或操作 `StorageEngine` 未导出的状态。
@@ -87,4 +92,4 @@
 - `Kind` 是**条件**而不是模式：`ArchiveQuery.Kind == nil` 表示「两种都要」，非 nil 表示「只要这一种」。它必须在每一条读路径上都生效，包括只给 id 的那条快路径——快路径绕过过滤谓词就是这个条件最容易静默失灵的地方（`TestSearchL4KindCondition` 的 `events, by id` 分支专门盯它）。
 - L4 原语的签名带着归属信息：`AppendArchiveL4(engine, agentID, idx, ArchiveContent)` 以 `core.HashContent(TopicID, Seq)` 发号、落盘后同步 `index.L4Index`。写同一个 (话题, Seq) 是**原地覆写**而不是追加第二条——这就是重放一轮能收敛的机制，本层因此没有也不需要「先列出这个话题旧有的归档、再删掉没被重写的那几条」这类原语（第二真相的活形式）。
 - 删除只有两条入口，都内置「磁盘删成功后才摘镜像」这一步序：带话题的 `DeleteTopicArchives`（整话题连删带摘）、按保留窗的 `DropExpiredArchives`（先 `ExpiredBefore` 只读地拿 id，删成后逐话题 `RemoveIDs`）。`TopicClosureL2` 只返回话题闭包——内容由闭包里的每个 id 去索引取回。
-- L5 只剩计划节点（`l5layer.go`）：一个节点一条记录，键是开出这一轮的话题 id。`CollectPlanNodes` 按它分组（组内按 `Seq` 升序，即创建顺序），`PlanAggregate` 只带 `{TopicID, Nodes, LastActiveAt, HasNonDone}`——没有事件计数、没有事件清单：事件在 L4，树不拥有它们。`WritePlanNode` 校验 `IDHash == HashPlanNode(TopicID, Seq)` 且 `Seq != 0`：节点身份是从序号派生的，本层不接受调用方自备的第二把键，而 0 是「没赋值」不是一个可寻址的步骤。删除有 `DeletePlanNodesByIDs`（Dream 保留窗按 id 批删）与 `DeletePlanNodesByTopicIDs`（删话题/场景时连它的树一起走，靠扫节点桶按 `TopicID` 过滤——树没有内容侧那样的位置键可推）。本层没有「删某分支」的原语：作废发生在键上，不在记录上。本层不再有任何路径字符串：一步的取值范围（它自己加整棵子树）由 `domain.PlanCache.Subtree` 沿 `ParentSeq` 求闭包，得到的序号集合交给 L4 读侧做成员判断。
+- L5 只剩计划节点（`l5layer.go`）：一个节点一条记录，键是开出这一轮的话题 id。`CollectPlanNodes` 按它分组（组内按 `Seq` 升序，即创建顺序），`PlanAggregate` 只带 `{TopicID, Nodes, LastActiveAt, HasNonDone}`——没有事件计数、没有事件清单：事件在 L4，树不拥有它们。`WritePlanNode` 校验 `IDHash == HashPlanNode(TopicID, Seq)` 且 `Seq != 0`：节点身份是从序号派生的，本层不接受调用方自备的第二把键，而 0 是「没赋值」不是一个可寻址的步骤。删除有 `DeletePlanNodesByIDs`（Dream 保留窗按 id 批删）与 `DeletePlanNodesByTopicIDs`（删话题/场景时连它的树一起走，靠扫节点桶按 `TopicID` 过滤——树没有内容侧那样的位置键可推）。本层没有「删某分支」的原语：作废发生在键上，不在记录上。本层不再有任何路径字符串：一步的取值范围（它自己加整棵子树）由 `domain.PlanCache.Subtree` 沿 `ParentSeq` 求闭包，得到的序号集合交给 L4 读侧做成员判断。节点顺序与聚合的两个派生量只有这一份实现（`ComparePlanNodeSeq` / `RecomputePlanAgg`），`CollectPlanNodes` 与 `domain.PlanCache` 的每次增量改动都经它们：缓存里增量维护出来的树与从磁盘重建出来的树因此不可能各算一套而漂移，`RecomputePlanAgg` 先把两个派生量归零也正是为了节点被摘掉后不留下已删节点贡献的旧值。
