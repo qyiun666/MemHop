@@ -1,11 +1,13 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// L1 node sync: rebuilds one scene node per scene from the current
-// depth<=2 L2 topics.
+// L1 node writes: rebuild one scene node per scene from the current depth<=2 L2
+// topics, and backfill the emotion signals a distillation computed for nodes the
+// sync pass created.
 package repo
 
 import (
+	"fmt"
 	"slices"
 	"time"
 
@@ -94,4 +96,31 @@ func sortedIDs(set map[uint64]struct{}) []uint64 {
 	}
 	slices.Sort(ids)
 	return ids
+}
+
+// BackfillL1Emotions stamps the emotion signals a distillation computed onto the
+// nodes that carry none yet and leaves a node that already has them alone, so a
+// later pass never overwrites what an earlier one settled. It returns how many
+// nodes it wrote. A node it cannot read aborts the pass with that cause: an absent
+// node and an unreadable one both stop the backfill, but they are not the same
+// fact to report.
+func BackfillL1Emotions(engine *core.StorageEngine, agentID uint64, perNode map[uint64]core.NodeEmotion) (int, error) {
+	written := 0
+	for id, em := range perNode {
+		node, err := core.ReadSceneNode(engine, agentID, id)
+		if err != nil {
+			return written, fmt.Errorf("backfill L1 emotions: node %s: %w", common.FormatHash(id), err)
+		}
+		if node.Valence != 0 || node.Arousal != 0 {
+			continue
+		}
+		node.Valence = em.Valence
+		node.Arousal = em.Arousal
+		node.UpdatedAt = time.Now().UnixMilli()
+		if err := core.WriteSceneNode(engine, agentID, id, node); err != nil {
+			return written, err
+		}
+		written++
+	}
+	return written, nil
 }
