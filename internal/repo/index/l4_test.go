@@ -91,25 +91,6 @@ func TestL4IndexMaxSeqSpansKinds(t *testing.T) {
 	}
 }
 
-// A turn whose two originals are all it holds has no trajectory. Reporting one
-// would tell a host the turn recorded operations it never did.
-func TestL4IndexEventSummariesCountEventsOnly(t *testing.T) {
-	idx := NewL4Index()
-	idx.Append(1, core.SeqUser, 11, core.KindUtterance, 1000)
-	idx.Append(1, core.SeqAgent, 12, core.KindUtterance, 1001)
-	idx.Append(2, core.SeqUser, 21, core.KindUtterance, 1000)
-	idx.Append(2, 3, 22, core.KindEvent, 1100)
-	idx.Append(2, 4, 23, core.KindEvent, 1200)
-
-	got := idx.EventSummaries()
-	if len(got) != 1 {
-		t.Fatalf("EventSummaries = %+v, want only the topic holding events", got)
-	}
-	if got[0].TopicID != 2 || got[0].Events != 2 || got[0].LastAt != 1200 {
-		t.Fatalf("footprint = %+v, want topic 2 with 2 events last at 1200", got[0])
-	}
-}
-
 // Expiry reports without mutating: the caller deletes the records first and only
 // then mirrors the removal, so a failed delete cannot leave the index naming a
 // live record as gone.
@@ -152,8 +133,11 @@ func TestL4IndexRemoveAllIDsDropsTopic(t *testing.T) {
 	if got := idx.AllIDs(1); got != nil {
 		t.Fatalf("emptied topic still listed: %v", got)
 	}
-	if got := idx.EventSummaries(); len(got) != 0 {
-		t.Fatalf("emptied topic still reported: %+v", got)
+	// AllIDs answers nil for an emptied topic and for one the index never held,
+	// so the entry itself has to be checked: a leftover empty slice would let a
+	// later read address the topic as if it still held content.
+	if len(idx.byTopic) != 0 {
+		t.Fatalf("emptied topic still holds an index entry: %v", idx.byTopic)
 	}
 }
 

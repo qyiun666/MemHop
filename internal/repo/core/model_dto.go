@@ -156,17 +156,6 @@ type ScenePatch struct {
 	Force bool
 }
 
-// TrajectorySessionSummary is one turn's event footprint (one topic's worth of
-// events per agent turn); SessionID is the external 16-hex form so it feeds
-// AppendArchive / Crystallize directly. Events counts records of kind event only —
-// a turn whose dialogue is all L4 holds is not a turn with a trajectory. Events
-// older than the 7-day retention window are dropped by Dream automatically.
-type TrajectorySessionSummary struct {
-	SessionID    string `json:"session_id"`     // 16 位 hex
-	Events       int    `json:"events"`         // 事件总数
-	LastAppendAt int64  `json:"last_append_at"` // 最近事件时间戳（Unix 毫秒）
-}
-
 // DreamStage is one pipeline phase's outcome inside a DreamReport.
 type DreamStage struct {
 	Name       string `json:"name"`   // l4_prune/l5_prune/l2_compress/index_rebuild/l1_nodes/l1_hyperedges/l1_rebuild/l1_decay/l0_distill

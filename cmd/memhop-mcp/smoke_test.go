@@ -30,13 +30,13 @@ func TestSSEMultiTenantIsolation(t *testing.T) {
 	alice := connectTenant(t, srv.URL, "alice")
 	bob := connectTenant(t, srv.URL, "bob")
 
-	// tools/list exposes all 24 tools on the alice session.
+	// tools/list exposes all 22 tools on the alice session.
 	tools, err := alice.ListTools(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("list tools: %v", err)
 	}
-	if len(tools.Tools) != 24 {
-		t.Errorf("expected 24 tools, got %d", len(tools.Tools))
+	if len(tools.Tools) != 22 {
+		t.Errorf("expected 22 tools, got %d", len(tools.Tools))
 	}
 	names := make(map[string]bool, len(tools.Tools))
 	for _, tool := range tools.Tools {
@@ -50,7 +50,7 @@ func TestSSEMultiTenantIsolation(t *testing.T) {
 		"memhop_knowledge_update", "memhop_knowledge_delete", "memhop_knowledge_nodes",
 		"memhop_knowledge_subgraph", "memhop_archive_search", "memhop_archive_get",
 		"memhop_archive_append",
-		"memhop_trajectory_read", "memhop_trajectory_sessions", "memhop_crystallize",
+		"memhop_trajectory_read",
 	} {
 		if !names[want] {
 			t.Errorf("missing tool %q", want)
@@ -467,7 +467,8 @@ func TestSSETurnFlow(t *testing.T) {
 		t.Fatalf("the turn's events must read back by its topic id: %s", events)
 	}
 	// The read is the event track, not the whole topic: what was spoken stays out
-	// of it, which is what lets Crystallize see operations only.
+	// of it, so a host asking for one turn's operations does not also get its
+	// dialogue.
 	if strings.Contains(events, "怎么跑测试") {
 		t.Fatalf("trajectory read leaked the dialogue: %s", events)
 	}

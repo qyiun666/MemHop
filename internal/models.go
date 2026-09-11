@@ -16,25 +16,24 @@ import (
 )
 
 type (
-	SearchQuery              = core.SearchQuery
-	SearchResult             = core.SearchResult
-	SceneMessage             = core.SceneMessage
-	SceneContextTopic        = core.SceneContextTopic
-	SceneContext             = core.SceneContext
-	ScenePatch               = core.ScenePatch
-	L3Graph                  = core.L3Graph
-	L3ImportItem             = core.L3ImportItem
-	L3Relation               = core.L3Relation
-	L3ImportResult           = core.L3ImportResult
-	L3ImportMode             = core.L3ImportMode
-	L3NodeQuery              = core.L3NodeQuery
-	L3Subgraph               = core.L3Subgraph
-	L4Query                  = core.L4Query
-	CapabilityImport         = capability.CapabilityImport
-	CapabilityPackageDoc     = capability.CapabilityPackageDoc
-	TrajectorySessionSummary = core.TrajectorySessionSummary
-	DreamReport              = core.DreamReport
-	DreamStage               = core.DreamStage
+	SearchQuery          = core.SearchQuery
+	SearchResult         = core.SearchResult
+	SceneMessage         = core.SceneMessage
+	SceneContextTopic    = core.SceneContextTopic
+	SceneContext         = core.SceneContext
+	ScenePatch           = core.ScenePatch
+	L3Graph              = core.L3Graph
+	L3ImportItem         = core.L3ImportItem
+	L3Relation           = core.L3Relation
+	L3ImportResult       = core.L3ImportResult
+	L3ImportMode         = core.L3ImportMode
+	L3NodeQuery          = core.L3NodeQuery
+	L3Subgraph           = core.L3Subgraph
+	L4Query              = core.L4Query
+	CapabilityImport     = capability.CapabilityImport
+	CapabilityPackageDoc = capability.CapabilityPackageDoc
+	DreamReport          = core.DreamReport
+	DreamStage           = core.DreamStage
 
 	// Plan surface types live in the plan small-method package.
 	PlanStatus   = plan.PlanStatus
@@ -44,10 +43,8 @@ type (
 
 	// LLM capability contracts (prompt inputs / parsed outputs) live in the
 	// llmops capability package.
-	EmotionScore          = llmops.EmotionScore
-	MBTIScore             = llmops.MBTIScore
-	CrystallizeCapability = llmops.CrystallizeCapability
-	CrystallizeOutput     = llmops.CrystallizeOutput
+	EmotionScore = llmops.EmotionScore
+	MBTIScore    = llmops.MBTIScore
 )
 
 // Import-mode constants of the L3 import policy (see core.L3ImportMode).

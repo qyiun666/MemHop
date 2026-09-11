@@ -37,7 +37,10 @@ func eventsOf(t *testing.T, db *Session, topicID string) []ArchiveSlot {
 	return out
 }
 
-func TestSurfaceTrajectoryLifecycle(t *testing.T) {
+// Dream drops events past the 7-day retention window even when there is nothing
+// to consolidate, and no delete API is exposed: a turn keeps the event still
+// inside the window and loses the one outside it.
+func TestSurfaceDreamPrunesExpiredEvents(t *testing.T) {
 	db := openSurfaceDB(t)
 	sessionA := common.FormatHash(common.HashID("lifecycle-a"))
 	sessionB := common.FormatHash(common.HashID("lifecycle-b"))
@@ -51,39 +54,24 @@ func TestSurfaceTrajectoryLifecycle(t *testing.T) {
 	appendOne(sessionA, fresh)
 	appendOne(sessionB, 1_700_000_050_000)
 
-	list, err := db.ListTrajectorySessions()
-	if err != nil || len(list) != 2 {
-		t.Fatalf("list: %+v err=%v, want 2 sessions", list, err)
-	}
-	byID := make(map[string]TrajectorySessionSummary, len(list))
-	for _, sum := range list {
-		byID[sum.SessionID] = sum
-	}
-	if sum := byID[sessionA]; sum.Events != 2 || sum.LastAppendAt != fresh {
-		t.Fatalf("summary a mismatch: %+v", sum)
-	}
-	if sum := byID[sessionB]; sum.Events != 1 || sum.LastAppendAt != 1_700_000_050_000 {
-		t.Fatalf("summary b mismatch: %+v", sum)
+	if got := eventsOf(t, db, sessionA); len(got) != 2 {
+		t.Fatalf("both of A's events are inside the window: %+v", got)
 	}
 
-	// Dream drops events older than the 7-day retention window even when
-	// there is nothing to consolidate; no delete API is exposed.
 	if _, err := db.Dream(context.Background(), ""); err != nil {
 		t.Fatalf("dream: %v", err)
 	}
-	list, err = db.ListTrajectorySessions()
-	if err != nil || len(list) != 1 || list[0].SessionID != sessionA || list[0].Events != 1 {
-		t.Fatalf("surviving list = %+v err=%v, want only sessionA's fresh event", list, err)
+	got := eventsOf(t, db, sessionA)
+	if len(got) != 1 || got[0].CreatedAt != fresh {
+		t.Fatalf("only A's fresh event survives: %+v", got)
 	}
-	// The enumerated hex ID must feed AppendArchive / Crystallize directly.
-	if got := eventsOf(t, db, list[0].SessionID); len(got) != 1 {
-		t.Fatalf("read enumerated turn: %d events", len(got))
+	if rest := eventsOf(t, db, sessionB); len(rest) != 0 {
+		t.Fatalf("B's expired event survives: %+v", rest)
 	}
 }
 
-func TestSurfaceTrajectoryAppendAndRead(t *testing.T) {
+func TestSurfaceArchiveAppendAndRead(t *testing.T) {
 	db := openSurfaceDB(t)
-	ctx := context.Background()
 	sessionID := common.FormatHash(common.HashID("session-42"))
 	events := []ArchiveSlot{
 		event("llm_request", "user asks", 1_700_000_040_000),
@@ -119,11 +107,6 @@ func TestSurfaceTrajectoryAppendAndRead(t *testing.T) {
 		if !isHexID(e.IDHash) || e.TopicID != sessionID {
 			t.Fatalf("event[%d] ids: hash=%q context=%q", i, e.IDHash, e.TopicID)
 		}
-	}
-	// Crystallize runs (stub returns no candidates) and yields a well-formed output.
-	cr, err := db.Crystallize(ctx, sessionID, nil)
-	if err != nil || cr == nil || cr.Capabilities == nil {
-		t.Fatalf("crystallize: %v", err)
 	}
 }
 
@@ -240,7 +223,6 @@ func TestSurfaceReservedTopicID(t *testing.T) {
 		}
 	}
 	ev := event("plan_step", "stepped", now)
-	ctx := context.Background()
 	calls := map[string]func() error{
 		"AppendBare":     func() error { return db.AppendArchive(zero, ev) },
 		"AppendStep":     func() error { return db.AppendArchive(zero, onStep(ev, 1)) },
@@ -248,7 +230,6 @@ func TestSurfaceReservedTopicID(t *testing.T) {
 		"PlanNodeAdd":    func() error { _, err := db.PlanNodeAdd(zero, 0, "一步"); return err },
 		"PlanNodeUpdate": func() error { return db.PlanNodeUpdate(zero, PlanStep{Seq: 1, Status: "done"}) },
 		"PlanState":      func() error { _, err := db.PlanState(zero); return err },
-		"Crystallize":    func() error { _, err := db.Crystallize(ctx, zero, nil); return err },
 	}
 	for name, call := range calls {
 		if err := call(); common.CodeOf(err) != common.ErrInvalidQuery {

@@ -8,7 +8,6 @@
 package test
 
 import (
-	"context"
 	"slices"
 	"testing"
 	"time"
@@ -16,7 +15,7 @@ import (
 	"github.com/qyiun666/MemHop/api"
 )
 
-func TestInterfaceTurnEventsAndCrystallize(t *testing.T) {
+func TestInterfaceTurnEvents(t *testing.T) {
 	db, _ := openTestDB(t)
 	sceneID := openSession(t, db)
 	// The content key is a turn's topic id — minted by Search and never typed by
@@ -52,36 +51,6 @@ func TestInterfaceTurnEventsAndCrystallize(t *testing.T) {
 	// a topic's first event at 3.
 	if len(events) != 2 || events[0].Seq != 3 || events[1].Seq != 4 {
 		t.Fatalf("want 2 events with seq 3,4: %+v", events)
-	}
-
-	// Crystallize returns candidates against a host-supplied catalog; the
-	// engine stores nothing, so the candidates are all there is. The mock
-	// speaks the prompt's contract: reuse/merge name an existing card,
-	// create carries a full v4 card.
-	existing := []api.CapabilityImport{{
-		Name: "已有能力", Summary: "已有", Trigger: "已有触发",
-		Resources: []api.ResourceRef{{Type: api.CapabilityMCP, Name: "old_tool"}},
-	}}
-	out, err := db.Crystallize(context.Background(), session, existing)
-	if err != nil {
-		t.Fatalf("Crystallize: %v", err)
-	}
-	if len(out.Capabilities) != 3 {
-		t.Fatalf("want 3 candidates (reuse/merge/create): %+v", out)
-	}
-	byAction := map[string]api.CrystallizeCapability{}
-	for _, c := range out.Capabilities {
-		byAction[c.Action] = c
-	}
-	if reuse := byAction["reuse"]; reuse.ReuseID != "已有能力" {
-		t.Fatalf("reuse candidate must name the existing card: %+v", reuse)
-	}
-	if merge := byAction["merge"]; merge.ReuseID != "已有能力" || merge.Capability.Name != "已有能力" {
-		t.Fatalf("merge candidate mismatch: %+v", merge)
-	}
-	if create := byAction["create"]; create.Capability.Name != "重构流程" ||
-		len(create.Capability.Resources) != 1 || create.Capability.Resources[0].Name != "read_file" {
-		t.Fatalf("create candidate mismatch: %+v", create)
 	}
 }
 

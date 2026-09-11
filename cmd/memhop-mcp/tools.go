@@ -149,5 +149,4 @@ func registerTools(s *mcp.Server, m *memhop.MultiAgentDB, db *memhop.Session) {
 	registerL2Tools(s, db)
 	registerL3Tools(s, db)
 	registerL4Tools(s, db)
-	registerTrajectoryTools(s, db)
 }

@@ -166,25 +166,6 @@ func (s *Session) AppendArchive(topicID string, slot ArchiveSlot) error {
 	return s.db.AppendArchive(s.agentID, topicID, slot)
 }
 
-// ---- turn events (L4) and crystallization ----
-
-// ListTrajectorySessions enumerates the turns of this domain that hold events,
-// each with its event count and last-append time; the returned hex ids feed
-// AppendArchive / Crystallize directly. Records older than the retention window
-// are dropped by Dream automatically.
-func (s *Session) ListTrajectorySessions() ([]TrajectorySessionSummary, error) {
-	return s.db.ListTrajectorySessions(s.agentID)
-}
-
-// Crystallize extracts reusable capability candidates from one turn's
-// trajectory events via the LLM, keyed by the topic id Search issued for it.
-// existing lists the cards the host already knows (its own capability
-// directory), so candidates can reuse or merge them instead of duplicating.
-// The engine returns candidates only — persisting them is the host's job.
-func (s *Session) Crystallize(ctx context.Context, turnID string, existing []CapabilityImport) (*CrystallizeOutput, error) {
-	return s.db.Crystallize(ctx, s.agentID, turnID, existing)
-}
-
 // ---- L5 plan tree ----
 
 // PlanCreate opens a turn's plan tree by creating its first root step, and

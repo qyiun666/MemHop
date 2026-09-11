@@ -25,7 +25,7 @@
 
 ---
 
-MemHop 是一个面向 AI Agent / 大模型（LLM）应用的**嵌入式长期记忆数据库**，纯 Go 实现。它不是一个向量数据库——它是以人脑知识组织方式为蓝本的记忆系统：具备身份认同、情景回忆、语义压缩、知识图谱、归档存储和结晶化技能。一个 Agent，一个 `.meh` 文件，零基础设施。
+MemHop 是一个面向 AI Agent / 大模型（LLM）应用的**嵌入式长期记忆数据库**，纯 Go 实现。它不是一个向量数据库——它是以人脑知识组织方式为蓝本的记忆系统：具备身份认同、情景回忆、语义压缩、知识图谱和归档存储。一个 Agent，一个 `.meh` 文件，零基础设施。
 
 MemHop 是 **Agent 专用**记忆数据库：每个 Agent 绑定唯一的 `.meh` 文件，文件级排他锁保证同一文件同时只有一个实例（第二次 `Open` 直接报错）。支持 **Linux、macOS、Windows** 全平台，无 cgo，除 LLM 接口外无任何外部服务。
 
@@ -150,14 +150,14 @@ report, err := sess.Dream(context.Background(), "")
 | L2 上下文 | `ListScenes([l3ID])` · `UpdateScene(id, {Name, L3ID, Force})` · `SceneContext` · `MergeScenes` · `DeleteTopic` · `DeleteScene` |
 | L3 知识 | `GetL3` · `ListL3` · `ImportL3`（返回本批写入的 `graph_ids`） · `UpdateL3` · `DeleteL3` · `DeleteL3Nodes`（仅 Go） · `QueryL3Nodes` · `QueryL3Subgraph` |
 | L4 归档 | `AppendArchive(topicID, ArchiveSlot{Kind, Seq, Role, ContentType, EventType, NodeSeq, Content, CreatedAt})` 是一条记录进入话题的唯一途径（`Seq: 0` 由库分配；写一个已被占用的槽位就是覆写），事件的 `NodeSeq` 必须指向本轮计划里已创建的那一步（`0` 即不绑任何步骤）。`SearchL4(q)` 是唯一读取面，两类内容都在里面；关键词（忽略大小写）/ 时间段 / id / 话题 / `Kind`（原文 or 事件）/ `NodeSeq`（**某一步及其全部子步**归因的记录，步骤只在它那一轮内成立；`0` 即不加这条约束）/ 内容类型都是条件而不是模式，`Kind` 不填即两种都要，`Limit` 只留 Seq 最高的 N 条命中 |
-| 能力（不是引擎的一层） | 目录即能力，库不存记录：`ParseCapabilityPackage(data, source)` · `ValidateCapabilityCard(card)`（包级 v4 解析校验）· `Crystallize(turnID, existing)` 返回候选——落盘归宿主 |
-| 轮内事件（L4 的 `Kind=event`） | `ListTrajectorySessions` · `Crystallize(topicID)` —— 一轮一个键：Search 为该轮开出的话题 id；事件本身住在 L4（`Kind=event`），7 天自动清理、无删除接口，读它用 `SearchL4(L4Query{TopicID, Kind: &KindEvent})`，写它用 `AppendArchive`。一个话题的首条事件是 `Seq=3`，因为槽位 1 与 2 属于对话。`Crystallize` 只读事件轨，说了什么不进 prompt |
+| 能力（不是引擎的一层） | 目录即能力，库不存记录：`ParseCapabilityPackage(data, source)` · `ValidateCapabilityCard(card)`（包级 v4 解析校验） |
+| 轮内事件（L4 的 `Kind=event`） | 一轮一个键：Search 为该轮开出的话题 id；事件本身住在 L4（`Kind=event`），7 天自动清理、无删除接口，读它用 `SearchL4(L4Query{TopicID, Kind: &KindEvent})`，写它用 `AppendArchive`。一个话题的首条事件是 `Seq=3`，因为槽位 1 与 2 属于对话 |
 | L5 计划树 | `PlanCreate(topicID, title) → seq` · `PlanNodeAdd(topicID, parentSeq, title) → seq` · `PlanNodeUpdate(topicID, PlanStep{Seq, Status, Title, Summary})` · `PlanState(topicID)` —— 计划树是 L5 唯一自己的记录：一节点一条，一个步骤由「开出它的那一轮 + 该轮内库顺序发号的序号」说清（`ParentSeq` 指它挂在谁下面，0 即根），所以 `PlanState(topic)` 与 `SearchL4{TopicID, Kind}` 是同一个键、两层存储，而 `SearchL4{TopicID, NodeSeq}` 能单独读回某一步及其全部子步做过的事。节点**只因被创建而存在**：`parentSeq` 指向树上没有的步骤是拒绝，而不是顺手补出一个父节点（因此打错一个序号不会长出第二棵树）。`PlanNodeUpdate` 只重述已在树上的那一步——`Status` 每次必须给（没有「保持不变」这种写法），`Title`/`Summary` 留空继承现值。新建的步骤就是 `in_progress`，模型里没有「已计划未开始」这一档；撤回一步没有接口，也不需要一个：手段就是不在此后的轮里再创建它。计划写面不落任何内容：一步的轨迹是宿主自己 append 的 L4 记录（仅 Go module 暴露，MCP 工具集未接入） |
 | DB 句柄 | `OpenMulti` · `CreateAgent` · `ListAgents` · `DeleteAgent` · `Session(id)` · `Checkpoint` · `CompactTo(newPath)`（写出整理后的副本，仅 Go） · `Close` · `IsClosed` · `api.DefaultAgentID` |
 
 ### 能力 —— 目录即能力
 
-引擎**不存储任何能力记录**。能力卡的唯一事实源是宿主自有的能力目录（如 `<数据目录>/plug/<包>/capability.json`）：宿主自扫自装配、变更重启生效；草稿转正 = 文件转正。库保留该格式的两块纯能力。**解析校验**（磁盘格式的唯一事实源）：`ParseCapabilityPackage(data, source)` / `ValidateCapabilityCard(card)` 解析校验 `memhop-capability/v4` 文档——一张卡 = **名称 + N 个功能条目**，每个条目（`ResourceRef`）自带启动方式（`type: mcp|skill|api|composite` + `ref`/`config`）、说明（`desc`）与用法（`input` JSON Schema / `output`）；动作链就是 `composite` 条目 `config` 里的 `{"steps":[{"tool":"...","args":{...}}]}`。资源与宿主工具规格（meowire `ToolSpec`）逐字段同构，投影成 LLM 工具是纯字段拷贝；`PromptCard` 渲染面向 LLM 的整块调用契约。**纯提炼**：`Crystallize(turnID, existing)` 读该轮轨迹（128KB 载荷预算留在引擎内），对照宿主传入的 `existing` 卡清单返回候选（`Action` = create/reuse/merge、`ReuseID` 指已有卡名 + 卡载荷）——引擎一字节不落盘；校验、去重、把草稿写进（如）`plug/draft/` 全归宿主。
+引擎**不存储任何能力记录**。能力卡的唯一事实源是宿主自有的能力目录（如 `<数据目录>/plug/<包>/capability.json`）：宿主自扫自装配、变更重启生效；草稿转正 = 文件转正。库在该格式上只保留一块纯能力。**解析校验**（磁盘格式的唯一事实源）：`ParseCapabilityPackage(data, source)` / `ValidateCapabilityCard(card)` 解析校验 `memhop-capability/v4` 文档——一张卡 = **名称 + N 个功能条目**，每个条目（`ResourceRef`）自带启动方式（`type: mcp|skill|api|composite` + `ref`/`config`）、说明（`desc`）与用法（`input` JSON Schema / `output`）；动作链就是 `composite` 条目 `config` 里的 `{"steps":[{"tool":"...","args":{...}}]}`。资源与宿主工具规格（meowire `ToolSpec`）逐字段同构，投影成 LLM 工具是纯字段拷贝；`PromptCard` 渲染面向 LLM 的整块调用契约。
 
 ## 架构
 
@@ -174,7 +174,7 @@ report, err := sess.Dream(context.Background(), "")
 
 ### Dream 管线
 
-Dream 周期是一个自动记忆巩固过程，受人脑睡眠中处理经历的机制启发。Dream **仅作用于 L0–L2**（L3 蒸馏与能力结晶为设计外）另对 L4 内容与 L5 计划节点各做一次保留期清理，共五个阶段：
+Dream 周期是一个自动记忆巩固过程，受人脑睡眠中处理经历的机制启发。Dream **仅作用于 L0–L2**（L3 蒸馏为设计外）另对 L4 内容与 L5 计划节点各做一次保留期清理，共五个阶段：
 
 1. **L2 压缩** — LLM 归组合并相关话题，每个目标场景一个 goroutine 并行处理，把被合并的话题下沉为 depth-1 融合节点（子节点降级为历史）
 2. **L1 重建** — 从 L2 同步场景节点，并在同一趟扫盘中重建 L2Meta 话题缓存、创建/刷新场景间关键词重叠超边
@@ -252,7 +252,6 @@ benches/fixtures/             ← 基准数据集（locomo10、locomo_smoke、lo
 - **读路径**（`Search`）：**零 LLM、零 embedding**，只走 L2Meta 内存缓存。
 - **写路径**（`Update`）：每轮恰好一次关键词提炼（用户原文 + Agent 原文一起喂），输出上限 512 token 起、截断时逐级升预算，最后一次格式约束重试仍不可解析则 `ErrLLM` 上抛，这一轮不写入。
 - **Dream**：每次巩固对达到话题数下限（`DreamCompressMinTopics`，默认 20）的场景各调一次 L2 合并，再加一次 L0 蒸馏（最多 200 个排序后的 L1 样本，每个样本最多 20 个关键词）。输出上限分别为 8192 / 2048 token。
-- **Crystallize**：每次显式触发调用一次，按 session 轨迹输入。
 - 成本敏感时，给 `Config.LLM` 配一个快速小模型即可（便宜 API 模型或本地兼容端点）；关键词提取不需要旗舰模型。
 
 ## 开发

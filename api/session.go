@@ -6,19 +6,17 @@
 // set is exactly the externally callable surface. Every call is serialized
 // per agent domain by the internal domain lock.
 //
-// The methods split by audience. The runtime/task face (20) is what the host
+// The methods split by audience. The runtime/task face (18) is what the host
 // drives every turn and what LLM tools bind to: Search, Update, Dream,
 // AppendArchive (the host-driven loop), SceneContext, ListScenes, GetL0,
 // UpdateL0, SearchL4, GetL3, ListL3, ImportL3, QueryL3Nodes, QueryL3Subgraph,
-// Crystallize, ListTrajectorySessions, PlanCreate, PlanNodeAdd,
-// PlanNodeUpdate, PlanState.
+// PlanCreate, PlanNodeAdd, PlanNodeUpdate, PlanState.
 // The assembly/admin face (7, plus all of
 // MultiAgentDB) is host code at session boundaries and management channels
 // only — never an LLM tool: UpdateScene, MergeScenes, DeleteTopic,
 // DeleteScene, UpdateL3, DeleteL3, DeleteL3Nodes. The engine stores no
 // capability records: v4 parsing/validation is package-level
-// (ParseCapabilityPackage / ValidateCapabilityCard) and Crystallize returns
-// candidates the host persists itself.
+// (ParseCapabilityPackage / ValidateCapabilityCard).
 
 package api
 
@@ -175,8 +173,9 @@ func (s *Session) SearchL4(q L4Query) ([]ArchiveSlot, error) {
 // AppendArchive writes one piece of a turn's content under topicID — the id Search
 // opened for it — and is the only way content enters a topic. KindUtterance is
 // something somebody said; KindEvent is something that happened while they said it.
-// Update distills the utterances of that key, Crystallize reads its events, and the
-// plan tree sharing the key comes back from PlanState.
+// Update distills the utterances of that key, its events come back from SearchL4
+// under a Kind condition, and the plan tree sharing the key comes back from
+// PlanState.
 //
 // What is stored is Kind, Seq, Role, ContentType, EventType, NodeSeq, Content and
 // CreatedAt; IDHash and TopicID are ignored, which is what makes the round trip
@@ -205,8 +204,8 @@ func (s *Session) SearchL4(q L4Query) ([]ArchiveSlot, error) {
 // than answered with a fresh branch, and a mistyped ordinal cannot open a second
 // tree. 0 attributes the event to no step at all.
 //
-// EventType is the host's own word for the step: the engine never branches on it, it
-// comes back verbatim through SearchL4 and reaches the Crystallize prompt verbatim.
+// EventType is the host's own word for the step: the engine never branches on it,
+// it comes back verbatim through SearchL4.
 // These conventions are a shared vocabulary for the reader, not an accepted set:
 // plan_step, llm_request, llm_output, tool_call, tool_result, subagent_spawn,
 // subagent_done, context_inject, ask_user, user_reply.
@@ -369,24 +368,4 @@ func (s *Session) DeleteL3(id string) error {
 // refused and nothing is deleted.
 func (s *Session) DeleteL3Nodes(graphID string, nodeIDs []string) error {
 	return s.Session.DeleteL3Nodes(graphID, nodeIDs)
-}
-
-// ListTrajectorySessions enumerates the turn topic ids of the domain that carry an
-// event log, each with its event count and last-append time. The returned
-// ids feed AppendArchive and Crystallize directly; records past the retention
-// window drop out at the next Dream.
-func (s *Session) ListTrajectorySessions() ([]TrajectorySessionSummary, error) {
-	return s.Session.ListTrajectorySessions()
-}
-
-// Crystallize extracts reusable capability candidates from one turn's
-// trajectory events via the LLM, keyed by the topic id Search issued for it —
-// including the step events that turn committed. existing lists the cards the
-// host already knows (its own capability directory), so candidates can
-// reuse or merge them by name instead of duplicating. It contacts the LLM
-// inside the domain lock. The engine returns candidates only — validating,
-// filtering and persisting them (e.g. writing a draft document into the
-// host's capability directory) is the host's job.
-func (s *Session) Crystallize(ctx context.Context, turnID string, existing []CapabilityImport) (*CrystallizeOutput, error) {
-	return s.Session.Crystallize(ctx, turnID, existing)
 }

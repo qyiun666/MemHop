@@ -12,8 +12,7 @@
 // this package's Append is the only way a record gets into a topic.
 //
 // The big methods (AppendArchive, SearchL4, PlanCreate, PlanNodeAdd,
-// PlanNodeUpdate, PlanState, Crystallize) stay in the composition root with the
-// domain lock.
+// PlanNodeUpdate, PlanState) stay in the composition root with the domain lock.
 package content
 
 import (

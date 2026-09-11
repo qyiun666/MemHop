@@ -55,6 +55,53 @@ func mustWriteScene(t *testing.T, engine *core.StorageEngine, agentID uint64, sc
 	}
 }
 
+// mockLLMServer answers every chat completion request with the same content —
+// the plain stub for tests that only need the LLM call to succeed.
+func mockLLMServer(t *testing.T, content string) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{{
+				"message": map[string]any{"role": "assistant", "content": content},
+			}},
+		})
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// mockLLMServerSeq answers successive chat completion requests from contents in
+// order, wrapping around — for a pipeline whose stages must each get their own
+// reply. The cursor is guarded because the server runs on its own goroutine.
+func mockLLMServerSeq(t *testing.T, contents ...string) *httptest.Server {
+	t.Helper()
+	var mu sync.Mutex
+	idx := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			http.NotFound(w, r)
+			return
+		}
+		mu.Lock()
+		content := contents[idx%len(contents)]
+		idx++
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{{
+				"message": map[string]any{"role": "assistant", "content": content},
+			}},
+		})
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
 // countingLLMServer answers every chat request with content and records how
 // many times it was called — the read path must leave the counter at zero.
 func countingLLMServer(t *testing.T, content string) (*httptest.Server, *atomic.Int64) {

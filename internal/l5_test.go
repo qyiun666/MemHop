@@ -143,7 +143,10 @@ func TestAppendEventPayloadRefused(t *testing.T) {
 	}
 }
 
-func TestListAndDreamPruneTrajectorySessions(t *testing.T) {
+// Dream drops content past the retention window even with nothing to
+// consolidate: a turn's expired event goes while its fresh one stays, and a turn
+// whose every event expired reads back empty.
+func TestDreamPrunesExpiredEvents(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	a, b := common.FormatHash(11), common.FormatHash(22)
 	fresh := time.Now().Add(-time.Hour).UnixMilli()
@@ -156,43 +159,29 @@ func TestListAndDreamPruneTrajectorySessions(t *testing.T) {
 	appendOne(a, fresh)
 	appendOne(b, 500)
 
-	list, err := db.ListTrajectorySessions(core.DefaultAgentID)
-	if err != nil {
-		t.Fatalf("list: %v", err)
-	}
-	if len(list) != 2 {
-		t.Fatalf("want 2 sessions, got %+v", list)
-	}
-	byID := make(map[string]core.TrajectorySessionSummary, len(list))
-	for _, sum := range list {
-		byID[sum.SessionID] = sum
-	}
-	if sum := byID[a]; sum.Events != 2 || sum.LastAppendAt != fresh {
-		t.Fatalf("session a summary mismatch: %+v", sum)
-	}
-	if sum := byID[b]; sum.Events != 1 || sum.LastAppendAt != 500 {
-		t.Fatalf("session b summary mismatch: %+v", sum)
+	if events, err := db.eventsOf(core.DefaultAgentID, a); err != nil || len(events) != 2 {
+		t.Fatalf("both of a's events are inside the window: %+v err=%v", events, err)
 	}
 
-	// Dream drops content older than the 7-day retention window even when
-	// there is nothing to consolidate (no active scenes → early return).
+	// No active scenes, so the consolidation stages return early — the two
+	// pruning stages run unconditionally and are what this exercises.
 	if _, err := db.RunDream(context.Background(), core.DefaultAgentID, 0); err != nil {
 		t.Fatalf("dream: %v", err)
 	}
-	list, err = db.ListTrajectorySessions(core.DefaultAgentID)
-	if err != nil || len(list) != 1 || list[0].SessionID != a || list[0].Events != 1 {
-		t.Fatalf("only session a's fresh event survives: %+v err=%v", list, err)
+	events, err := db.eventsOf(core.DefaultAgentID, a)
+	if err != nil || len(events) != 1 || events[0].CreatedAt != fresh {
+		t.Fatalf("only a's fresh event survives: %+v err=%v", events, err)
 	}
-	events, err := db.eventsOf(core.DefaultAgentID, b)
+	events, err = db.eventsOf(core.DefaultAgentID, b)
 	if err != nil || len(events) != 0 {
 		t.Fatalf("pruned session must read empty: %+v err=%v", events, err)
 	}
 }
 
-// A turn that only ever spoke has no trajectory. Listing it would tell a host the
-// turn recorded operations it never did — the content index carries both kinds, so
-// the event tally has to be the one that filters.
-func TestListTrajectorySessionsIgnoresDialogueOnlyTurn(t *testing.T) {
+// A turn that only ever spoke owns its two originals and holds no events: the
+// content index carries both kinds, so the event read has to be the one that
+// filters.
+func TestDialogueOnlyTurnHoldsNoEvents(t *testing.T) {
 	srv := mockLLMServer(t, turnKeywords)
 	db := newSearchTestDB(t, srv.URL)
 	sceneID, topicID := openTurn(t, db)
@@ -203,12 +192,12 @@ func TestListTrajectorySessionsIgnoresDialogueOnlyTurn(t *testing.T) {
 	if owned := archivesOfTopic(t, db.engine, topicID); len(owned) != 2 {
 		t.Fatalf("the settled turn should own its two originals, got %d", len(owned))
 	}
-	list, err := db.ListTrajectorySessions(core.DefaultAgentID)
+	events, err := db.eventsOf(core.DefaultAgentID, common.FormatHash(topicID))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(list) != 0 {
-		t.Fatalf("a dialogue-only turn was reported as having a trajectory: %+v", list)
+	if len(events) != 0 {
+		t.Fatalf("a dialogue-only turn reported events: %+v", events)
 	}
 }
 
@@ -846,8 +835,9 @@ func TestPlanNodeUpdateFinishedAt(t *testing.T) {
 }
 
 // One turn runs on one id: the topic Search opened is where the host's events and
-// dialogue land, what Update distills, and what Crystallize reads back — no
-// host-minted turn key and no timestamp derivation anywhere in between.
+// dialogue land, what Update distills, and what an L4 read under a Kind condition
+// returns — no host-minted turn key and no timestamp derivation anywhere in
+// between.
 func TestTurnRunsOnOneTopicID(t *testing.T) {
 	srv := mockLLMServer(t, turnKeywords)
 	db := newSearchTestDB(t, srv.URL)

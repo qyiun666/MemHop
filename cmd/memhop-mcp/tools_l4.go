@@ -1,8 +1,9 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// L4 tools: the content of a topic — search, retrieval by id, and the one write
-// path that puts dialogue or an operation event into a turn.
+// L4 tools: the content of a topic — search, retrieval by id, the event track of
+// one turn, and the one write path that puts dialogue or an operation event into
+// a turn.
 
 package main
 
@@ -139,6 +140,30 @@ func registerL4Tools(s *mcp.Server, db *memhop.Session) {
 	}))
 
 	registerArchiveAppendTool(s, db)
+	registerTurnEventsTool(s, db)
+}
+
+// turnEventsArgs names one turn by the topic id Search issued for it. The wire
+// name is the one MCP clients already send.
+type turnEventsArgs struct {
+	SessionID string `json:"session_id"`
+}
+
+// registerTurnEventsTool installs the per-turn event read. It is a convenience
+// over memhop_archive_search with the kind pinned to event: a host that wants one
+// turn's operation log should not have to restate the filter. Retention is
+// automatic — Dream drops content older than 7 days — so there is no delete tool.
+func registerTurnEventsTool(s *mcp.Server, db *memhop.Session) {
+	s.AddTool(&mcp.Tool{
+		Name:        "memhop_trajectory_read",
+		Description: "读取本轮的全部操作事件（按 Seq 升序）。本轮的计划节点不在这一读里——它们住在 L5，Go 侧用 PlanState 取。",
+		InputSchema: objSchema(map[string]any{
+			"session_id": strProp("轮轨迹 ID（16 位 hex），必填"),
+		}, "session_id"),
+	}, handle[turnEventsArgs, []memhop.ArchiveSlot](func(a turnEventsArgs) ([]memhop.ArchiveSlot, error) {
+		kind := memhop.KindEvent
+		return db.SearchL4(memhop.L4Query{TopicID: &a.SessionID, Kind: &kind})
+	}))
 }
 
 // registerArchiveAppendTool installs the one content write: without it an MCP host

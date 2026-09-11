@@ -16,7 +16,7 @@ internal/{domain,scene,turn,dream,graph,plan,content}
                 internal/cap 纯功能；internal/repo(+core) 连数据库内核的功能层
 ```
 
-- 大方法（`Search`/`Update`/`RunDream`/`Crystallize`/L0-L5 各面/
+- 大方法（`Search`/`Update`/`RunDream`/L0-L5 各面/
   `CreateAgent` 等）只做：`db.lockAgent` 取域 → 顺序调小方法 → 组装返回。
   细节逻辑（循环、重试、缓存维护、ID 铸造、回滚）一律在小方法包。
 - 小方法包之间互不 import，一条都不例外（事件载荷预算原先由 `plan` 读
@@ -82,8 +82,8 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    直到重启重建索引，前者留下一条陈旧的 `LastActiveAt` 让死树长期豁免清扫。
 7. **L5 键全零保留**：`0` 是每条记录未赋键时的值，故 `0000000000000000` 不是
    合法的 L5 键。读写两侧一律经 `content.ParseTopicID` 拒它
-   （`AppendArchive`/`PlanCreate`/`PlanNodeAdd`/`PlanNodeUpdate`/`PlanState`/
-   `Crystallize`）——只在写侧拒，
+   （`AppendArchive`/`PlanCreate`/`PlanNodeAdd`/`PlanNodeUpdate`/`PlanState`）
+   ——只在写侧拒，
    全零键下就会攒出永远读不出的记录。
 8. **计划清理有界**：dream 的 `l5_prune` 只豁免「持非 done 节点 **且** 窗口内
    仍有节点活动」的计划，其中活动只看节点自己的 `UpdatedAt`；宿主中断或放弃而
@@ -240,4 +240,4 @@ internal/{domain,scene,turn,dream,graph,plan,content}
 
 - 关键词提炼无本地兜底：LLM 输出不可解析即 `ErrLLM`（这一轮不产生话题），`internal` 根不初始化任何分词器。一轮的提炼与 Dream 的融合提炼共用 `llmops.ExtractKeywords`——它只吃一段文本，不认识记录结构。
 - `ImportL3` 的批校验在 composition root 完成（Title/Domain 必填、mode 不接受空值），拒批即一字节不写；`result.Errors` 只表示单条存储失败。
-- 宿主面测试覆盖 27 个会话方法 + 8 个 `MultiAgentDB` 方法，按层分文件：`test/api_interface_scene_test.go`（L2 场景生命周期）、`api_interface_plan_test.go`（L5 按步骤逐个建的树、Model A 折叠与节点字段回读、事件键与纯提炼、重开后读回）、`api_interface_turn_test.go`（一轮之下原文与事件各归各的读法、纯结晶面）、`api_interface_multi_test.go`（租户隔离与 `CompactTo`）。这些用例只使用库铸造并回传给宿主的 id。
+- 宿主面测试覆盖 25 个会话方法 + 8 个 `MultiAgentDB` 方法，按层分文件：`test/api_interface_scene_test.go`（L2 场景生命周期）、`api_interface_plan_test.go`（L5 按步骤逐个建的树、Model A 折叠与节点字段回读、事件键到自己那一轮、重开后读回）、`api_interface_turn_test.go`（一轮之下原文与事件各归各的读法）、`api_interface_multi_test.go`（租户隔离与 `CompactTo`）。这些用例只使用库铸造并回传给宿主的 id。

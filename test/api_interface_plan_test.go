@@ -16,7 +16,6 @@
 package test
 
 import (
-	"context"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -298,7 +297,7 @@ func TestInterfacePlanTreesStayPerTurn(t *testing.T) {
 	}
 }
 
-func TestInterfaceTrajectoryKeysAndCrystallize(t *testing.T) {
+func TestInterfaceTurnEventsKeyToTheirOwnTurn(t *testing.T) {
 	db, _ := openTestDB(t)
 	sceneID := openSession(t, db)
 	turnID := openTurn(t, db, sceneID)
@@ -335,38 +334,6 @@ func TestInterfaceTrajectoryKeysAndCrystallize(t *testing.T) {
 	}
 	if again := mustEvents(t, db, planTurn); len(again) != 2 {
 		t.Fatalf("the refused event landed anyway: %+v", again)
-	}
-
-	// Both keys of the domain, so a host can pick one to work off afterwards.
-	sums, err := db.ListTrajectorySessions()
-	if err != nil {
-		t.Fatalf("ListTrajectorySessions: %v", err)
-	}
-	eventCount := map[string]int{}
-	for _, s := range sums {
-		eventCount[s.SessionID] = s.Events
-	}
-	if eventCount[turnID] != 1 || eventCount[planTurn] != 2 {
-		t.Fatalf("trajectory sessions = %+v, want %s:1 event and %s:2 events", sums, turnID, planTurn)
-	}
-
-	// Crystallizing a turn works off everything that turn logged — its plain
-	// events and the steps it committed alike. The engine returns candidates
-	// only, so nothing lands anywhere. The mock replies with a fixed
-	// three-action roster without reading the (nil) existing catalog, so the
-	// reuse/merge candidates here also pin the passthrough contract.
-	res, err := db.Crystallize(context.Background(), planTurn, nil)
-	if err != nil {
-		t.Fatalf("Crystallize(plan turn): %v", err)
-	}
-	if len(res.Capabilities) != 3 {
-		t.Fatalf("crystallize result = %+v, want the mock's three candidates", res)
-	}
-
-	// A turn the host never logged has nothing to crystallize — reported, not
-	// answered with an empty result.
-	if _, err := db.Crystallize(context.Background(), openTurn(t, db, sceneID), nil); err == nil {
-		t.Fatal("crystallizing a key with no events should fail")
 	}
 }
 

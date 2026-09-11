@@ -167,37 +167,3 @@ func (idx *L4Index) RemoveTopic(topicID uint64) {
 	defer idx.mu.Unlock()
 	delete(idx.byTopic, topicID)
 }
-
-// EventFootprint is one topic's event tally for the trajectory listing.
-type EventFootprint struct {
-	TopicID uint64
-	Events  int
-	LastAt  int64
-}
-
-// EventSummaries reports every topic that holds at least one event, unordered.
-// Topics holding only utterances are absent: they have no trajectory to report,
-// and listing them would tell a host a turn recorded operations it never did.
-func (idx *L4Index) EventSummaries() []EventFootprint {
-	idx.mu.RLock()
-	defer idx.mu.RUnlock()
-	out := make([]EventFootprint, 0, len(idx.byTopic))
-	for topicID, entries := range idx.byTopic {
-		var s EventFootprint
-		for _, e := range entries {
-			if e.Kind != core.KindEvent {
-				continue
-			}
-			s.Events++
-			if e.CreatedAt > s.LastAt {
-				s.LastAt = e.CreatedAt
-			}
-		}
-		if s.Events == 0 {
-			continue
-		}
-		s.TopicID = topicID
-		out = append(out, s)
-	}
-	return out
-}

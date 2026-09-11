@@ -131,7 +131,6 @@ func TestSurfaceSessionMethods(t *testing.T) {
 	if err != nil {
 		t.Fatalf("session: %v", err)
 	}
-	ctx := context.Background()
 
 	if err := s.UpdateL0(&ProfileSlot{Name: "worker"}); err != nil {
 		t.Fatalf("session updateL0: %v", err)
@@ -230,9 +229,6 @@ func TestSurfaceSessionMethods(t *testing.T) {
 	}
 	if evs := eventsOf(t, s, traj); len(evs) != 1 {
 		t.Fatalf("session events of %s: %d", traj, len(evs))
-	}
-	if _, err := s.Crystallize(ctx, traj, nil); err != nil {
-		t.Fatalf("session crystallize: %v", err)
 	}
 	// Deletion lifecycle: topic, scene, graph.
 	if err := s.DeleteTopic(topicID); err != nil {
