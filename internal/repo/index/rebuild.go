@@ -5,39 +5,15 @@
 // after Open and at the end of Dream compression.
 package index
 
-import (
-	"encoding/json"
-	"iter"
-
-	"github.com/qyiun666/MemHop/internal/repo/core"
-)
-
-// forEachTopic yields every parsable L2 topic record of one agent domain;
-// corrupt or unparsable records are skipped (tolerated torn residue).
-func forEachTopic(engine *core.StorageEngine, agentID uint64) iter.Seq2[uint64, *core.TopicSlot] {
-	return func(yield func(uint64, *core.TopicSlot) bool) {
-		for idHash := range engine.IndexByType(agentID, core.RecL2Topic) {
-			_, data, err := engine.ReadRecord(agentID, idHash)
-			if err != nil {
-				continue // skip corrupt records
-			}
-			var topic core.TopicSlot
-			if json.Unmarshal(data, &topic) != nil {
-				continue // skip unparsable records
-			}
-			if !yield(idHash, &topic) {
-				return
-			}
-		}
-	}
-}
+import "github.com/qyiun666/MemHop/internal/repo/core"
 
 // BuildL2MetaFromEngine fills an L2MetaIndex from one agent domain's topic
-// records in a single scan.
+// records in a single scan. Records that cannot be read or decoded are skipped
+// (see core.IterAll): torn residue must not decide what the cache holds.
 func BuildL2MetaFromEngine(engine *core.StorageEngine, agentID uint64) *L2MetaIndex {
 	l2Meta := NewL2MetaIndex()
-	for _, topic := range forEachTopic(engine, agentID) {
-		l2Meta.insertMeta(L2MetaFromTopic(topic))
+	for topic := range core.IterAll[core.TopicSlot](engine, agentID, core.RecL2Topic) {
+		l2Meta.insertMeta(L2MetaFromTopic(&topic))
 	}
 	return l2Meta
 }

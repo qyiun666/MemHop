@@ -25,17 +25,15 @@ import (
 
 // ensureRegistered returns the stable agentID for name, allocating a fresh
 // crypto/rand ID (and writing its registry record) on first use. Different names
-// never share an ID; the two reserved domains are never handed out. The registry
-// record is written under agentsMu so an ID becomes visible only after it is
-// persisted; the fsync briefly blocks every domain lookup (agentsMu also guards
-// contextFor) — accepted because creating a domain is a low-frequency operation.
+// never share an ID; the two reserved domains are never handed out. The name
+// arrives trimmed and non-empty: that is the caller's business, because the
+// caller is where a host's string enters the library. The registry record is
+// written under agentsMu so an ID becomes visible only after it is persisted; the
+// fsync briefly blocks every domain lookup (agentsMu also guards contextFor) —
+// accepted because creating a domain is a low-frequency operation.
 func (db *DB) ensureRegistered(name string) (uint64, error) {
 	if db.closed.Load() {
 		return 0, common.NewError(common.ErrClosed, "database is closed")
-	}
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return 0, common.NewError(common.ErrInvalidQuery, "agent name is empty")
 	}
 	db.agentsMu.Lock()
 	defer db.agentsMu.Unlock()

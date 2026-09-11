@@ -44,27 +44,6 @@ func l3TestGraph(t *testing.T, db *DB) *L3Graph {
 	return graph
 }
 
-// l3TestGraphByName reads the graph a domain name imported into, for the cases
-// where the test domain holds more than one graph.
-func l3TestGraphByName(t *testing.T, db *DB, name string) *L3Graph {
-	t.Helper()
-	graphs, err := db.ListL3(core.DefaultAgentID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, g := range graphs {
-		if g.Name == name {
-			graph, err := db.getL3Graph(common.FormatHash(g.IDHash))
-			if err != nil {
-				t.Fatal(err)
-			}
-			return graph
-		}
-	}
-	t.Fatalf("no graph named %q", name)
-	return nil
-}
-
 func TestImportL3OverwriteExisting(t *testing.T) {
 	db := newL3TestDB(t)
 	items := []L3ImportItem{{

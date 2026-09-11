@@ -230,21 +230,19 @@ func decayOneEdge(engine *core.StorageEngine, agentID uint64, cfg *DecayParams, 
 func removeNodeFromEdge(engine *core.StorageEngine, agentID uint64, edgeID, nodeID uint64, cfg *DecayParams) (bool, error) {
 	edge, err := core.ReadSceneEdge(engine, agentID, edgeID)
 	if err != nil {
-		return false, nil
-	}
-	found := false
-	filtered := edge.NodeIDs[:0]
-	for _, n := range edge.NodeIDs {
-		if n == nodeID {
-			found = true
-		} else {
-			filtered = append(filtered, n)
+		// An edge that is gone has no member list left to prune; one that cannot be
+		// read is a real failure and must stop the cascade rather than leaving the
+		// node holding a reference to an edge nobody trimmed.
+		if common.CodeOf(err) == common.ErrNotFound {
+			return false, nil
 		}
+		return false, err
 	}
-	if !found {
+	before := len(edge.NodeIDs)
+	edge.NodeIDs = slices.DeleteFunc(edge.NodeIDs, func(id uint64) bool { return id == nodeID })
+	if len(edge.NodeIDs) == before {
 		return false, nil
 	}
-	edge.NodeIDs = filtered
 	if len(edge.NodeIDs) < cfg.MinEdgeNodes {
 		for _, surviving := range edge.NodeIDs {
 			if err := removeEdgeFromNode(engine, agentID, surviving, edgeID); err != nil {
@@ -270,19 +268,11 @@ func removeEdgeFromNode(engine *core.StorageEngine, agentID uint64, nodeID, edge
 		}
 		return err
 	}
-	found := false
-	filtered := node.EdgeIDs[:0]
-	for _, e := range node.EdgeIDs {
-		if e == edgeID {
-			found = true
-		} else {
-			filtered = append(filtered, e)
-		}
-	}
-	if !found {
+	before := len(node.EdgeIDs)
+	node.EdgeIDs = slices.DeleteFunc(node.EdgeIDs, func(id uint64) bool { return id == edgeID })
+	if len(node.EdgeIDs) == before {
 		return nil
 	}
-	node.EdgeIDs = filtered
 	return core.WriteSceneNode(engine, agentID, nodeID, node)
 }
 

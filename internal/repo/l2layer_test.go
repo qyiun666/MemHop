@@ -334,6 +334,72 @@ func TestCreateTurnTopicL2ReplayKeepsHostName(t *testing.T) {
 	}
 }
 
+// The same replay must not move the turn either. Once compression has sunk it
+// under a fused group, that group's summary is what the scene shows in its place:
+// a replay that reset the depth would bring the turn's own originals back to the
+// surface beside the summary, and leave the group one child short.
+func TestCreateTurnTopicL2ReplayKeepsSunkPosition(t *testing.T) {
+	engine := tempEngine(t)
+	const sceneID = uint64(7)
+	const parentID = uint64(555)
+	topicID := core.ComputeTurnTopicID(sceneID, 1)
+	if !CreateTurnTopicL2(engine, core.DefaultAgentID, sceneID, topicID, []string{"登录"}, 1000, 1001) {
+		t.Fatal("first settle")
+	}
+	if err := CompressTopicsL2(engine, core.DefaultAgentID, []uint64{topicID}, parentID); err != nil {
+		t.Fatalf("sink the turn: %v", err)
+	}
+	if !CreateTurnTopicL2(engine, core.DefaultAgentID, sceneID, topicID, []string{"刷新", "token"}, 1000, 1100) {
+		t.Fatal("replay settle")
+	}
+	got, err := core.ReadTopicSlot(engine, core.DefaultAgentID, topicID)
+	if err != nil {
+		t.Fatalf("read replayed topic: %v", err)
+	}
+	if got.Depth != 2 || got.ParentID == nil || *got.ParentID != parentID {
+		t.Fatalf("replay returned a sunk turn to the surface: depth=%d parent=%v", got.Depth, got.ParentID)
+	}
+	if !slices.Equal(got.FusedKeywords, []string{"刷新", "token"}) {
+		t.Fatalf("replay must still rewrite the keyword track, got %v", got.FusedKeywords)
+	}
+}
+
+// A fused parent carries its group's earliest user timestamp, so it ties with a
+// turn that shares those bounds. Ties have to break on something the scan does
+// not decide, or the same scene answers in one order on one read and another
+// order on the next.
+func TestListTopicsL2BreaksTiesOnID(t *testing.T) {
+	engine := tempEngine(t)
+	const sceneID = uint64(7)
+	for _, id := range []uint64{30, 10, 20} {
+		topic := core.TopicSlot{
+			ID: id, SceneID: sceneID, Depth: 1, FusedKeywords: []string{"k"},
+			UserTimestamp: 1000, AgentTimestamp: 2000,
+		}
+		if err := core.WriteTopicSlot(engine, core.DefaultAgentID, id, &topic); err != nil {
+			t.Fatalf("write topic %d: %v", id, err)
+		}
+	}
+	for attempt := range 3 {
+		got, err := ListTopicsL2(TopicListQuery{
+			Engine: engine, AgentID: core.DefaultAgentID,
+			MetaIdx: index.BuildL2MetaFromEngine(engine, core.DefaultAgentID),
+			SceneID: sceneID, Depth: 1, ByScene: true,
+		})
+		if err != nil {
+			t.Fatalf("attempt %d: %v", attempt, err)
+		}
+		if len(got) != 3 {
+			t.Fatalf("attempt %d: want 3 topics, got %d", attempt, len(got))
+		}
+		for i, want := range []uint64{10, 20, 30} {
+			if got[i].ID != want {
+				t.Fatalf("attempt %d: position %d wants id %d, got %d", attempt, i, want, got[i].ID)
+			}
+		}
+	}
+}
+
 // A group member the listing names but the payload will not decode is a read
 // failure, not a member that went away. The parent summary is already on disk
 // when this runs, so sinking the rest would leave the scene showing both the

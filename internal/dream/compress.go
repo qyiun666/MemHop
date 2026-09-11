@@ -90,10 +90,19 @@ func applyGroups(ctx context.Context, ac *domain.Context, sceneID uint64, topics
 	for _, t := range topics {
 		byID[t.ID] = t
 	}
+	// Members a group has already sunk. Two groups claiming one topic cannot both
+	// be applied: the second re-parents it under itself, which leaves the first
+	// group's summary claiming a child that no longer answers to it and pushes the
+	// topic one level below the deepest read that reaches it.
+	claimed := make(map[uint64]struct{}, len(topics))
 	var count uint32
 	var rejected int
 	for _, g := range out.L2Groups {
 		if len(g.NodeHashes) < 2 {
+			continue
+		}
+		if sharesMember(g.NodeHashes, claimed) {
+			rejected++
 			continue
 		}
 		minTS, maxTS, ok := groupTimestamps(g.NodeHashes, byID)
@@ -105,9 +114,23 @@ func applyGroups(ctx context.Context, ac *domain.Context, sceneID uint64, topics
 			rejected++
 			continue
 		}
+		for _, id := range g.NodeHashes {
+			claimed[id] = struct{}{}
+		}
 		count++
 	}
 	return count, rejected
+}
+
+// sharesMember reports whether any of a proposed group's members already belongs
+// to a group this scene applied.
+func sharesMember(nodeHashes []uint64, claimed map[uint64]struct{}) bool {
+	for _, id := range nodeHashes {
+		if _, ok := claimed[id]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 // applyOneGroup consolidates a single merge group: stores MergedSummary as the

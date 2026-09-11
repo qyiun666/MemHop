@@ -171,16 +171,25 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    `turn.SettleTarget` 另外钉住可沉淀的范围：`TopicID` 必须是
    `hash("turn:" + 场景:k)` 且 `k <= 场景.TurnSeq`，即该场景真开出过的某一轮
    ——写 Dream 融合节点（同 depth、同场景，但由时间戳派生）、跨场景 id、宿主
-   自造 id 都在 LLM 调用之前被拒，零留痕。重放当前轮与"先开两轮再乱序结算"
+   自造 id 都在 LLM 调用之前被拒，零留痕。这道闸不拦「往别的话题写内容」——内容记录
+   只被它的**话题**寻址，而话题里推不出场景，那是键本身的语义，不是归属闸的活。
+   重放当前轮与"先开两轮再乱序结算"
    仍然合法（`TestUpdateSettlesEachScenesTurnsInOrder`）；重放重写的是引擎那半
-   （关键词轨、两个时间界、depth、场景归属），宿主给的 `name` 从存量记录里带
-   过来——否则把一轮重述一次就把它悄悄改了名（`TestCreateTurnTopicL2ReplayKeepsHostName`）。
+   （关键词轨、两个时间界、场景归属），而宿主给的 `name` 与 Dream 已经给过的位置
+   （`depth`、`parent_id`）都从存量记录里带过来——否则把一轮重述一次就把它悄悄改了
+   名（`TestCreateTurnTopicL2ReplayKeepsHostName`），或让一个已沉入融合组的轮次带着
+   自己的原文回到 surface，与取代它的那份组摘要并排出现、组还少一个子
+   （`TestCreateTurnTopicL2ReplayKeepsSunkPosition`）。
 4. **巩固按单场景规模触发**：`consolidateScene` 在 depth-1 话题数超
    `Defaults.SceneDreamTopicThreshold` 时调度该场景 Dream；单个融合组是
    "摘要内容 → 提炼关键词 → 建父话题 → 下沉子话题"的串写，任一步
    失败都回滚本组已写的记录（`dream.discardFusedGroup` 按父话题键整删它名下的
    内容与缓存，不需要携带任何 id 才能撤销一次写）——要么整体生效，
-   要么不留孤儿记录 / 半成品父节点。下沉这一步本身就是全有或全无：
+   要么不留孤儿记录 / 半成品父节点。一个场景落地的各组**成员互斥**：模型按对话线程
+   分组，相邻两条线程可以都点名同一轮，而两组都应用等于把那一轮沉两次——第二次改父
+   指向，第一个组的摘要于是管着一个不再应答它的子，那一轮也落到最深的读路径之下，
+   所以后到的重叠组按「提出但未应用」计入 rejected（`TestApplyGroupsRejectsOverlappingGroups`）。
+   下沉这一步本身就是全有或全无：
    `repo.CompressTopicsL2` 把改写攒到最后一次批写，成员读不动（`ErrNotFound`
    以外的任何错误，或索引点名却不是话题记录）就整组不动、把错误交回上面回滚，
    只有「已经不在」的成员从组里退出——吞掉一次读失败会留下父摘要与那一条自己的

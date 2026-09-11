@@ -12,9 +12,6 @@ import (
 // record just written; call it right after the engine writes. On read failure
 // the entry is removed so stale metadata is never served.
 func (c *Context) SyncL2Meta(idHash uint64) {
-	if c.L2Meta == nil {
-		return
-	}
 	topic, err := core.ReadTopicLenient(c.Engine, c.ID, idHash)
 	if err != nil || topic == nil {
 		c.L2Meta.Remove(idHash)
@@ -39,9 +36,6 @@ func (c *Context) RemoveTopicsFromIndices(ids []uint64) {
 // RetargetL2Meta moves every topic of the merged-away scenes to the primary scene
 // in the L2MetaIndex; call it once the merge has been applied to the records.
 func (c *Context) RetargetL2Meta(primaryHash uint64, removed map[uint64]struct{}) {
-	if c.L2Meta == nil {
-		return
-	}
 	for sid := range removed {
 		for _, id := range c.L2Meta.GetByScene(sid) {
 			meta := c.L2Meta.Remove(id)

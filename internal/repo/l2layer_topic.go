@@ -10,6 +10,7 @@ import (
 	"cmp"
 	"slices"
 
+	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 	"github.com/qyiun666/MemHop/internal/repo/index"
 )
@@ -68,7 +69,12 @@ func ListTopicsL2(q TopicListQuery) ([]core.TopicSlot, error) {
 		// so it ties with the first turn it swallowed. Shallower first keeps the
 		// group's summary introducing its own originals instead of landing in
 		// the middle of them at the sort's whim.
-		return cmp.Compare(a.Depth, b.Depth)
+		if c := cmp.Compare(a.Depth, b.Depth); c != 0 {
+			return c
+		}
+		// Two topics can tie on both keys when a turn's bounds are the group's
+		// bounds; without this the order is whatever the record scan yielded.
+		return cmp.Compare(a.ID, b.ID)
 	})
 	return out, nil
 }
@@ -90,11 +96,15 @@ func RenameTopicL2(engine *core.StorageEngine, agentID uint64, topicID uint64, n
 	return topic, nil
 }
 
-// CreateTurnTopicL2 writes one turn topic (depth 1) under sceneHash with its
-// single keyword track and both message timestamps. It is also the replay path:
-// settling a topic id that already holds a topic rewrites the engine-owned half,
-// so the host's own label is read off the stored record and carried forward —
-// otherwise re-settling the turn it was named in would silently unname it.
+// CreateTurnTopicL2 writes one turn topic under sceneHash with its single keyword
+// track and both message timestamps. It is also the replay path: settling a topic
+// id that already holds a topic rewrites the engine-owned half, so the host's own
+// label and the place Dream gave that turn are read off the stored record and
+// carried forward — re-settling the turn it was named in must not unname it, and a
+// turn already sunk under a fused group must not come back to the surface beside
+// the summary that replaced it. A stored record that cannot be read refuses the
+// settle: writing depth 1 over a position nobody knows would put a second version
+// of that turn on the read path.
 func CreateTurnTopicL2(engine *core.StorageEngine, agentID uint64, sceneHash, topicID uint64, keywords []string, userTS, agentTS int64) bool {
 	topic := core.TopicSlot{
 		ID:             topicID,
@@ -104,8 +114,17 @@ func CreateTurnTopicL2(engine *core.StorageEngine, agentID uint64, sceneHash, to
 		UserTimestamp:  userTS,
 		AgentTimestamp: agentTS,
 	}
-	if stored, err := core.ReadTopicLenient(engine, agentID, topicID); err == nil && stored != nil {
+	stored, err := core.ReadTopicLenient(engine, agentID, topicID)
+	if err != nil && common.CodeOf(err) != common.ErrNotFound {
+		// Nothing stored is this turn's first settle; a record that will not read
+		// back is a turn whose place in the tree nobody knows, and guessing it
+		// could put two versions of one turn on the read path.
+		return false
+	}
+	if stored != nil {
 		topic.Name = stored.Name
+		topic.Depth = stored.Depth
+		topic.ParentID = stored.ParentID
 	}
 	return core.WriteTopicSlot(engine, agentID, topic.ID, &topic) == nil
 }
