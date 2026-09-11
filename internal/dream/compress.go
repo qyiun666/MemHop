@@ -146,7 +146,7 @@ func applyOneGroup(ctx context.Context, ac *domain.Context, sceneID uint64, g ll
 		discardFusedGroup(ac, parentID)
 		return common.NewError(common.ErrIO, "dream: create fused topic", nil)
 	}
-	if _, err := repo.CompressTopicsL2(ac.Engine, ac.ID, g.NodeHashes, parentID); err != nil {
+	if err := repo.CompressTopicsL2(ac.Engine, ac.ID, g.NodeHashes, parentID); err != nil {
 		discardFusedGroup(ac, parentID)
 		return common.NewError(common.ErrIO, "dream: compress child topics", err)
 	}

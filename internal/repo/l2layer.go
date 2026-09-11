@@ -5,8 +5,6 @@
 package repo
 
 import (
-	"math"
-
 	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
@@ -14,41 +12,11 @@ import (
 // MaxDepth: topic depth threshold that triggers deletion on sinking.
 const MaxDepth = 4
 
-// CompressResult carries the timestamp bounds of one fused group, collected
-// while its member topics sink a level deeper.
-type CompressResult struct {
-	UserTimestamp  int64 // earliest user timestamp
-	AgentTimestamp int64 // latest agent timestamp
-}
-
-// CompressTopicsL2 compresses topics under a scene.
-func CompressTopicsL2(engine *core.StorageEngine, agentID uint64, ids []uint64, parentID uint64) (*CompressResult, error) {
-	result := &CompressResult{
-		UserTimestamp:  math.MaxInt64,
-		AgentTimestamp: math.MinInt64,
-	}
-	writes, deletes, err := planCompressedWrites(engine, agentID, ids, parentID, result)
-	if err != nil {
-		return result, err
-	}
-	if len(writes) > 0 {
-		if _, err := engine.WriteRecordBatch(writes); err != nil {
-			return result, err
-		}
-	}
-	if len(deletes) > 0 {
-		if _, err := engine.DeleteRecordBatch(agentID, deletes); err != nil {
-			return result, err
-		}
-	}
-	finalizeCompressResult(result)
-	return result, nil
-}
-
-// planCompressedWrites sinks every existing topic one level deeper under
-// parentID (collecting timestamp bounds into result) and plans the batch:
-// topics at MaxDepth are deleted instead of rewritten.
-func planCompressedWrites(engine *core.StorageEngine, agentID uint64, ids []uint64, parentID uint64, result *CompressResult) ([]core.RecordEntry, []uint64, error) {
+// CompressTopicsL2 sinks every listed topic one level deeper under parentID;
+// topics reaching MaxDepth are deleted instead of rewritten. The group's own
+// timestamp bounds are not collected here: a caller that needs them must be the
+// one choosing the parent id they derive from, and it already has the records.
+func CompressTopicsL2(engine *core.StorageEngine, agentID uint64, ids []uint64, parentID uint64) error {
 	var writes []core.RecordEntry
 	var deletes []uint64
 	for _, id := range ids {
@@ -58,39 +26,27 @@ func planCompressedWrites(engine *core.StorageEngine, agentID uint64, ids []uint
 		}
 		topic.Depth++
 		topic.ParentID = &parentID
-		foldCompressBounds(result, topic)
 		if topic.Depth >= MaxDepth {
 			deletes = append(deletes, topic.ID)
 			continue
 		}
 		entry, err := core.TopicEntry(agentID, topic)
 		if err != nil {
-			return nil, nil, err
+			return err
 		}
 		writes = append(writes, entry)
 	}
-	return writes, deletes, nil
-}
-
-// foldCompressBounds accumulates one sunk topic's timestamp bounds into the
-// group aggregate.
-func foldCompressBounds(result *CompressResult, topic *core.TopicSlot) {
-	if topic.UserTimestamp < result.UserTimestamp {
-		result.UserTimestamp = topic.UserTimestamp
+	if len(writes) > 0 {
+		if _, err := engine.WriteRecordBatch(writes); err != nil {
+			return err
+		}
 	}
-	if topic.AgentTimestamp > result.AgentTimestamp {
-		result.AgentTimestamp = topic.AgentTimestamp
+	if len(deletes) > 0 {
+		if _, err := engine.DeleteRecordBatch(agentID, deletes); err != nil {
+			return err
+		}
 	}
-}
-
-// finalizeCompressResult resets untouched sentinel bounds to zero.
-func finalizeCompressResult(result *CompressResult) {
-	if result.UserTimestamp == math.MaxInt64 {
-		result.UserTimestamp = 0
-	}
-	if result.AgentTimestamp == math.MinInt64 {
-		result.AgentTimestamp = 0
-	}
+	return nil
 }
 
 // Delete targets of DeleteL2.
