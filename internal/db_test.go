@@ -53,7 +53,10 @@ func TestLoadTenantRegistryDuplicateNameDeterministic(t *testing.T) {
 			t.Fatalf("write registry record %d: %v", id, err)
 		}
 	}
-	idToName, nameToID := loadTenantRegistry(engine)
+	idToName, nameToID, unresolved := loadTenantRegistry(engine)
+	if unresolved != nil {
+		t.Fatalf("two readable records under one name are not an unreadable key: %v", unresolved)
+	}
 	if got := nameToID[name]; got != high {
 		t.Fatalf("duplicate name resolves to %#x, want higher ID %#x", got, high)
 	}

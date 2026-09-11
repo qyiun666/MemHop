@@ -113,14 +113,21 @@ func upsertSceneEdge(engine *core.StorageEngine, agentID uint64, nodeA, nodeB ui
 	lo, hi := min(nodeA, nodeB), max(nodeA, nodeB)
 	edgeID := common.HashID(fmt.Sprintf("l1edge:%d:%d", lo, hi))
 	edge, err := core.ReadSceneEdge(engine, agentID, edgeID)
-	if err != nil {
+	switch {
+	case err != nil && common.CodeOf(err) != common.ErrNotFound:
+		// An edge that is there but will not read back is not an edge that is
+		// missing: rebuilding it restarts CreatedAt, which is what the decay clock
+		// runs on, and skips the weight comparison that keeps an older similarity
+		// from resurrecting an edge decayed away from.
+		return false, err
+	case err != nil:
 		edge = &core.SceneEdge{
 			IDHash:    edgeID,
 			Kind:      core.HyperCoOccurrence,
 			NodeIDs:   []uint64{lo, hi},
 			CreatedAt: now,
 		}
-	} else if weight <= edge.Weight {
+	case weight <= edge.Weight:
 		return false, nil // existing edge is at least as strong; nothing to refresh
 	}
 	edge.Weight = max(edge.Weight, weight)

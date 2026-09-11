@@ -104,22 +104,32 @@ func EnsureGraphL3(engine *core.StorageEngine, agentID uint64, name string, sour
 }
 
 // DeleteGraphL3 cascades: collects all nodes/edges of the graph plus the
-// graph record and deletes them in one batch.
-func DeleteGraphL3(engine *core.StorageEngine, agentID uint64, id uint64) bool {
+// graph record and deletes them in one batch. Both collections are strict —
+// the batch is exactly what they found, so a member that will not read back has
+// to stop the delete instead of surviving a graph the host was told is gone.
+func DeleteGraphL3(engine *core.StorageEngine, agentID uint64, id uint64) error {
+	nodes, err := core.CollectAllStrict[core.HypergraphNode](engine, agentID, core.RecL3GraphNode)
+	if err != nil {
+		return err
+	}
+	edges, err := core.CollectAllStrict[core.HypergraphEdge](engine, agentID, core.RecL3GraphEdge)
+	if err != nil {
+		return err
+	}
 	var targets []uint64
-	for _, node := range core.CollectAllHypergraphNodes(engine, agentID) {
+	for _, node := range nodes {
 		if node.GraphID == id {
 			targets = append(targets, node.IDHash)
 		}
 	}
-	for _, edge := range core.CollectAllHypergraphEdges(engine, agentID) {
+	for _, edge := range edges {
 		if edge.GraphID == id {
 			targets = append(targets, edge.IDHash)
 		}
 	}
 	targets = append(targets, id)
-	_, err := engine.DeleteRecordBatch(agentID, targets)
-	return err == nil
+	_, err = engine.DeleteRecordBatch(agentID, targets)
+	return err
 }
 
 // UpdateGraphL3 partially updates a graph slot (currently Name only) and always

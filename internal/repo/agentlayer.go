@@ -34,22 +34,35 @@ func WriteAgentRegistry(engine *core.StorageEngine, agentID uint64, name string)
 }
 
 // ListAgentRegistry scans every domain's registry records and returns
-// agentID -> name; corrupt or empty entries are skipped so a damaged record
-// never breaks Open.
-func ListAgentRegistry(engine *core.StorageEngine) map[uint64]string {
+// agentID -> name, plus the failure of the first record that exists but resolves
+// to no name — one that will not read back, will not decode, or carries an empty
+// key. Those two answers are not interchangeable: a domain holding an unreadable
+// key is still a domain, and the key it should have carried is exactly what will
+// not read, so it cannot be attributed to any name. A caller that only lists is
+// free to ignore the failure; a caller about to hand out a domain by name is not.
+func ListAgentRegistry(engine *core.StorageEngine) (map[uint64]string, error) {
 	out := make(map[uint64]string)
+	var unresolved error
 	for agentID := range engine.IterAgents() {
 		for idHash := range engine.IndexByType(agentID, core.RecAgentRegistry) {
 			_, data, err := engine.ReadRecord(agentID, idHash)
-			if err != nil {
-				continue
-			}
 			var name string
-			if err := json.Unmarshal(data, &name); err != nil || name == "" {
+			if err == nil {
+				if uerr := json.Unmarshal(data, &name); uerr != nil {
+					err = common.NewError(common.ErrDeserialization, "unmarshal tenant key", uerr)
+				} else if name == "" {
+					err = common.NewError(common.ErrDeserialization, "the key is empty")
+				}
+			}
+			if err != nil {
+				if unresolved == nil {
+					unresolved = common.NewError(common.CodeOf(err),
+						"agent registry: domain "+common.FormatHash(agentID)+" carries no readable tenant key", err)
+				}
 				continue
 			}
 			out[agentID] = name
 		}
 	}
-	return out
+	return out, unresolved
 }

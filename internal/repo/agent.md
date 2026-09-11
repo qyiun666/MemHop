@@ -83,6 +83,9 @@
 6. **默认域**：`core.DefaultAgentID = 0` 即全零 hex 域；
    注册记录 `RecAgentRegistry (0x10)` 的 `idHash == agentID`，data 为
    agent 名 JSON，Open 时扫描重建 `name -> agentID` 映射。
+   `ListAgentRegistry` 除映射外还带出第一条「记录在、名字解不出来」的失败（读不回 /
+   解不开 / 空键）：那条记录仍然占着一个域，只是没有任何名字能指到它。本层只报，
+   「这个名字能不能用」是调用方的判断。
 
 ## 修改者义务
 

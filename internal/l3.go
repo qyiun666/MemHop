@@ -162,9 +162,15 @@ func (db *DB) UpdateL3(agentID uint64, id string, name *string) (*L3Graph, error
 
 // DeleteL3 cascades: deletes the graph with all its nodes and edges from the
 // shared L3 domain, then drops the L2 anchors that named it in every agent
-// domain (the default domain plus all registered tenants). The two phases
-// never hold two domain locks at once, so no agent domain can end up blocking
-// the shared pool behind a long operation.
+// domain (the default domain plus all registered tenants). The two phases never
+// hold two domain locks at once, so no agent domain can end up blocking the shared
+// pool behind a long operation.
+//
+// The graph goes first because that is what makes the cascade close: an anchor is
+// written only while the graph it names exists, and the detach takes the same
+// domain lock the anchor write holds. So an anchor is either already there — and
+// this pass clears it — or it loses validation against a deleted graph. Reversing
+// the two lets an anchor validate, land after the detach, and outlive the graph.
 func (db *DB) DeleteL3(agentID uint64, id string) error {
 	ac, err := db.lockSharedPool(agentID)
 	if err != nil {
@@ -176,11 +182,11 @@ func (db *DB) DeleteL3(agentID uint64, id string) error {
 		return err
 	}
 	graphHash := slot.IDHash
-	if !repo.DeleteGraphL3(db.engine, core.SharedPoolAgentID, graphHash) {
-		ac.Mu.Unlock()
-		return common.NewError(common.ErrIO, "delete graph", nil)
-	}
+	err = repo.DeleteGraphL3(db.engine, core.SharedPoolAgentID, graphHash)
 	ac.Mu.Unlock()
+	if err != nil {
+		return err
+	}
 	return db.detachGraphAnchors(graphHash)
 }
 

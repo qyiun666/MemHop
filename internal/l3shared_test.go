@@ -194,7 +194,11 @@ func TestL3PoolSurvivesRestart(t *testing.T) {
 	t.Cleanup(func() { _ = engine.Close() })
 	db2 := newTestDB(t, engine)
 	// The real Open assembly reloads the tenant registry; mirror it here.
-	db2.idToName, db2.nameToID = loadTenantRegistry(engine)
+	var unresolved error
+	db2.idToName, db2.nameToID, unresolved = loadTenantRegistry(engine)
+	if unresolved != nil {
+		t.Fatalf("the reopened registry resolves every domain to a name: %v", unresolved)
+	}
 	graphs, err := db2.ListL3(beta)
 	if err != nil || len(graphs) != 1 {
 		t.Fatalf("reopened file lost the shared pool: %+v err %v", graphs, err)

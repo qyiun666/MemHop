@@ -44,6 +44,15 @@ func (db *DB) ensureRegistered(name string) (uint64, error) {
 	if id, ok := db.nameToID[name]; ok {
 		return id, nil
 	}
+	// A name is only free while no domain is holding a key that will not resolve.
+	// Minting a second domain under a name an unreadable record already carries would
+	// hand the host an empty memory and leave the real one behind it, unreachable and
+	// undeletable. The scan happens here rather than once at Open because that is
+	// where the answer is acted on: a name may be asked for long after the file was
+	// opened, and the registry is written by this call.
+	if _, unresolved := repo.ListAgentRegistry(db.engine); unresolved != nil {
+		return 0, unresolved
+	}
 	for {
 		var b [8]byte
 		if _, err := rand.Read(b[:]); err != nil {

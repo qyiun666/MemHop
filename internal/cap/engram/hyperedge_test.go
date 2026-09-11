@@ -102,3 +102,36 @@ func TestBuildHyperedges(t *testing.T) {
 		t.Fatalf("weight = %.4f, want 0.6667", edge.Weight)
 	}
 }
+
+// An edge that is there but will not read back is not an edge that is missing.
+// Building a fresh one restarts CreatedAt, which is the baseline every decay is
+// computed from, and skips the weight comparison that keeps an older, weaker
+// similarity from resurrecting an edge that has decayed away from.
+func TestBuildHyperedgesReportsUnreadableEdge(t *testing.T) {
+	engine := tempEngine(t)
+	sceneA, sceneB := common.HashID("sceneA"), common.HashID("sceneB")
+	mustCreateTopic(t, engine, sceneA, 1000, []string{"memory", "agent"})
+	mustCreateTopic(t, engine, sceneB, 1000, []string{"memory", "database"})
+	if _, err := repo.SyncL1NodesFromL2(engine, core.DefaultAgentID); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if _, err := BuildHyperedges(engine, core.DefaultAgentID, 0.15); err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	nodeA, err := core.ReadSceneNode(engine, core.DefaultAgentID, core.SceneNodeID(sceneA))
+	if err != nil || len(nodeA.EdgeIDs) != 1 {
+		t.Fatalf("node A should hold 1 edge: %+v err=%v", nodeA, err)
+	}
+	edgeID := nodeA.EdgeIDs[0]
+	if _, err := engine.WriteRecord(core.DefaultAgentID, core.RecL1Hyperedge, edgeID, []byte(`{"id":`)); err != nil {
+		t.Fatalf("make the edge unreadable: %v", err)
+	}
+
+	if _, err := BuildHyperedges(engine, core.DefaultAgentID, 0.15); common.CodeOf(err) != common.ErrDeserialization {
+		t.Fatalf("the build must report the edge it could not read, got %v", err)
+	}
+	rt, data, err := engine.ReadRecord(core.DefaultAgentID, edgeID)
+	if err != nil || rt != core.RecL1Hyperedge || string(data) != `{"id":` {
+		t.Fatalf("the refused pass rewrote the edge anyway: rt=%d data=%q err=%v", rt, data, err)
+	}
+}

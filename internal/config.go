@@ -11,6 +11,7 @@ package internal
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"maps"
 	"os"
 	"slices"
@@ -55,7 +56,13 @@ func openEngine(path string, allowCreate bool) (*core.StorageEngine, error) {
 // file's registry records.
 func assemble(engine *core.StorageEngine, cfg *MemHopConfig) *DB {
 	ctx, cancel := context.WithCancel(context.Background())
-	idToName, nameToID := loadTenantRegistry(engine)
+	idToName, nameToID, registryErr := loadTenantRegistry(engine)
+	if registryErr != nil {
+		// One domain's key will not resolve. That costs the file nothing — every
+		// name that did resolve keeps working — and the action it does block is
+		// creating a tenant, which is refused where it is asked for.
+		slog.Warn("memhop: tenant registry carries an unreadable key; creating a sub-agent is refused until it resolves", "err", registryErr)
+	}
 	return &DB{
 		engine: engine,
 		config: cfg,
@@ -133,9 +140,13 @@ func OpenDB(path string, llmCfg LlmConfig, defaults MemHopDefaults, primary *cor
 }
 
 // loadTenantRegistry rebuilds the tenant name maps from the on-file
-// registry records so ensureRegistered reuses stable IDs across restarts.
-func loadTenantRegistry(engine *core.StorageEngine) (idToName map[uint64]string, nameToID map[string]uint64) {
-	listed := repo.ListAgentRegistry(engine)
+// registry records so ensureRegistered reuses stable IDs across restarts. The
+// error it brings back reports a domain whose key will not resolve to a name: the
+// file stays open and every name that did resolve keeps working, so this is
+// recorded and warned once rather than failed — what it costs is creating a
+// tenant.
+func loadTenantRegistry(engine *core.StorageEngine) (idToName map[uint64]string, nameToID map[string]uint64, unresolved error) {
+	listed, err := repo.ListAgentRegistry(engine)
 	idToName = make(map[uint64]string, len(listed))
 	nameToID = make(map[string]uint64, len(listed))
 	ids := slices.Sorted(maps.Keys(listed))
@@ -149,5 +160,5 @@ func loadTenantRegistry(engine *core.StorageEngine) (idToName map[uint64]string,
 			nameToID[name] = id
 		}
 	}
-	return idToName, nameToID
+	return idToName, nameToID, err
 }

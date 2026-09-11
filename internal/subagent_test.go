@@ -217,7 +217,56 @@ func TestSubAgentRefusesAnUnusableName(t *testing.T) {
 	if _, err := db.SubAgent(sub, core.ProfileSlot{Name: string(long)}); err == nil {
 		t.Fatal("a name past the cap must be refused")
 	}
-	if listed := repo.ListAgentRegistry(db.engine); len(listed) != 0 {
+	listed, unresolved := repo.ListAgentRegistry(db.engine)
+	if unresolved != nil {
+		t.Fatalf("a registry with no records has nothing unresolved: %v", unresolved)
+	}
+	if len(listed) != 0 {
 		t.Fatalf("a refused SubAgent left %d domains on disk: %+v", len(listed), listed)
+	}
+}
+
+// A tenant key that will not read back is still a domain, and the name it carried is
+// exactly what cannot be recovered. So while one is pending no name can be proven
+// free: creating a tenant would hand the host an empty domain under a name a real
+// domain already holds, and the memory behind the unreadable key becomes
+// unreachable — not listable, not deletable, not reopenable by name.
+func TestSubAgentRefusedWhileATenantKeyWillNotResolve(t *testing.T) {
+	primarySrv, _ := countingLLMServer(t, turnKeywords)
+	db := openPrimaryOn(t, t.TempDir(), primarySrv.URL)
+	sub := LlmConfig{APIURL: primarySrv.URL, APIKey: "test", Model: "mock"}
+
+	worker, err := db.SubAgent(sub, core.ProfileSlot{Name: "worker", Role: "keeper"})
+	if err != nil {
+		t.Fatalf("SubAgent: %v", err)
+	}
+	workerID := db.nameToID["worker"]
+	runTurn(t, worker)
+	if _, err := db.engine.WriteRecord(workerID, core.RecAgentRegistry, workerID, []byte(`{"ke`)); err != nil {
+		t.Fatalf("damage the tenant key: %v", err)
+	}
+
+	if _, err := db.SubAgent(sub, core.ProfileSlot{Name: "other"}); common.CodeOf(err) != common.ErrDeserialization {
+		t.Fatalf("a new name must not be handed out while a key is unresolved, got %v", err)
+	}
+	listed, unresolved := repo.ListAgentRegistry(db.engine)
+	if len(listed) != 0 {
+		t.Fatalf("the refusal created a domain: %+v", listed)
+	}
+	if unresolved == nil {
+		t.Fatal("the damaged domain must stay reported until it reads back")
+	}
+
+	// The refusal is scoped to creating, not to using: every name that resolved
+	// still reaches the domain it belongs to, with its memory intact.
+	again, err := db.SubAgent(sub, core.ProfileSlot{Name: "worker"})
+	if err != nil {
+		t.Fatalf("an already-resolved name must still work: %v", err)
+	}
+	if again.agentID != workerID {
+		t.Fatalf("the resolved name moved to domain %d, want %d", again.agentID, workerID)
+	}
+	if got, err := again.GetL0(); err != nil || got.Role != "keeper" {
+		t.Fatalf("the worker domain reads %+v/%v, want the profile it was created with", got, err)
 	}
 }

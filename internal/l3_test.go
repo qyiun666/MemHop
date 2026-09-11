@@ -779,3 +779,67 @@ func TestQueryL3SubgraphReportsUnreadableNode(t *testing.T) {
 		t.Fatalf("want ErrDeserialization for an unreadable member, got %v", err)
 	}
 }
+
+// The start node is an id a previous read handed the host, so "no such node" and
+// "the node will not read back" are two different answers: the first sends the host
+// to another node, the second tells it this graph is damaged where it stands.
+// Answering the first for both would let a damaged graph read as an empty one and
+// be re-imported over.
+func TestQueryL3SubgraphReportsUnreadableStartNode(t *testing.T) {
+	db := newL3TestDB(t)
+	res, err := db.ImportL3(core.DefaultAgentID, []L3ImportItem{
+		{Title: "a", Domain: "g", Related: []L3Relation{{Titles: []string{"b"}}}},
+		{Title: "b", Domain: "g"},
+	}, L3ImportSkip)
+	if err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	graphHash, err := common.ParseID(res.GraphIDs[0])
+	if err != nil {
+		t.Fatalf("graph id: %v", err)
+	}
+	startID := repo.NodeIDL3(graphHash, "a")
+	if _, err := db.engine.WriteRecord(core.SharedPoolAgentID, core.RecL3GraphNode,
+		startID, []byte(`{"id":`)); err != nil {
+		t.Fatalf("make the start node unreadable: %v", err)
+	}
+
+	if _, err := db.QueryL3Subgraph(core.DefaultAgentID, res.GraphIDs[0],
+		common.FormatHash(startID), 1, nil); common.CodeOf(err) != common.ErrDeserialization {
+		t.Fatalf("an unreadable start node must not be answered as a missing one, got %v", err)
+	}
+}
+
+// A graph's cascade is built by enumerating the whole node and edge buckets and
+// keeping the members, so a member that will not read back has to stop the delete:
+// the survivors would keep naming a graph the host was told is gone, and a re-import
+// under the same name would adopt them as its own.
+func TestDeleteL3RefusesUnreadableNode(t *testing.T) {
+	db := newL3TestDB(t)
+	res, err := db.ImportL3(core.DefaultAgentID, []L3ImportItem{
+		{Title: "a", Domain: "g", Related: []L3Relation{{Titles: []string{"b"}}}},
+		{Title: "b", Domain: "g"},
+	}, L3ImportSkip)
+	if err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	graphHash, err := common.ParseID(res.GraphIDs[0])
+	if err != nil {
+		t.Fatalf("graph id: %v", err)
+	}
+	survivor := repo.NodeIDL3(graphHash, "a")
+	if _, err := db.engine.WriteRecord(core.SharedPoolAgentID, core.RecL3GraphNode,
+		repo.NodeIDL3(graphHash, "b"), []byte(`{"id":`)); err != nil {
+		t.Fatalf("make one node unreadable: %v", err)
+	}
+
+	if err := db.DeleteL3(core.DefaultAgentID, res.GraphIDs[0]); common.CodeOf(err) != common.ErrDeserialization {
+		t.Fatalf("the cascade must refuse on a member it could not enumerate, got %v", err)
+	}
+	if _, err := core.ReadHypergraphNode(db.engine, core.SharedPoolAgentID, survivor); err != nil {
+		t.Fatalf("a refused cascade deletes no member: %v", err)
+	}
+	if _, err := repo.ReadSharedGraphL3(db.engine, res.GraphIDs[0]); err != nil {
+		t.Fatalf("nor the graph slot itself: %v", err)
+	}
+}

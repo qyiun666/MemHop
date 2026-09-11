@@ -69,6 +69,12 @@ func ResolveSubgraphStart(engine *core.StorageEngine, agentID uint64, graphID, s
 	}
 	startNode, err := core.ReadHypergraphNode(engine, agentID, startHash)
 	if err != nil {
+		if common.CodeOf(err) != common.ErrNotFound {
+			// A start node that exists but will not read back is not a start node
+			// that is missing: the first tells the host to look elsewhere, the
+			// second tells it the graph is damaged here.
+			return 0, 0, err
+		}
 		return 0, 0, common.NewError(common.ErrNotFound, "start node not found", err)
 	}
 	if startNode.GraphID != graphHash {

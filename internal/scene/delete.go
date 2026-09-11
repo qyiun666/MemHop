@@ -40,15 +40,18 @@ func DeleteCascade(ac *domain.Context, agentID uint64, scenes, topics []uint64) 
 
 // DetachGraph clears the L3 anchor of every scene that named graphID, scanning
 // the domain because anchors live only on scenes — a graph slot keeps no reverse
-// list. Callers hold the domain lock.
+// list. The scan is the one that decides which scenes get rewritten, so a scene
+// that will not read back stops the pass rather than keeping an anchor nobody will
+// ever clear again. Callers hold the domain lock.
 func DetachGraph(engine *core.StorageEngine, agentID uint64, graphID uint64) error {
-	var targets []core.SceneSlot
-	for s := range core.IterAll[core.SceneSlot](engine, agentID, core.RecL2Scene) {
-		if s.L3ID == graphID {
-			targets = append(targets, s)
-		}
+	scenes, err := repo.CollectAllScenesL2(engine, agentID)
+	if err != nil {
+		return err
 	}
-	for _, slot := range targets {
+	for _, slot := range scenes {
+		if slot.L3ID != graphID {
+			continue
+		}
 		slot.L3ID = 0
 		if err := core.WriteSceneSlot(engine, agentID, slot.SceneID, &slot); err != nil {
 			return err
