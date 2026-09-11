@@ -2,10 +2,8 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 // Package turn holds the small methods that settle one finished turn into the
-// topic Search opened for it: resolving the two ids the settle names, and the
-// gate on which topic may be settled. The Update big method in the composition
-// root locks the domain and composes them around the one keyword-distillation
-// call that gives the turn its keyword track.
+// topic opened for it: resolving the two ids the settle names, the gate on which
+// topic may be settled, and the profile read that precedes it.
 
 package turn
 
@@ -15,8 +13,8 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
-// Targets resolves the scene a turn settles into plus the topic id Search minted
-// for it. Both are ids the library issued and the host hands back, so nothing here
+// Targets resolves the scene a turn settles into plus the topic id minted for it.
+// Both are ids this library issues and callers hand back, so nothing here
 // interprets them: an unparsable id or the reserved zero topic is refused before
 // any record is read.
 func Targets(sceneID, topicID string) (uint64, uint64, error) {
@@ -51,10 +49,9 @@ func SettleTarget(sceneID, topicID, turnSeq uint64) error {
 		"Update: topic_id is not a turn this scene opened; settle the id Search returned")
 }
 
-// ReadProfile loads the domain's L0 profile. A profile that was never
-// written reads as empty (the same surface GetL0 gives); any other failure
-// aborts the read, so Search never hands back a context silently missing
-// its profile.
+// ReadProfile loads the domain's L0 profile. A profile that was never written
+// reads as the zero value; any other failure aborts the read, so a caller never
+// gets a context silently missing its profile.
 func ReadProfile(engine *core.StorageEngine, agentID uint64) (core.ProfileSlot, error) {
 	slot, err := repo.GetProfileL0(engine, agentID)
 	if err != nil {

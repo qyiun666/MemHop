@@ -4,15 +4,11 @@
 // Package content holds the small methods over a topic's L4 content: the key
 // every one of them is addressed by, the write contract, appending one record,
 // reading a topic's two tracks back, rendering a transcript for distillation,
-// and trimming a read to an LLM payload budget.
+// and the per-record payload budgets.
 //
 // It is named for what it serves rather than for a layer: a turn's dialogue
 // originals and its operation events are the same records differing only in
-// Kind, and a plan tree hangs off that same key. Update writes no content, so
-// this package's Append is the only way a record gets into a topic.
-//
-// The big methods (AppendArchive, SearchL4, PlanCreate, PlanNodeAdd,
-// PlanNodeUpdate, PlanState) stay in the composition root with the domain lock.
+// Kind, so one write path serves both.
 package content
 
 import (
@@ -25,10 +21,9 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
-// ParseTopicID parses the one key a turn's content and its plan tree share — the
-// topic id Search issued for the turn — and rejects 0. Zero is the unset value of
-// every record's owning id, so admitting it would let a caller address the
-// unkeyed residue of a domain.
+// ParseTopicID parses the one key a turn's records are addressed by and rejects
+// 0. Zero is the unset value of every record's owning id, so admitting it would
+// let a caller address the unkeyed residue of a domain.
 func ParseTopicID(topicID string) (uint64, error) {
 	h, err := common.ParseID(topicID)
 	if err != nil {
@@ -41,15 +36,14 @@ func ParseTopicID(topicID string) (uint64, error) {
 }
 
 // MaxEventPayload caps a single event payload (no raw token streams). An event
-// over the budget is refused: the payload is the host's own record of what
-// happened, and silently shortening it would leave a truncated event that reads
+// over the budget is refused rather than shortened: a truncated event reads
 // exactly like a complete one.
 const MaxEventPayload = 4 * 1024
 
 // MaxUtterancePayload caps a single dialogue original. The budget is what keeps
-// one append from turning a settle into an unbounded number of LLM round-trips
-// inside the domain lock: extraction splits its input into 2000-rune chunks and
-// calls once per chunk, so an unbounded text is an unbounded lock hold.
+// one append from turning into an unbounded number of LLM round-trips held inside
+// the domain lock: the calls a text costs grow with its length, so an unbounded
+// text is an unbounded lock hold.
 const MaxUtterancePayload = 64 * 1024
 
 // ValidateAppend checks what every content write path requires of a record,
@@ -103,19 +97,20 @@ func checkPayload(content string, budget int, what string) error {
 	return nil
 }
 
-// Append writes one record into the topic's content track and returns the Seq it
-// landed on. NodeSeq lives on the record: a non-zero one names the plan step an
-// event belongs to, which is how a read attributes an event to a step afterwards.
+// Append is the only path that writes a record into a topic: it lands one entry
+// on the topic's content track and returns the Seq it took. NodeSeq lives on the
+// record: a non-zero one names the plan step an event belongs to, which is how a
+// read attributes an event to a step afterwards.
 //
-// Field ownership is the contract. Of the record a host passes, the ones the
+// Field ownership is the contract. Of the record a caller passes, the ones the
 // utterance kind owns are adopted verbatim (Role, ContentType, EventType,
-// Content, CreatedAt) and the rest are assigned here — Kind is what the host
+// Content, CreatedAt) and the rest are assigned here — Kind is what the caller
 // chose to validate against, IDHash follows from (topic, Seq), and an event
 // leaves Role 0 and ContentType text because a thing that happened has no
 // speaker and no medium. So neither kind can forge the other's shape.
 //
 // Seq 0 allocates a slot above every one the topic already holds, including the
-// two reserved for dialogue: a host records events while the turn runs and
+// two reserved for dialogue: a caller records events while the turn runs and
 // appends the originals afterwards, and the originals must still land on Seq 1
 // and 2. A non-zero Seq writes that slot, and taking a slot that is already held
 // is an overwrite, not an error — that is what lets a replayed turn converge
@@ -164,12 +159,12 @@ func Read(engine *core.StorageEngine, agentID uint64, ac *domain.Context, topicI
 	return out, nil
 }
 
-// RenderForDistill turns a topic's utterances into the text one keyword call
+// RenderForDistill turns a topic's utterances into the one text a keyword call
 // reads: Seq order, one "<speaker>: <content>" line each.
 //
-// Seq order is the order the topic reads back in, so the transcript that produced
-// a topic's keywords is the transcript a host sees. The speaker labels are not
-// decoration: without them the sides of an exchange collapse into one
+// Seq order is the order the topic reads back in, so the text that produced a
+// topic's keywords is the text its transcript reads back as. The speaker labels
+// are not decoration: without them the sides of an exchange collapse into one
 // undifferentiated text and the extraction loses who asserted what.
 func RenderForDistill(utterances []core.ArchiveSlot) string {
 	var b strings.Builder

@@ -1,31 +1,34 @@
 # internal/domain — 域状态容器
 
-- **职责**：`Context`（原 agentContext）= 单个 agent 域的业务状态：`Mu` 域锁、
-  `L2Meta`/`L4`/`Plans` 缓存、`DreamInFlight`、`OpCtx`/`OpCancel`、
-  `LastActiveAt`，以及构造时注入的 `Engine`/`LLM`/`Defaults`。
-  另有 `PlanCache`（无自带锁，靠 `Context.Mu` 串行；键是**开出该计划的那一轮**的
-  话题 ID，一个聚合存在当且仅当该键下还有节点）。面只有
-  `Aggregate`/`HasSeq`/`Subtree`/`NextSeq`/`UpsertNode`/`RemoveNodes`/
-  `RemoveTopic`：树不接收事件——
-  事件是 L4 内容，不进这张缓存。`HasSeq` 是缓存被内容侧**单向问一次**（一条事件要
-  绑的步骤在不在树上），问完仍由内容侧自己决定拒不拒写，缓存不因此知道任何事件；
-  `Subtree` 给读侧当过滤集合（一步加它整棵子树的序号，沿 `ParentSeq` 求闭包——
-  序号没有前缀形状可匹配，树的形状只有这里知道），`NextSeq` 给写侧当发号器。
-  另有 L2Meta 缓存维护
-  （`SyncL2Meta`/`RemoveTopicsFromIndices`/`RetargetL2Meta`）。
-- **纪律**：所有字段只在持有 `Mu` 时读写（组合根在大方法入口拿锁）。
-  本包不拿引擎以外的资源，不做业务编排——编排是小方法包与根的事。
-- **陷阱**：写记录帧后必须紧跟 `SyncL2Meta`（存储 → 缓存序）；
-  `NewContext` 是重建点（空闲回收后的域从这里复活，缓存全部从记录重建）。
-  `L4` 不是加速器而是**唯一的枚举手段**：单条内容的地址能由 (话题, Seq) 派生，
-  但「这个话题一共有哪几条内容」只有这里有。它也只在 `NewContext` 重建，
-  运行期不自愈——任何删内容的路径都必须等磁盘删成功后再摘镜像
-  （`repo.DeleteTopicArchives` / `repo.DropExpiredArchives` 已内置这一步序），
-  漏一处就让该话题之后每次读都撞「索引点名已不存在的记录」而硬错。
-  反向不成立：过期清扫先问索引要 id（`ExpiredBefore` 只读不改），删盘失败时
-  镜像仍完整，下一次清扫还会看到它们。
-- `RemoveTopicsFromIndices` 摘的是 L2Meta 与 `Plans`，**不摘 L4**：内容记录由
-  调用方自己删（`scene.DeleteTopics` 走 `repo.DeleteTopicArchives`），那一步已经
-  按「盘成功→再摘镜像」的序处理了内容缓存。在这里重复摘一次不会出错，但会把
-  「谁负责哪份镜像」搅浑。反过来的漏配是真 bug：删话题不摘 `Plans` 会留下一条
-  陈旧的 `LastActiveAt`，而保留窗的在途豁免正读它——一棵死树能凭此长期豁免清扫。
+## 职责
+
+- `Context`：单个 agent 域的状态——`Mu` 域锁、`L2Meta`/`L4`/`Plans` 三份缓存、
+  `DreamInFlight`、`OpCtx`/`OpCancel`、`LastActiveAt`，以及构造时注入的
+  `Engine`/`LLM`/`Defaults`。
+- `NewContext`：把一个域的全部缓存从记录重建出来——空闲回收后的域从这里复活。
+- `PlanCache`：按话题键聚合的计划树镜像，面只有
+  `Aggregate`/`HasSeq`/`Subtree`/`NextSeq`/`UpsertNode`/`RemoveNodes`/`RemoveTopic`。
+- L2Meta 缓存维护：`SyncL2Meta`/`RemoveTopicsFromIndices`/`RetargetL2Meta`。
+- 本包不拿引擎以外的资源，也不做编排：锁由调用方持有，编排在调用方。
+
+## 契约
+
+- 每个字段只在持有 `Mu` 时被读写；`PlanCache` 不内置锁，靠同一条串行。
+- 写记录帧后必须紧跟 `SyncL2Meta`（存储 → 缓存序）。
+- `HasSeq` 只回答「树上有没有这一步」，拒不拒写由问它的人决定，缓存不因此知道任何
+  别的东西；`Subtree` 给调用方当过滤集合，`NextSeq` 给调用方当发号器。
+
+## 陷阱
+
+- `L4` 不是加速器而是**唯一的枚举手段**：单条内容的地址能由 (话题, `Seq`) 派生，但
+  「这个话题一共有哪几条内容」只有这里有。它也只在 `NewContext` 重建，运行期不自愈
+  ——任何删内容的路径都必须等磁盘删成功后再摘镜像，漏一处就让该话题之后每次读都撞
+  「索引点名已不存在的记录」而硬错。
+- 反向不成立：过期清扫先问索引要 id（`ExpiredBefore` 只读不改），删盘失败时镜像仍
+  完整，下一次清扫还会看到它们。
+- `RemoveTopicsFromIndices` 摘 L2Meta 与 `Plans`，**不摘 L4**：内容那份镜像由删内容
+  的那条路径按「盘成功 → 再摘镜像」自己摘。在这里重复摘一次不会出错，但会把「谁
+  负责哪份镜像」搅浑。反过来的漏配是真 bug：删话题不摘 `Plans` 会留下一条陈旧的
+  `LastActiveAt`，而豁免判定正读它——一棵死树能凭此长期豁免清扫。
+- `Plans` 的一个键存在当且仅当该键下还有节点；`Subtree` 对未知的根只返回它自己。
+  序号没有前缀形状可匹配，树的形状只有这里知道。

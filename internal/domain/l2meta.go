@@ -23,13 +23,12 @@ func (c *Context) SyncL2Meta(idHash uint64) {
 	c.L2Meta.Update(index.L2MetaFromTopic(topic))
 }
 
-// RemoveTopicsFromIndices drops the given topics from the agent's L2Meta cache
-// and from the plan trees they owned; used by the DeleteScene / DeleteTopic
-// paths after their records are tombstoned. A deleted topic must not leave a
-// cached tree behind — the aggregate carries the recency a retention sweep is
-// exempt on, so a stale one could keep a dead plan alive. The content mirror is
-// deliberately not this function's business: whoever deletes those records drops
-// the mirror once the disk agrees. Callers hold c.Mu.
+// RemoveTopicsFromIndices drops the given topics from the L2Meta cache and from
+// the plan trees they owned. A deleted topic must not leave a cached tree behind
+// — the aggregate carries the recency an expiry sweep is exempt on, so a stale
+// one could keep a dead plan alive. The content mirror is deliberately not this
+// function's business: whoever deletes those records drops the mirror once the
+// disk agrees. Callers hold c.Mu.
 func (c *Context) RemoveTopicsFromIndices(ids []uint64) {
 	for _, id := range ids {
 		c.L2Meta.Remove(id)
@@ -37,8 +36,8 @@ func (c *Context) RemoveTopicsFromIndices(ids []uint64) {
 	}
 }
 
-// RetargetL2Meta moves every topic of the merged-away scenes to the primary
-// scene in the L2MetaIndex, mirroring repo.MergeScenesL2 after a merge.
+// RetargetL2Meta moves every topic of the merged-away scenes to the primary scene
+// in the L2MetaIndex; call it once the merge has been applied to the records.
 func (c *Context) RetargetL2Meta(primaryHash uint64, removed map[uint64]struct{}) {
 	if c.L2Meta == nil {
 		return
