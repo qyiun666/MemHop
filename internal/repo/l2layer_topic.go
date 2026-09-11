@@ -72,8 +72,10 @@ func ListTopicsL2(q TopicListQuery) ([]core.TopicSlot, error) {
 		if c := cmp.Compare(a.Depth, b.Depth); c != 0 {
 			return c
 		}
-		// Two topics can tie on both keys when a turn's bounds are the group's
-		// bounds; without this the order is whatever the record scan yielded.
+		// What ties on both keys is two topics at the same depth sharing one user
+		// timestamp — and a fused parent is stamped with its group's earliest
+		// turn's timestamp, so any same-depth topic holding that instant ties with
+		// it. Without a final key the order is whatever the record scan yielded.
 		return cmp.Compare(a.ID, b.ID)
 	})
 	return out, nil

@@ -364,10 +364,34 @@ func TestCreateTurnTopicL2ReplayKeepsSunkPosition(t *testing.T) {
 	}
 }
 
-// A fused parent carries its group's earliest user timestamp, so it ties with a
-// turn that shares those bounds. Ties have to break on something the scan does
-// not decide, or the same scene answers in one order on one read and another
-// order on the next.
+// A stored record that will not decode leaves the replay unable to say where that
+// turn belongs, so the settle refuses and rewrites nothing: guessing depth 1 would
+// put a second version of one turn on the read path. The read has to name that
+// failure, or a caller cannot tell it apart from a transport error.
+func TestCreateTurnTopicL2RefusesUndecodableRecord(t *testing.T) {
+	engine := tempEngine(t)
+	const sceneID = uint64(7)
+	topicID := core.ComputeTurnTopicID(sceneID, 1)
+	if !CreateTurnTopicL2(engine, core.DefaultAgentID, sceneID, topicID, []string{"登录"}, 1000, 1001) {
+		t.Fatal("first settle")
+	}
+	if _, err := engine.WriteRecord(core.DefaultAgentID, core.RecL2Topic, topicID,
+		[]byte(`{"id":`)); err != nil {
+		t.Fatalf("replace the payload with an undecodable one: %v", err)
+	}
+	if CreateTurnTopicL2(engine, core.DefaultAgentID, sceneID, topicID, []string{"刷新"}, 1000, 1100) {
+		t.Fatal("a replay must refuse to place a turn whose stored record will not read")
+	}
+	if _, err := core.ReadTopicLenient(engine, core.DefaultAgentID, topicID); common.CodeOf(err) != common.ErrDeserialization {
+		t.Fatalf("the read must report a decode failure by name, got %v", err)
+	}
+}
+
+// Two topics at the same depth can share one user timestamp — a fused parent is
+// stamped with its group's earliest turn's timestamp, so any same-depth topic
+// holding that instant ties with it on both sort keys. Ties have to break on
+// something the scan does not decide, or the same scene answers in one order on
+// one read and another order on the next.
 func TestListTopicsL2BreaksTiesOnID(t *testing.T) {
 	engine := tempEngine(t)
 	const sceneID = uint64(7)

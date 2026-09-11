@@ -131,7 +131,7 @@ func ReadTopicLenient(engine *StorageEngine, agentID, idHash uint64) (*TopicSlot
 	}
 	var topic TopicSlot
 	if err := json.Unmarshal(data, &topic); err != nil {
-		return nil, err
+		return nil, common.NewError(common.ErrDeserialization, "unmarshal TopicSlot", err)
 	}
 	return &topic, nil
 }
