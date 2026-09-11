@@ -93,12 +93,6 @@ func (idx *L2MetaIndex) GetByScene(sceneID uint64) []uint64 {
 	return slices.Clone(idx.byScene[sceneID])
 }
 
-func (idx *L2MetaIndex) Len() int {
-	idx.mu.RLock()
-	defer idx.mu.RUnlock()
-	return len(idx.entries)
-}
-
 // Iter iterates over all entries as a pull iterator; the read lock is held
 // for the whole loop, so yields must not call back into the index.
 func (idx *L2MetaIndex) Iter() iter.Seq2[uint64, *L2Meta] {

@@ -162,34 +162,28 @@ type HypergraphSlot struct {
 	UpdatedAt int64            `json:"updated_at"`
 }
 
-// HypergraphNode is a node within an L3 hypergraph. Importance has no write
-// path in the engine and stays out of the public DTO; it remains here so a
-// record written by an older file still decodes.
+// HypergraphNode is a node within an L3 hypergraph.
 type HypergraphNode struct {
-	IDHash     uint64   `json:"id_hash"`
-	GraphID    uint64   `json:"graph_id"`
-	Title      string   `json:"title"`
-	NodeType   string   `json:"node_type"`
-	Content    string   `json:"content"`
-	Keywords   []string `json:"keywords"`
-	SourceRef  *string  `json:"source_ref,omitempty"`
-	Importance float32  `json:"importance"`
-	CreatedAt  int64    `json:"created_at"`
-	UpdatedAt  int64    `json:"updated_at"`
+	IDHash    uint64   `json:"id_hash"`
+	GraphID   uint64   `json:"graph_id"`
+	Title     string   `json:"title"`
+	NodeType  string   `json:"node_type"`
+	Content   string   `json:"content"`
+	Keywords  []string `json:"keywords"`
+	SourceRef *string  `json:"source_ref,omitempty"`
+	CreatedAt int64    `json:"created_at"`
+	UpdatedAt int64    `json:"updated_at"`
 }
 
 // HypergraphEdge is a hyperedge within an L3 hypergraph: an unordered relation
 // over its member nodes, identified by members plus Kind (see repo.CreateEdgeL3).
-// Weight is written as a constant and read by nothing — the engine computes no
-// edge weight — while Label has no write path at all. Both stay out of the
-// public DTO and remain here so older records still decode.
+// There is no weight: the engine computes none, so an edge carries exactly what
+// identifies it — who is related, and how.
 type HypergraphEdge struct {
 	IDHash    uint64        `json:"id_hash"`
 	GraphID   uint64        `json:"graph_id"`
 	Kind      GraphEdgeKind `json:"kind"`
 	NodeIDs   []uint64      `json:"node_ids"`
-	Weight    float32       `json:"weight"`
-	Label     *string       `json:"label,omitempty"`
 	CreatedAt int64         `json:"created_at"`
 }
 

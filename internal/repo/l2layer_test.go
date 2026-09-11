@@ -14,6 +14,15 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/index"
 )
 
+// countL2Meta counts the cached topics by iterating, the way every reader does.
+func countL2Meta(idx *index.L2MetaIndex) int {
+	n := 0
+	for range idx.Iter() {
+		n++
+	}
+	return n
+}
+
 // A scene is a host session: its id comes from the host, and creating it
 // twice must not rename or duplicate it.
 func TestCreateSceneL2WithIDIsIdempotent(t *testing.T) {
@@ -91,8 +100,8 @@ func TestListTopicsL2FromL2Meta(t *testing.T) {
 	}
 
 	l2Meta := index.BuildL2MetaFromEngine(engine, core.DefaultAgentID)
-	if l2Meta.Len() != len(raw) {
-		t.Fatalf("L2MetaIndex entries = %d, want %d", l2Meta.Len(), len(raw))
+	if countL2Meta(l2Meta) != len(raw) {
+		t.Fatalf("L2MetaIndex entries = %d, want %d", countL2Meta(l2Meta), len(raw))
 	}
 
 	q := func(mode uint8, sceneID uint64, depth uint8) ([]core.TopicSlot, error) {
@@ -145,16 +154,6 @@ func TestListTopicsL2FromL2Meta(t *testing.T) {
 			if got[i].ID != id {
 				t.Errorf("scene-filtered[%d].ID = %d, want %d", i, got[i].ID, id)
 			}
-		}
-	})
-
-	t.Run("mode3_reads_single_topic", func(t *testing.T) {
-		got, err := q(3, 11, 0)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(got) != 1 || got[0].ID != 11 {
-			t.Fatalf("mode 3 = %+v, want single topic 11", got)
 		}
 	})
 

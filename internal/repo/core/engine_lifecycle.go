@@ -77,7 +77,6 @@ func Open(path string) (*StorageEngine, error) {
 		activeHeader: activeIdx,
 		index:        make(map[uint64]map[uint64]uint64),
 		byAgentType:  make(map[uint64]map[uint8]map[uint64]struct{}),
-		recordCount:  active.RecordCount,
 		nextOffset:   DataStart,
 	}
 	scanStart, snapshotLoaded, snapshotCorrupt := e.restoreFromSnapshot(active)
@@ -105,7 +104,6 @@ func Open(path string) (*StorageEngine, error) {
 		e.abortOpen()
 		return nil, err
 	}
-	e.recordCount = uint32(e.totalRecordsLocked())
 	e.rebuildByAgentType()
 	return e, nil
 }
@@ -160,7 +158,6 @@ func (e *StorageEngine) restoreFromSnapshot(active *FileHeader) (scanStart uint6
 		slog.Warn("engine: snapshot unreadable, rebuilding index by full scan",
 			"err", err)
 		e.index = make(map[uint64]map[uint64]uint64)
-		e.recordCount = 0
 		return DataStart, false, true
 	}
 	// Recover records appended after the snapshot (crash without checkpoint).
@@ -298,7 +295,7 @@ func (e *StorageEngine) buildCheckpointHeader(snapOffset int64, snapLen uint32) 
 	h.CommitID++
 	h.SnapshotOffset = uint64(snapOffset)
 	h.SnapshotLength = snapLen
-	h.RecordCount = e.recordCount
+	h.RecordCount = uint32(e.totalRecordsLocked())
 	h.RecordEnd = e.nextOffset
 	h.CRC32 = h.calculateCRC()
 	return h
@@ -318,7 +315,6 @@ func (e *StorageEngine) loadSnapshot() error {
 		return err
 	}
 	e.index = idx
-	e.recordCount = uint32(e.totalRecordsLocked())
 	return nil
 }
 

@@ -67,9 +67,8 @@
    `Rec*`（`readJSON` 比对帧内类型，不符即 `ErrNotFound`）。丢掉这个校验
    会让 `UpdateL3(节点 id)` 读到"空名图槽"再把节点记录改写成图槽。
 3.2 **L3 超边身份 = 排序成员 + kind**：`CreateEdgeL3` 的 id 含 kind，
-   `EdgeKeyL3` 是同一身份的语义键，导入侧按它去重。`Weight` 恒写 1.0
-   （引擎不做任何边权计算，也没有读者），`Importance`/`Label` 无写入路径；
-   三者都故意不进公开 DTO，留在记录里只为旧文件仍能解码。
+   `EdgeKeyL3` 是同一身份的语义键，导入侧按它去重。边没有权重：引擎不算边权，
+   也没有按权重分支的读法，一条边携带的就是「谁与谁相关、以哪种关系」。
 3.3 **共享域的图解析只有一个入口**：`ReadSharedGraphL3(engine, hexID)` 把
    「解析 hex 图 id + 确认图存在于文件级公共域」收成一处，锚点校验与 L3 的
    读/改/删全部经它取图槽。调用方不得自己 `ParseID` 再 `ReadGraphSlot`——

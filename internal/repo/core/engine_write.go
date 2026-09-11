@@ -90,9 +90,6 @@ func (e *StorageEngine) updateIndexAfterWrite(records []RecordEntry, offsets []u
 		if e.index[rec.AgentID] == nil {
 			e.index[rec.AgentID] = make(map[uint64]uint64)
 		}
-		if _, exists := e.index[rec.AgentID][rec.IDHash]; !exists {
-			e.recordCount++
-		}
 		if oldOff, exists := e.index[rec.AgentID][rec.IDHash]; exists {
 			if oldRT, ok := e.recordTypeAt(oldOff); ok && oldRT != rec.RecordType {
 				delete(e.byAgentType[rec.AgentID][oldRT], rec.IDHash)

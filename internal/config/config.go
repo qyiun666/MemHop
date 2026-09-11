@@ -39,13 +39,3 @@ func (c LlmConfig) Validate() error {
 	}
 	return nil
 }
-
-func (c *MemHopConfig) Validate() error {
-	if c == nil {
-		return common.NewError(common.ErrConfig, "config is required")
-	}
-	if c.DBPath == "" {
-		return common.NewError(common.ErrConfig, "DBPath is required")
-	}
-	return c.LLM.Validate()
-}

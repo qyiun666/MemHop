@@ -144,11 +144,7 @@ func DistillL0Stage(ctx context.Context, ac *domain.Context, agentID uint64) (bo
 	if len(samples) == 0 {
 		return false, nil
 	}
-	llmSamples := make([]llmops.L1Sample, len(samples))
-	for i, s := range samples {
-		llmSamples[i] = llmops.L1Sample{IDHash: s.IDHash, Keywords: s.Keywords, Importance: s.Importance}
-	}
-	out, err := llmops.Distill(ctx, ac.LLM, llmSamples)
+	out, err := llmops.Distill(ctx, ac.LLM, samples)
 	if err != nil {
 		return false, err
 	}

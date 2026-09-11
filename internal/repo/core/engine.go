@@ -34,7 +34,6 @@ type StorageEngine struct {
 	activeHeader uint8                                    // 0 = A, 1 = B
 	index        map[uint64]map[uint64]uint64             // agentID → idHash → offset
 	byAgentType  map[uint64]map[uint8]map[uint64]struct{} // agentID → recordType → idHashes
-	recordCount  uint32
 	nextOffset   uint64
 	dirty        bool // records written/deleted since the last checkpoint
 	closed       bool // Close called; all operations return ErrClosed
@@ -121,11 +120,13 @@ func (e *StorageEngine) IterAgents() iter.Seq[uint64] {
 	}
 }
 
-// liveRecordCount is the number of live records across every agent domain.
+// liveRecordCount is the number of live records across every agent domain. The
+// index is the only thing that knows which records are live, so the count is read
+// off it rather than kept beside it.
 func (e *StorageEngine) liveRecordCount() uint32 {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	return e.recordCount
+	return uint32(e.totalRecordsLocked())
 }
 
 // mappedSize is the length of the mapped region, which is the file's length.

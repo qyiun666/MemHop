@@ -28,25 +28,14 @@ type TopicListQuery struct {
 }
 
 // ListTopicsL2 lists topics by mode: 1 = all topics up to depth, 2 = same but
-// restricted to sceneID, 3 = one topic by ID. depth is clamped to [1, MaxDepth];
-// results sorted by UserTimestamp for modes 1/2.
+// restricted to sceneID. depth is clamped to [1, MaxDepth]; results sorted by
+// UserTimestamp.
 func ListTopicsL2(q TopicListQuery) ([]core.TopicSlot, error) {
-	var idHash uint64
 	depth := q.Depth
 	if depth == 0 {
 		depth = 1
 	} else if depth > MaxDepth {
 		depth = MaxDepth
-	}
-	if q.Num != 1 {
-		idHash = q.SceneID
-	}
-	if q.Num == 3 {
-		slot, err := core.ReadTopicSlot(q.Engine, q.AgentID, idHash)
-		if err != nil {
-			return nil, err
-		}
-		return []core.TopicSlot{*slot}, nil
 	}
 	var out []core.TopicSlot
 	if q.MetaIdx != nil {
@@ -54,7 +43,7 @@ func ListTopicsL2(q TopicListQuery) ([]core.TopicSlot, error) {
 			if meta.Depth > depth {
 				continue
 			}
-			if q.Num == 2 && meta.SceneID != idHash {
+			if q.Num == 2 && meta.SceneID != q.SceneID {
 				continue
 			}
 			out = append(out, meta.ToTopicSlot())
@@ -64,7 +53,7 @@ func ListTopicsL2(q TopicListQuery) ([]core.TopicSlot, error) {
 			if topic.Depth > depth {
 				continue
 			}
-			if q.Num == 2 && topic.SceneID != idHash {
+			if q.Num == 2 && topic.SceneID != q.SceneID {
 				continue
 			}
 			out = append(out, topic)

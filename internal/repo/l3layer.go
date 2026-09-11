@@ -27,8 +27,6 @@ func ReadSharedGraphL3(engine *core.StorageEngine, hexID string) (*core.Hypergra
 // CreateEdgeL3 creates a hyperedge; ID = hash(graphID:nodeIDs:kind). The kind
 // is part of the identity because a node pair can carry several relations at
 // once — hashing the pair alone made "a part of b" overwrite "a related to b".
-// Weight is not a caller input: the engine has no edge-weight computation, so
-// every edge carries the same constant (see core.HypergraphEdge).
 func CreateEdgeL3(engine *core.StorageEngine, agentID uint64, graphID uint64, kind core.GraphEdgeKind, nodeIDs []uint64) (uint64, error) {
 	edgeID := common.HashID(fmt.Sprintf("%s:%v:%d", common.FormatHash(graphID), nodeIDs, kind))
 	edge := &core.HypergraphEdge{
@@ -36,7 +34,6 @@ func CreateEdgeL3(engine *core.StorageEngine, agentID uint64, graphID uint64, ki
 		GraphID:   graphID,
 		Kind:      kind,
 		NodeIDs:   nodeIDs,
-		Weight:    1.0,
 		CreatedAt: time.Now().UnixMilli(),
 	}
 	if err := core.WriteHypergraphEdge(engine, agentID, edgeID, edge); err != nil {

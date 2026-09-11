@@ -14,6 +14,16 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
+// countEntries reads the cache the way its callers do — by iterating — so a test
+// never needs an accessor the library itself does not use.
+func countEntries(idx *L2MetaIndex) int {
+	n := 0
+	for range idx.Iter() {
+		n++
+	}
+	return n
+}
+
 func TestL2MetaIndex(t *testing.T) {
 	t.Run("basic_crud", func(t *testing.T) {
 		idx := NewL2MetaIndex()
@@ -26,8 +36,8 @@ func TestL2MetaIndex(t *testing.T) {
 			UserTimestamp: 2000,
 		}
 		idx.Update(meta)
-		if idx.Len() != 1 {
-			t.Errorf("expected len 1, got %d", idx.Len())
+		if countEntries(idx) != 1 {
+			t.Errorf("expected len 1, got %d", countEntries(idx))
 		}
 		if got := idx.Get(42); got == nil || !slices.Equal(got.FusedKeywords, []string{"rust", "memory"}) {
 			t.Errorf("Get(42) should return the cached keywords, got %+v", got)
@@ -38,7 +48,7 @@ func TestL2MetaIndex(t *testing.T) {
 		if removed := idx.Remove(42); removed == nil || removed.Depth != 1 {
 			t.Error("Remove should return removed meta")
 		}
-		if idx.Len() != 0 {
+		if countEntries(idx) != 0 {
 			t.Error("should be empty after remove")
 		}
 	})
@@ -115,8 +125,8 @@ func TestBuildL2MetaFromEngine(t *testing.T) {
 	}
 
 	l2idx := BuildL2MetaFromEngine(engine, core.DefaultAgentID)
-	if l2idx.Len() != 1 {
-		t.Fatalf("expected 1 L2 entry, got %d", l2idx.Len())
+	if countEntries(l2idx) != 1 {
+		t.Fatalf("expected 1 L2 entry, got %d", countEntries(l2idx))
 	}
 	meta := l2idx.Get(101)
 	if meta == nil {

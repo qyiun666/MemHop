@@ -97,7 +97,6 @@ func (e *StorageEngine) applyDeletions(agentID uint64, deletedOffsets map[uint64
 		if oldRT, ok := e.recordTypeAt(offset); ok {
 			e.removeTypeLocked(agentID, oldRT, idHash)
 		}
-		e.recordCount--
 	}
 	if len(e.index[agentID]) == 0 {
 		delete(e.index, agentID)

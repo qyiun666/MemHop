@@ -82,18 +82,17 @@ func TestHypergraphNodeRoundtrip(t *testing.T) {
 	n := HypergraphNode{
 		IDHash: 1, GraphID: 100,
 		Title: "MemHop::Open", NodeType: "function",
-		Content:    "Opens or creates a MemHop database",
-		Keywords:   []string{"open", "database"},
-		SourceRef:  new("/src/lib.rs:L114-L288"),
-		Importance: 0.9,
-		CreatedAt:  1000, UpdatedAt: 2000,
+		Content:   "Opens or creates a MemHop database",
+		Keywords:  []string{"open", "database"},
+		SourceRef: new("/src/lib.rs:L114-L288"),
+		CreatedAt: 1000, UpdatedAt: 2000,
 	}
 	var got HypergraphNode
 	jsonRoundtrip(t, n, &got)
 	if got.IDHash != n.IDHash || got.GraphID != n.GraphID {
 		t.Fatalf("hash mismatch: id=%d graph=%d", got.IDHash, got.GraphID)
 	}
-	if got.Title != n.Title || got.Importance != n.Importance {
+	if got.Title != n.Title {
 		t.Fatalf("field mismatch")
 	}
 	if got.SourceRef == nil || *got.SourceRef != "/src/lib.rs:L114-L288" {
@@ -124,8 +123,7 @@ func TestHypergraphNodeNumericJSON(t *testing.T) {
 func TestHypergraphEdgeRoundtrip(t *testing.T) {
 	e := HypergraphEdge{
 		IDHash: 1, GraphID: 100, Kind: EdgeDependency,
-		NodeIDs: []uint64{10, 20, 30}, Weight: 0.8,
-		Label: new("depends_on"), CreatedAt: 1000,
+		NodeIDs: []uint64{10, 20, 30}, CreatedAt: 1000,
 	}
 	var got HypergraphEdge
 	jsonRoundtrip(t, e, &got)
@@ -134,9 +132,6 @@ func TestHypergraphEdgeRoundtrip(t *testing.T) {
 	}
 	if got.Kind != EdgeDependency || len(got.NodeIDs) != 3 {
 		t.Fatalf("kind/nodes mismatch")
-	}
-	if got.Label == nil || *got.Label != "depends_on" {
-		t.Fatalf("label mismatch")
 	}
 }
 
@@ -148,7 +143,7 @@ func TestHypergraphEdgeAllKinds(t *testing.T) {
 	for _, k := range kinds {
 		e := HypergraphEdge{
 			IDHash: 99, GraphID: 1, Kind: k,
-			NodeIDs: []uint64{1, 2}, Weight: 0.5,
+			NodeIDs: []uint64{1, 2},
 		}
 		var got HypergraphEdge
 		jsonRoundtrip(t, e, &got)
