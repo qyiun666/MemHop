@@ -20,9 +20,8 @@
   计划节点由 `(topic_id, seq)` 寻址——`seq` 是该轮内库发号的序号、`parent_seq`
   指向父步骤、0 即根，节点记录上没有路径字符串，事件记录的归因字段因此叫
   `node_seq`；状态词表只有三态且 `in_progress` 占值 0（新建的节点零值即合法
-  状态）。**值 3 起是未定义存储值**：记录解码不看状态含义，是渲染成对外视图
-  那一步 `plan.StatusToString` 把它报成 `ErrDeserialization` 而不是回落成某个
-  叫得出名字的状态，于是一次 `PlanState` 直接失败。一轮的树按步骤逐个建立。
+  状态）。**值 3 起是未定义存储值**：本层按字节原样存取，不看状态含义——把一
+  个字节渲染成名字叫得出名字的状态是读它的人的事，回落出来的名字是假的。
   一轮的内容同住 L4（`Kind` 区分原文与事件，id 由
   `hash("content:"+topic+":"+seq)` 派生），L5 只剩计划节点、走帧型
   `RecL5PlanNode 0x0F`；id 命名空间不烘层号（场景节点 `scene-node:`、内容槽
@@ -42,17 +41,14 @@
 - `index/`：索引——L2Meta（场景读回的唯一话题缓存，`rebuild.go` 全量重建）/
   `l4.go`（`L4Index`：一个话题名下有哪些内容槽位，按 Seq 升序、条目带 `Kind`）。
   只依赖 `core`。
-- 根目录 `l0layer.go`~`l5layer.go`、`agentlayer.go`
-  （能力层的文件已随其记录层退役一并移除）：各层记录读写原语，
+- 根目录 `l0layer.go`~`l5layer.go`、`agentlayer.go`：各层记录读写原语，
   一层一个文件组（单文件超 400 行时按功能拆分，命名
   `<layer>layer_<aspect>.go`：`l1layer_sync.go`、`l2layer_topic.go`），
   所有函数以 `agentID` 为域参数。存在一个保留域
   `core.SharedPoolAgentID`（文件级公共池：L3 知识图）：本层原语对它和普通域无差别
-  （`agentID` 只是参数），路由与守卫都在 `internal` 根。L1 建边/遗忘算法已上提至
-  `internal/cap/engram`（ DecayNetwork/RebuildFromL2/BuildHyperedges）、
-  L0 画像生成/蒸馏合并至 `internal/cap/profile`、L3 匹配与节点合并至
-  `internal/cap/knowledge`——本层只保留记录读写原语
-  （如 `MutateNodeL3` 以回调接受调用方策略）与索引维护。
+  （`agentID` 只是参数），路由与守卫都不在本层。本层不含建边、衰减、画像生成或
+  字段合并这类算法——只有记录读写原语（如 `MutateNodeL3` 以回调接受调用方策略）
+  与索引维护。
 
 ## 边界纪律
 
@@ -83,7 +79,7 @@
    帧或操作 `StorageEngine` 未导出的状态。
 5. **单向依赖**：`repo -> repo/core`、`repo/index -> repo/core`、
    `repo -> common`；禁止反向依赖 `internal`、`api`、`cmd`。
-6. **默认域**：`core.DefaultAgentID = 0` 即全零 hex 域，公开 `Session("0000000000000000")` 可绑定；
+6. **默认域**：`core.DefaultAgentID = 0` 即全零 hex 域；
    注册记录 `RecAgentRegistry (0x10)` 的 `idHash == agentID`，data 为
    agent 名 JSON，Open 时扫描重建 `name -> agentID` 映射。
 
@@ -93,13 +89,12 @@
 `internal/agent.md` 中受影响的条目，并保证 `go vet ./...` 与
 `grep -rn 'L7\|RecL7' --include='*.go'` 零残留。
 
-<!-- 2026-09-04 接口去 fallback 与按层闭环修复 -->
 - `EnsureGraphL3`：槽存在就复用其 id、不覆写记录；`CreateGraphL3` 是无条件写槽，只用于确认不存在时。
-- L2/L4 读路径的错误策略：只有 `CodeOf(err)==ErrNotFound` 才跳过那一条，其余（IO/关闭/损坏）一律返回 error——宿主分不清「少一条」和「没有这一条」。`ListScenesL2`/`CollectAllScenesL2`/`QueryArchivesL4` 因此都带 error 返回。
-- L0 有**两个**画像读原语，错误契约刻意不同：`GetProfileL0` 把任何读失败都包成 `ErrNotFound`（读路径要的是「拿不到就当空画像」，上层 `GetL0` 进一步降级成空槽）；`HasProfileL0` 把「没有这条记录」与「这条记录读不动」分开，前者是 `(false, nil)`，后者原样上报。打开一个文件时要靠后者决定是否播种主域画像——拿前者去做这件事，一次瞬时读失败就会被当成「这个库还没有主域」，于是把一条它根本没看见的画像覆盖掉。
+- L2/L4 读路径的错误策略：只有 `CodeOf(err)==ErrNotFound` 才跳过那一条，其余（IO/关闭/损坏）一律返回 error——调用方分不清「少一条」和「没有这一条」。`ListScenesL2`/`CollectAllScenesL2`/`QueryArchivesL4` 因此都带 error 返回。
+- L0 有**两个**画像读原语，错误契约刻意不同：`GetProfileL0` 把任何读失败都包成 `ErrNotFound`（读路径要的是「拿不到就当空画像」）；`HasProfileL0` 把「没有这条记录」与「这条记录读不动」分开，前者是 `(false, nil)`，后者原样上报。打开一个文件时要靠后者决定是否播种主域画像——拿前者去做这件事，一次瞬时读失败就会被当成「这个库还没有主域」，于是把一条它根本没看见的画像覆盖掉。
 - `RenameTopicL2` 是读-改-写：整条记录重写，所以关键词轨、树链接与场景归属都原样保留，改的只有 `name` 一个字段。名字是否合法（空名算不算一个名字）不在本层判断，那是业务层的规则；话题不在就如实报 `ErrNotFound`，绝不凭空造一个——那会留下一个没有场景、没有深度、没有关键词的话题挂在一个别的记录都不指向的 id 上。
-- L4 的两种读判据不同：**按 id 读**时不存在的 id 可以跳过（已墓碑的、或本来就不是本域的 id 都只是「选不中」），**按话题索引读**时索引点名却读不到就是镜像与磁盘不一致，必须 `ErrIO` 而不是少给一条对话。「槽位被保留窗回收」不属于任何一种：那次清扫同时摘掉索引条目，读侧看到的是 `Seq` 上的一个空洞，由 `SceneMessage.Seq` 暴露给宿主判别。
-- `Kind` 是**条件**而不是模式：`ArchiveQuery.Kind == nil` 表示「两种都要」，非 nil 表示「只要这一种」。它必须在每一条读路径上都生效，包括只给 id 的那条快路径——快路径绕过过滤谓词就是这个条件最容易静默失灵的地方（`TestSearchL4KindCondition` 的 `events, by id` 分支专门盯它）。
+- L4 的两种读判据不同：**按 id 读**时不存在的 id 可以跳过（已墓碑的、或本来就不是本域的 id 都只是「选不中」），**按话题索引读**时索引点名却读不到就是镜像与磁盘不一致，必须 `ErrIO` 而不是少给一条对话。「槽位被保留窗回收」不属于任何一种：那次清扫同时摘掉索引条目，读侧看到的是 `Seq` 上的一个空洞，由 `Seq` 本身带出去判别。
+- `Kind` 是**条件**而不是模式：`ArchiveQuery.Kind == nil` 表示「两种都要」，非 nil 表示「只要这一种」。它必须在每一条读路径上都生效，包括只给 id 的那条快路径——快路径绕过过滤谓词就是这个条件最容易静默失灵的地方。
 - L4 原语的签名带着归属信息：`AppendArchiveL4(engine, agentID, idx, ArchiveContent)` 以 `core.HashContent(TopicID, Seq)` 发号、落盘后同步 `index.L4Index`。写同一个 (话题, Seq) 是**原地覆写**而不是追加第二条——这就是重放一轮能收敛的机制，本层因此没有也不需要「先列出这个话题旧有的归档、再删掉没被重写的那几条」这类原语（第二真相的活形式）。
 - 删除只有两条入口，都内置「磁盘删成功后才摘镜像」这一步序：带话题的 `DeleteTopicArchives`（整话题连删带摘）、按保留窗的 `DropExpiredArchives`（先 `ExpiredBefore` 只读地拿 id，删成后逐话题 `RemoveIDs`）。`TopicClosureL2` 只返回话题闭包——内容由闭包里的每个 id 去索引取回。
-- L5 只剩计划节点（`l5layer.go`）：一个节点一条记录，键是开出这一轮的话题 id。`CollectPlanNodes` 按它分组（组内按 `Seq` 升序，即创建顺序），`PlanAggregate` 只带 `{TopicID, Nodes, LastActiveAt, HasNonDone}`——没有事件计数、没有事件清单：事件在 L4，树不拥有它们。`WritePlanNode` 校验 `IDHash == HashPlanNode(TopicID, Seq)` 且 `Seq != 0`：节点身份是从序号派生的，本层不接受调用方自备的第二把键，而 0 是「没赋值」不是一个可寻址的步骤。删除有 `DeletePlanNodesByIDs`（Dream 保留窗按 id 批删）与 `DeletePlanNodesByTopicIDs`（删话题/场景时连它的树一起走，靠扫节点桶按 `TopicID` 过滤——树没有内容侧那样的位置键可推）。本层没有「删某分支」的原语：作废发生在键上，不在记录上。本层不再有任何路径字符串：一步的取值范围（它自己加整棵子树）由 `domain.PlanCache.Subtree` 沿 `ParentSeq` 求闭包，得到的序号集合交给 L4 读侧做成员判断。节点顺序与聚合的两个派生量只有这一份实现（`ComparePlanNodeSeq` / `RecomputePlanAgg`），`CollectPlanNodes` 与 `domain.PlanCache` 的每次增量改动都经它们：缓存里增量维护出来的树与从磁盘重建出来的树因此不可能各算一套而漂移，`RecomputePlanAgg` 先把两个派生量归零也正是为了节点被摘掉后不留下已删节点贡献的旧值。
+- L5 只有计划节点（`l5layer.go`）：一个节点一条记录，键是开出这一轮的话题 id。`CollectPlanNodes` 按它分组（组内按 `Seq` 升序，即创建顺序），`PlanAggregate` 只带 `{TopicID, Nodes, LastActiveAt, HasNonDone}`——不带事件计数，也不带事件清单。`WritePlanNode` 校验 `IDHash == HashPlanNode(TopicID, Seq)` 且 `Seq != 0`：节点身份是从序号派生的，本层不接受调用方自备的第二把键，而 0 是「没赋值」不是一个可寻址的步骤。删除有 `DeletePlanNodesByIDs`（按 id 批删）与 `DeletePlanNodesByTopicIDs`（按话题连它的树一起删，靠扫节点桶按 `TopicID` 过滤——树没有内容侧那样的位置键可推）。本层没有「删某分支」的原语：作废发生在键上，不在记录上；节点记录上也没有路径字符串，一步加它整棵子树的序号集合由读的人沿 `ParentSeq` 求闭包得到。节点顺序与聚合的两个派生量只有这一份实现（`ComparePlanNodeSeq` / `RecomputePlanAgg`），`CollectPlanNodes` 与任何增量改动都经它们：增量维护出来的树与从磁盘重建出来的树因此不可能各算一套而漂移，`RecomputePlanAgg` 先把两个派生量归零也正是为了节点被摘掉后不留下已删节点贡献的旧值。
