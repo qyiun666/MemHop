@@ -11,6 +11,7 @@ import (
 	"fmt"
 
 	"github.com/qyiun666/MemHop/internal/common"
+	"github.com/qyiun666/MemHop/internal/content"
 	"github.com/qyiun666/MemHop/internal/repo"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 	"github.com/qyiun666/MemHop/internal/scene"
@@ -228,11 +229,11 @@ func (db *DB) SceneContext(agentID uint64, sceneID string) (*SceneContext, error
 	}
 	out := &SceneContext{SceneName: scenes[0].SceneName}
 	for _, t := range topics {
-		st, err := scene.ContextTopic(ac, agentID, t, children)
+		utterances, err := content.Read(db.engine, agentID, ac, t.ID, core.KindUtterance)
 		if err != nil {
 			return nil, err
 		}
-		out.Topics = append(out.Topics, st)
+		out.Topics = append(out.Topics, scene.ContextTopic(t, children, utterances))
 	}
 	out.TopicCount = len(out.Topics)
 	return out, nil

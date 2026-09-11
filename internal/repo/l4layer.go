@@ -20,44 +20,21 @@ import (
 // topic's records are enumerated again. QueryArchivesL4 reads by that key or by
 // any AND-ed combination of filters.
 
-// ArchiveContent is one L4 write: the topic that owns the slot and which slot,
-// which kind, who spoke or what happened, the medium of Text, and when.
-type ArchiveContent struct {
-	TopicID   uint64
-	Seq       uint64
-	Kind      core.ArchiveKind
-	Role      uint8
-	Type      core.ContentType
-	EventType string
-	NodeSeq   uint32
-	Text      string
-	CreatedAt int64
-}
-
-// AppendArchiveL4 writes one content slot. The id is positional, so writing the
-// same (topic, Seq) again re-points the same record instead of leaving a second
-// live copy behind — a replayed turn converges with no list of what it
-// supersedes. Nothing reports an overwrite as distinct from a first write: which
-// Seq a topic's slots use is the caller's business.
-func AppendArchiveL4(engine *core.StorageEngine, agentID uint64, idx *index.L4Index, in ArchiveContent) (uint64, error) {
-	archiveID := core.HashContent(in.TopicID, in.Seq)
-	arc := &core.ArchiveSlot{
-		IDHash:      archiveID,
-		Kind:        in.Kind,
-		Seq:         in.Seq,
-		ContentType: in.Type,
-		Role:        in.Role,
-		TopicID:     in.TopicID,
-		EventType:   in.EventType,
-		NodeSeq:     in.NodeSeq,
-		CreatedAt:   in.CreatedAt,
-		Content:     in.Text,
+// AppendArchiveL4 writes one content slot. The caller owns every field of the
+// record except the id: this is where (topic, Seq) becomes
+// core.HashContent(TopicID, Seq), because the id is positional rather than
+// content-derived — writing the same (topic, Seq) again re-points the same record
+// instead of leaving a second live copy behind, which is what lets a replayed turn
+// converge with no list of what it supersedes. Nothing reports an overwrite as
+// distinct from a first write, and no handle comes back: the address is the
+// (topic, Seq) the caller already holds.
+func AppendArchiveL4(engine *core.StorageEngine, agentID uint64, idx *index.L4Index, arc *core.ArchiveSlot) error {
+	arc.IDHash = core.HashContent(arc.TopicID, arc.Seq)
+	if err := core.WriteArchiveSlot(engine, agentID, arc.IDHash, arc); err != nil {
+		return err
 	}
-	if err := core.WriteArchiveSlot(engine, agentID, archiveID, arc); err != nil {
-		return 0, err
-	}
-	idx.Append(in.TopicID, in.Seq, archiveID, in.Kind, in.CreatedAt)
-	return archiveID, nil
+	idx.Append(arc.TopicID, arc.Seq, arc.IDHash, arc.Kind, arc.CreatedAt)
+	return nil
 }
 
 // DeleteTopicArchives tombstones every content record the index credits the
@@ -147,7 +124,7 @@ func QueryArchivesL4(engine *core.StorageEngine, agentID uint64, q ArchiveQuery)
 	var err error
 	switch {
 	case q.TopicID != nil && q.Index != nil:
-		out, err = archivesByTopic(engine, agentID, q.Index.AllIDs(*q.TopicID))
+		out, err = ReadArchivesByIDs(engine, agentID, q.Index.AllIDs(*q.TopicID))
 	case len(q.IDs) > 0 && q.TopicID == nil && q.Type == nil && q.Kind == nil &&
 		len(q.NodeSeqs) == 0 && q.Keyword == "" && q.Start == 0 && q.End == 0:
 		out, err = archivesByIDOnly(engine, agentID, q.IDs)
@@ -194,13 +171,13 @@ func archivesByIDOnly(engine *core.StorageEngine, agentID uint64, ids []uint64) 
 	return out, nil
 }
 
-// archivesByTopic reads the records one topic's content index names. A record
-// that is gone is an error, not a skip: the index is what the topic owns, so an
-// entry naming nothing means the mirror and the disk disagree, and a transcript
-// silently missing one utterance reads exactly like a complete one. A slot the
-// retention window reclaimed is not this case — it is absent from the index too,
-// and shows up as a gap in the Seq the read reports.
-func archivesByTopic(engine *core.StorageEngine, agentID uint64, ids []uint64) ([]core.ArchiveSlot, error) {
+// ReadArchivesByIDs loads the records one content read selected. A record that is
+// gone is an error, not a skip: the ids come from the domain's mirror, so an entry
+// naming nothing means the mirror and the disk disagree, and a transcript silently
+// missing one utterance reads exactly like a complete one. A slot the retention
+// window reclaimed is not this case — it is absent from the index too, and shows up
+// as a gap in the Seq the read reports.
+func ReadArchivesByIDs(engine *core.StorageEngine, agentID uint64, ids []uint64) ([]core.ArchiveSlot, error) {
 	out := make([]core.ArchiveSlot, 0, len(ids))
 	for _, idHash := range ids {
 		arc, err := core.ReadArchiveSlot(engine, agentID, idHash)

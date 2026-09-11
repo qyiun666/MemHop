@@ -95,6 +95,11 @@
 - `RenameTopicL2` 是读-改-写：整条记录重写，所以关键词轨、树链接与场景归属都原样保留，改的只有 `name` 一个字段。名字是否合法（空名算不算一个名字）不在本层判断，那是业务层的规则；话题不在就如实报 `ErrNotFound`，绝不凭空造一个——那会留下一个没有场景、没有深度、没有关键词的话题挂在一个别的记录都不指向的 id 上。
 - L4 的两种读判据不同：**按 id 读**时不存在的 id 可以跳过（已墓碑的、或本来就不是本域的 id 都只是「选不中」），**按话题索引读**时索引点名却读不到就是镜像与磁盘不一致，必须 `ErrIO` 而不是少给一条对话。「槽位被保留窗回收」不属于任何一种：那次清扫同时摘掉索引条目，读侧看到的是 `Seq` 上的一个空洞，由 `Seq` 本身带出去判别。
 - `Kind` 是**条件**而不是模式：`ArchiveQuery.Kind == nil` 表示「两种都要」，非 nil 表示「只要这一种」。它必须在每一条读路径上都生效，包括只给 id 的那条快路径——快路径绕过过滤谓词就是这个条件最容易静默失灵的地方。
-- L4 原语的签名带着归属信息：`AppendArchiveL4(engine, agentID, idx, ArchiveContent)` 以 `core.HashContent(TopicID, Seq)` 发号、落盘后同步 `index.L4Index`。写同一个 (话题, Seq) 是**原地覆写**而不是追加第二条——这就是重放一轮能收敛的机制，本层因此没有也不需要「先列出这个话题旧有的归档、再删掉没被重写的那几条」这类原语（第二真相的活形式）。
+- L4 原语的签名带着归属信息：`AppendArchiveL4(engine, agentID, idx, *core.ArchiveSlot)` 收下调用方给的记录，
+  在本层把 (话题, `Seq`) 换算成 `core.HashContent` 落进 `IDHash`、落盘后同步 `index.L4Index`，
+  不回传句柄（地址就是调用方手里的那对键）。写同一个 (话题, Seq) 是**原地覆写**而不是追加第二条——
+  这就是重放一轮能收敛的机制，本层因此没有也不需要「先列出这个话题旧有的归档、再删掉没被重写的那几条」
+  这类原语（第二真相的活形式）。`ReadArchivesByIDs` 是把镜像点名的 id 清单换成记录的唯一一处，
+  上一条那个「点名却读不到 = `ErrIO`」的判据就实现在这里，读侧不再各写一份。
 - 删除只有两条入口，都内置「磁盘删成功后才摘镜像」这一步序：带话题的 `DeleteTopicArchives`（整话题连删带摘）、按保留窗的 `DropExpiredArchives`（先 `ExpiredBefore` 只读地拿 id，删成后逐话题 `RemoveIDs`）。`TopicClosureL2` 只返回话题闭包——内容由闭包里的每个 id 去索引取回。
 - L5 只有计划节点（`l5layer.go`）：一个节点一条记录，键是开出这一轮的话题 id。`CollectPlanNodes` 按它分组（组内按 `Seq` 升序，即创建顺序），`PlanAggregate` 只带 `{TopicID, Nodes, LastActiveAt, HasNonDone}`——不带事件计数，也不带事件清单。`WritePlanNode` 校验 `IDHash == HashPlanNode(TopicID, Seq)` 且 `Seq != 0`：节点身份是从序号派生的，本层不接受调用方自备的第二把键，而 0 是「没赋值」不是一个可寻址的步骤。删除有 `DeletePlanNodesByIDs`（按 id 批删）与 `DeletePlanNodesByTopicIDs`（按话题连它的树一起删，靠扫节点桶按 `TopicID` 过滤——树没有内容侧那样的位置键可推）。本层没有「删某分支」的原语：作废发生在键上，不在记录上；节点记录上也没有路径字符串，一步加它整棵子树的序号集合由读的人沿 `ParentSeq` 求闭包得到。节点顺序与聚合的两个派生量只有这一份实现（`ComparePlanNodeSeq` / `RecomputePlanAgg`），`CollectPlanNodes` 与任何增量改动都经它们：增量维护出来的树与从磁盘重建出来的树因此不可能各算一套而漂移，`RecomputePlanAgg` 先把两个派生量归零也正是为了节点被摘掉后不留下已删节点贡献的旧值。

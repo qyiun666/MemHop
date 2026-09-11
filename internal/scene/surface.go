@@ -28,40 +28,27 @@ func SurfaceTopics(ac *domain.Context, sceneID uint64) []core.TopicSlot {
 }
 
 // ContextTopic renders one topic of a scene context: its keyword track, child
-// count, and the utterances it owns. The domain's content index is what makes a
-// topic's own content findable, and it names the topic's slots in Seq order,
-// with nothing to tie-break on.
+// count, and the utterances it owns, in the Seq order they were written to.
 //
-// Two read outcomes look alike and must not be judged alike. A slot the index
-// names that the engine cannot read is mirror drift: the transcript would be short
-// one line and read as complete, so it is a hard ErrIO. A topic whose content is
-// empty, or whose Seq has a gap in it, is content that was reclaimed on purpose
-// — a legal end state, reported as what it is rather than as a failure. Seq rides
-// along on every message precisely so that gap stays distinguishable from a turn
+// The utterances come from the topic's own content read, already ordered and
+// already judged: which ids a topic owns is the mirror's answer, and only it can
+// tell a reclaimed slot from a missing record. What rides along on every message is
+// the Seq itself, precisely so that a gap in it stays distinguishable from a turn
 // that never said those words.
-func ContextTopic(ac *domain.Context, agentID uint64, t core.TopicSlot, children map[uint64]int) (core.SceneContextTopic, error) {
-	refs := ac.L4.IDs(t.ID, core.KindUtterance)
+func ContextTopic(t core.TopicSlot, children map[uint64]int, utterances []core.ArchiveSlot) core.SceneContextTopic {
 	st := core.SceneContextTopic{
 		TopicID:    common.FormatHash(t.ID),
 		Depth:      int(t.Depth),
 		Name:       t.Name,
 		Keywords:   slices.Clone(t.FusedKeywords),
 		ChildCount: children[t.ID],
-		Messages:   make([]core.SceneMessage, 0, len(refs)),
+		Messages:   make([]core.SceneMessage, 0, len(utterances)),
 	}
-	for _, ref := range refs {
-		arc, err := core.ReadArchiveSlot(ac.Engine, agentID, ref)
-		if err != nil {
-			if common.CodeOf(err) == common.ErrNotFound {
-				return core.SceneContextTopic{}, common.NewError(common.ErrIO,
-					"content index names a missing record", err)
-			}
-			return core.SceneContextTopic{}, err
-		}
+	for _, arc := range utterances {
 		st.Messages = append(st.Messages, core.SceneMessage{
 			Role: arc.Role, Type: arc.ContentType, Content: arc.Content,
 			Seq: arc.Seq, CreatedAt: arc.CreatedAt,
 		})
 	}
-	return st, nil
+	return st
 }

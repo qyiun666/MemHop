@@ -125,9 +125,9 @@ func applyOneGroup(ctx context.Context, ac *domain.Context, sceneID uint64, g ll
 	}
 	// The fused group's summary is the parent topic's own utterance: it occupies
 	// the slot a turn's user side would, and no reference list points at it.
-	if _, err := repo.AppendArchiveL4(ac.Engine, ac.ID, ac.L4, repo.ArchiveContent{
+	if err := repo.AppendArchiveL4(ac.Engine, ac.ID, ac.L4, &core.ArchiveSlot{
 		TopicID: parentID, Seq: core.SeqUser, Kind: core.KindUtterance,
-		Role: core.RoleDream, Type: core.ContentText, Text: g.MergedSummary, CreatedAt: maxTS,
+		Role: core.RoleDream, ContentType: core.ContentText, Content: g.MergedSummary, CreatedAt: maxTS,
 	}); err != nil {
 		return common.NewError(common.ErrIO, "dream: archive merged summary", err)
 	}

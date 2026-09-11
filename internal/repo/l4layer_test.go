@@ -13,14 +13,14 @@ import (
 
 func writeContent(t *testing.T, engine *core.StorageEngine, idx *index.L4Index, topicID, seq uint64, kind core.ArchiveKind, text string, createdAt int64) uint64 {
 	t.Helper()
-	id, err := AppendArchiveL4(engine, core.DefaultAgentID, idx, ArchiveContent{
-		TopicID: topicID, Seq: seq, Kind: kind, Type: core.ContentText,
-		Text: text, CreatedAt: createdAt,
-	})
-	if err != nil {
+	arc := &core.ArchiveSlot{
+		TopicID: topicID, Seq: seq, Kind: kind, ContentType: core.ContentText,
+		Content: text, CreatedAt: createdAt,
+	}
+	if err := AppendArchiveL4(engine, core.DefaultAgentID, idx, arc); err != nil {
 		t.Fatalf("append %s/%d: %v", kind, seq, text)
 	}
-	return id
+	return arc.IDHash
 }
 
 // The whole point of a positional id: re-writing a topic's Seq lands on the same

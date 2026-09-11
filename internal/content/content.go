@@ -124,39 +124,22 @@ func Append(ac *domain.Context, agentID, topicID uint64, in core.ArchiveSlot) (u
 	if seq == 0 {
 		seq = max(ac.L4.MaxSeq(topicID), core.LastUtteranceSeq) + 1
 	}
-	slot := repo.ArchiveContent{
-		TopicID: topicID, Seq: seq, Kind: in.Kind,
-		Type: core.ContentText, EventType: in.EventType, NodeSeq: in.NodeSeq,
-		Text: in.Content, CreatedAt: in.CreatedAt,
+	in.TopicID, in.Seq = topicID, seq
+	if in.Kind == core.KindEvent {
+		in.Role, in.ContentType = 0, core.ContentText
 	}
-	if in.Kind == core.KindUtterance {
-		slot.Type, slot.Role = in.ContentType, in.Role
-	}
-	if _, err := repo.AppendArchiveL4(ac.Engine, agentID, ac.L4, slot); err != nil {
+	if err := repo.AppendArchiveL4(ac.Engine, agentID, ac.L4, &in); err != nil {
 		return 0, err
 	}
 	return seq, nil
 }
 
 // Read loads one topic's content of one kind, Seq ascending, through the domain's
-// content mirror. A record the index names but the engine cannot read is an
-// error, not a shorter track: a silently missing record is indistinguishable from
-// one that was never written, and a transcript missing a line looks exactly like
-// a turn that had one fewer line.
+// content mirror. The mirror is the only list of what a topic owns, so a record it
+// names but the disk cannot produce is an error rather than a shorter track — that
+// judgment lives with the read that drains it, in repo.
 func Read(engine *core.StorageEngine, agentID uint64, ac *domain.Context, topicID uint64, kind core.ArchiveKind) ([]core.ArchiveSlot, error) {
-	hashes := ac.L4.IDs(topicID, kind)
-	out := make([]core.ArchiveSlot, 0, len(hashes))
-	for _, h := range hashes {
-		ev, err := core.ReadArchiveSlot(engine, agentID, h)
-		if err != nil {
-			if common.CodeOf(err) == common.ErrNotFound {
-				return nil, common.NewError(common.ErrIO, "content index names a missing record", err)
-			}
-			return nil, err
-		}
-		out = append(out, *ev)
-	}
-	return out, nil
+	return repo.ReadArchivesByIDs(engine, agentID, ac.L4.IDs(topicID, kind))
 }
 
 // RenderForDistill turns a topic's utterances into the one text a keyword call
