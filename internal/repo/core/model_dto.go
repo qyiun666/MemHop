@@ -122,7 +122,9 @@ type L3Subgraph struct {
 // L4Query archive query: every field is optional and the set conditions AND
 // together, so a topic-only or type-only read works. L4 holds both kinds of a
 // turn's content, so Kind is a condition like any other — leaving it unset means
-// an empty query selects utterances AND events. Results are sorted by Seq.
+// an empty query selects utterances AND events. The order is what a query spans: Seq
+// within one topic, CreatedAt across topics with the record id breaking ties — and
+// Limit keeps the tail of whichever order applies.
 // Keyword is matched case-insensitively, the same way the L3 node filter matches
 // one. An empty query returns the domain's whole archive set — that is a lot of
 // text for a caller with a context window, so Limit caps the result to its most

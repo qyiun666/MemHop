@@ -397,7 +397,9 @@ arcs, err := db.SearchL4(api.L4Query{
 `TopicID`, `CreatedAt` and `Content` — for media types `Content` is a path or URI,
 not the binary.
 Every query field is optional and the ones you set **AND** together — there are no
-modes to choose between — and the result is sorted by `Seq`. So the reads a host
+modes to choose between. The order is what a query spans: `Seq` within one topic,
+`CreatedAt` across topics with the record id breaking ties, and `Limit` keeps the tail
+of that order. So the reads a host
 wants after a turn are one call each: `SearchL4(L4Query{TopicID: &topicID, Kind:
 &utterance})` gives what was said, the same with `Kind: &event` gives what happened,
 and without `Kind` both; adding `NodeSeq: 2` cuts that event track down to the records

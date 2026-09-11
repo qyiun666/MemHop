@@ -195,7 +195,10 @@ func (s *Session) QueryL3Subgraph(graphID, startNodeID string, maxDepth int, edg
 	return fromL3Subgraph(sub), nil
 }
 
-// SearchL4 returns content records with hex IDs, ordered by Seq. L4 holds a
+// SearchL4 returns content records with hex IDs. A topic-scoped read comes back in
+// Seq order — the slot the turn's own writing chose; a read that spans topics has no
+// Seq in common (it numbers slots inside one turn), so it comes back by each record's
+// CreatedAt, with the record id breaking ties. L4 holds a
 // turn's dialogue originals and its operation events alike, so Kind is a condition
 // like any other: leaving it unset selects both. TopicID is the key Search issued
 // for one turn, parsed as it is everywhere else — the reserved all-zero key is

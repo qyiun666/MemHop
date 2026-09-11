@@ -19,7 +19,8 @@ import (
 // SearchL4 reads the content records matching every condition of q; the
 // conditions AND together, so an empty query returns the domain's whole content
 // set — utterances AND events alike, which is why Kind is one of the conditions.
-// Keyword is case-insensitive and Limit keeps the newest matches. NodeSeq keeps
+// Keyword is case-insensitive. Limit keeps the tail of whatever order the read is in:
+// the newest matches across topics, the highest slots inside one. NodeSeq keeps
 // only the work of one plan step — the step and every step nested under it, since
 // splitting a step into sub-steps moves its work onto the children — and a step
 // is addressed inside a turn, so it is refused without TopicID. Zero leaves the

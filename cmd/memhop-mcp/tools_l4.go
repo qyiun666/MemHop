@@ -72,7 +72,7 @@ func registerL4Tools(s *mcp.Server, db *memhop.Session) {
 	// lands directly in an LLM's context.
 	const archiveSearchDefaultLimit = 50
 
-	description := fmt.Sprintf("检索 L4 内容（一轮的对话原文与其操作事件同住此层）：keyword（子串，忽略大小写）/ 时间范围 [start,end]（毫秒）/ ID 列表 / topic_id / kind / node_seq / content_type 都是过滤条件，填了的全部按 AND 组合；一个都不填即全域扫描。node_seq 是轮次内的步骤序号（由 Go 侧计划写面发号），取该步及其全部子步归因的记录，必须与 topic_id 同填。结果按 Seq 升序，limit 只保留最新的 N 条（缺省 %d，可填更大值）。text/document/code 存原文，image/audio/video 等媒体类型的 content 为路径。", archiveSearchDefaultLimit)
+	description := fmt.Sprintf("检索 L4 内容（一轮的对话原文与其操作事件同住此层）：keyword（子串，忽略大小写）/ 时间范围 [start,end]（毫秒）/ ID 列表 / topic_id / kind / node_seq / content_type 都是过滤条件，填了的全部按 AND 组合；一个都不填即全域扫描。node_seq 是轮次内的步骤序号（由 Go 侧计划写面发号），取该步及其全部子步归因的记录，必须与 topic_id 同填。顺序看查询宽度：填了 topic_id 按该轮内 Seq 升序，不带 topic_id 的跨轮读取按记录自己的时间升序、同值以记录 id 收尾；limit 保留该顺序末尾的 N 条（缺省 %d，可填更大值）。text/document/code 存原文，image/audio/video 等媒体类型的 content 为路径。", archiveSearchDefaultLimit)
 
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_archive_search",
