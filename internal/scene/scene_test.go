@@ -22,9 +22,9 @@ func newTestEngine(t *testing.T) *core.StorageEngine {
 }
 
 // A turn's reading order is question-first by construction, not by tie-break: the
-// settle puts the user's text on Seq 1 and the reply on Seq 2. This case writes
-// them in the hostile order — answer archived first, same millisecond — which is
-// exactly what a timestamp-then-role sort had to rescue.
+// user's text sits on Seq 1 and the reply on Seq 2. This case writes them in the
+// hostile order — answer archived first, same millisecond — so the read has to
+// follow Seq rather than any timestamp-then-role sort.
 func TestSceneContextTopicOrdersBySeqNotWriteOrder(t *testing.T) {
 	engine := newTestEngine(t)
 	ac := newTestContext(t, engine)
@@ -56,8 +56,8 @@ func TestSceneContextTopicOrdersBySeqNotWriteOrder(t *testing.T) {
 }
 
 // L4 holds a turn's events beside its originals. A conversation context is the
-// dialogue, so the event kind must stay out of it — reading them in would show a
-// host dozens of lines for a two-line turn.
+// dialogue, so the event kind must stay out of it — reading them in would show
+// dozens of lines for a two-line turn.
 func TestSceneContextTopicExcludesEvents(t *testing.T) {
 	engine := newTestEngine(t)
 	ac := newTestContext(t, engine)

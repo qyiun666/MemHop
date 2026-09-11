@@ -1,11 +1,10 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// Package scene holds the L2 scene small methods: the read-side resolution
-// (scene lookup / allocation / turn opening / surface topics), the
-// scene-context rendering steps and the deletion steps. The composition
-// root keeps the big methods (Search, SceneContext, DeleteTopic,
-// DeleteScene, ...) that lock the domain and compose them.
+// Package scene holds the small methods over one scene record: resolving or
+// allocating it, opening its next turn, listing its depth-1 topics, rendering
+// one topic together with the utterances it owns, and the deletion steps that
+// keep parents, content mirrors and L3 anchors consistent.
 
 package scene
 
@@ -33,10 +32,9 @@ func ResolveForRead(engine *core.StorageEngine, agentID uint64, q core.SearchQue
 	if err != nil {
 		return nil, err
 	}
-	// The anchor is a creation-time field. Silently dropping it here would
-	// leave a host believing it had hung the session on a project domain, so a
-	// named graph has to at least resolve — and a scene that already exists
-	// keeps the anchor it has until UpdateScene moves it.
+	// The anchor is a creation-time field: a scene that already exists keeps the
+	// anchor it has until UpdateScene moves it, and the named graph has to at
+	// least resolve.
 	if q.L3ID != "" {
 		if _, err := repo.ReadSharedGraphL3(engine, q.L3ID); err != nil {
 			return nil, err
@@ -47,9 +45,9 @@ func ResolveForRead(engine *core.StorageEngine, agentID uint64, q core.SearchQue
 	return slot, nil
 }
 
-// Create allocates a scene id the host has not used yet, persists the scene
-// record under a library-generated name and applies the optional L3 anchor
-// (write-once semantics).
+// Create allocates a free scene id, persists the scene record under a
+// library-generated name and applies the optional L3 anchor (write-once
+// semantics).
 func Create(engine *core.StorageEngine, agentID uint64, l3ID string) (*core.SceneSlot, error) {
 	id, err := FreshID(engine, agentID)
 	if err != nil {
@@ -72,8 +70,8 @@ func Create(engine *core.StorageEngine, agentID uint64, l3ID string) (*core.Scen
 }
 
 // FreshID mints an unused 8-byte scene id. Zero is skipped: it is the
-// "no scene" sentinel of the ID surface. A collision with a live scene would
-// silently merge two host sessions, so allocation loops until the id is free.
+// "no scene" sentinel of the ID surface. A collision would silently merge two
+// distinct scenes, so allocation loops until the id is free.
 func FreshID(engine *core.StorageEngine, agentID uint64) (uint64, error) {
 	for {
 		var b [8]byte
@@ -95,9 +93,9 @@ func FreshID(engine *core.StorageEngine, agentID uint64) (uint64, error) {
 	}
 }
 
-// OpenTurn pushes the scene's turn counter to the next turn: the one record
-// a read writes. The counter mints the turn's topic id, so a failed write
-// fails the read instead of reissuing an id.
+// OpenTurn pushes the scene's turn counter to the next turn: the scene's only
+// write on the read path. The counter mints the turn's topic id, so a failed
+// write must fail the caller's read instead of reissuing an id.
 func OpenTurn(engine *core.StorageEngine, agentID, sceneID uint64) (*core.SceneSlot, error) {
 	return repo.OpenSceneTurn(engine, agentID, sceneID)
 }

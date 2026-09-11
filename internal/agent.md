@@ -140,7 +140,9 @@ internal/{domain,scene,turn,dream,graph,plan,content}
 1. **一次 `Search` = 读场景 + 开一轮**：`scene_id` 为空 → `scene.FreshID`
    铸一个未被占用的 ID（`0` 跳过；只有 `ErrNotFound` 才算可用，其他读错误
    原样上抛）并落场景记录（名字一律库生成 `session:<id>`）；非空且不存在 →
-   `ErrNotFound`。同一批调用还经 `scene.OpenTurn`（`repo.OpenSceneTurn`）把
+   `ErrNotFound`；非空、已存在、且带了 `L3ID` 一律拒——锚点是创建期字段，改锚只走
+   `UpdateScene`，静默丢弃会让一次没生效的锚定看起来生效了。同一批调用还经
+   `scene.OpenTurn`（`repo.OpenSceneTurn`）把
    场景的 `TurnSeq` 推到下一轮，返回值 `NewTopicID = hash("turn:" +
    场景:TurnSeq)` 就是本轮要沉淀进去的话题。`Update` 一律拒绝未知场景，
    库内不再猜场景。画像读取失败同样使本次读取失败（仅"画像尚未建立"按空
@@ -206,7 +208,9 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    `DeleteL3` 两阶段：公共锁内删图，释放后遍历「默认域 + 注册表」逐域
    `lockAgent` 清锚（`detachGraphAnchors`），不嵌套双锁——代价是「删图后、
    清锚前」窗口内同名重导入（图 id = hash(Domain) 同 id）的锚点会被清成
-   未锚定，可经 `UpdateScene` 重挂。
+   未锚定，可经 `UpdateScene` 重挂。`scene.L3ID` 是 L3 图唯一的入边（图槽上没有
+   反向清单），所以清锚只能按域扫场景；漏清锚的可见后果是 `ListScenes(l3ID)`
+   继续列出解不开的会话。
 10. **内容只有一个写入口**：`content.Append` 是唯一写路径，`AppendArchive` 是它
    唯一的调用者（对话原文与事件都走这一条，`NodeSeq` 就写在记录上）。计划写面
    不碰内容：三个写口只动树，一步做过什么永远是宿主自己 append 的那些记录。
