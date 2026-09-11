@@ -1,12 +1,13 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// Multi-agent tenant management of the internal layer: CreateAgent
-// allocates a random 8-byte agentID and persists a registry record so the
-// name -> ID mapping survives restarts without stateless hashing; ListAgents
-// enumerates registered agents. Two reserved domains are never
-// handed out: the default domain and the file-wide shared pool domain
-// (core.SharedPoolAgentID, carrying the L3 knowledge graph).
+// Agent domain management of the internal layer. Two identities: the primary is
+// the implicit zero domain a file is opened on, and a sub agent is a registered
+// domain addressed by name. Registration allocates a random 8-byte agentID and
+// persists a record so the name -> ID mapping survives restarts without stateless
+// hashing. Two reserved domains are never handed out as sub agents: the default
+// domain and the file-wide shared pool domain (core.SharedPoolAgentID, carrying
+// the L3 knowledge graph).
 
 package internal
 
@@ -14,8 +15,10 @@ import (
 	"cmp"
 	"crypto/rand"
 	"encoding/binary"
+	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/repo"
@@ -101,6 +104,82 @@ func (db *DB) HasAgent(agentID uint64) bool {
 	defer db.agentsMu.Unlock()
 	_, ok := db.idToName[agentID]
 	return ok
+}
+
+// Primary returns the session bound to the domain the file was opened on. That
+// domain is the implicit zero one, so a file holds exactly one primary and this
+// needs no lookup to find it.
+func (db *DB) Primary() (*Session, error) {
+	return db.NewSession(core.DefaultAgentID)
+}
+
+// maxSubAgentNameBytes caps a tenant key. The registry record holds the name as
+// JSON in the file, so an unbounded name is an unbounded record; the cap is
+// about that, not about which characters a name may hold.
+const maxSubAgentNameBytes = 256
+
+// SubAgent returns the session of the sub-agent domain named profile.Name,
+// creating that domain the first time and handing back the same one every time
+// after. The name is a tenant key, frozen at creation: it is how the domain is
+// addressed, so editing the profile's Name afterwards does not move the domain,
+// and asking for a name nobody registered opens a second one instead of finding
+// the first.
+//
+// llm is this domain's own endpoint, so a sub-agent can run on a different model
+// from the file's primary. Naming the same domain again replaces its endpoint —
+// a reconnecting host wants the one it just handed over, not the first it ever
+// did.
+//
+// The profile is written only if the domain has none yet. That makes this call
+// self-healing across a crash between the registry record and the profile: the
+// next call with the same name finishes the job instead of leaving a domain that
+// is registered but has no identity. AgentType is stamped here rather than taken
+// from the caller — a domain created this way is a sub-agent, whatever its
+// profile claims.
+func (db *DB) SubAgent(llmCfg LlmConfig, profile core.ProfileSlot) (*Session, error) {
+	if err := llmCfg.Validate(); err != nil {
+		return nil, err
+	}
+	name := strings.TrimSpace(profile.Name)
+	if name == "" {
+		return nil, common.NewError(common.ErrInvalidQuery, "sub-agent profile Name is required")
+	}
+	if len(name) > maxSubAgentNameBytes {
+		return nil, common.NewError(common.ErrInvalidQuery,
+			fmt.Sprintf("sub-agent name exceeds %d bytes", maxSubAgentNameBytes))
+	}
+	id, err := db.CreateAgent(name)
+	if err != nil {
+		return nil, err
+	}
+	db.setDomainLLM(id, llmCfg)
+	// Session admission reads the registry, so the handle has to be fetched
+	// before the domain lock is taken: agentsMu under ac.Mu is the one lock
+	// order this layer must never build.
+	sess, err := db.NewSession(id)
+	if err != nil {
+		return nil, err
+	}
+	ac, err := db.lockAgent(id)
+	if err != nil {
+		return nil, err
+	}
+	defer ac.Mu.Unlock()
+	has, err := repo.HasProfileL0(db.engine, id)
+	if err != nil {
+		return nil, err
+	}
+	if has {
+		return sess, nil
+	}
+	slot := profile
+	slot.Name = name
+	slot.AgentType = core.AgentTypeSub
+	slot.UpdatedAtMs = time.Now().UnixMilli()
+	if err := repo.UpdateProfileL0(db.engine, id, &slot); err != nil {
+		return nil, err
+	}
+	return sess, nil
 }
 
 // CheckSession is the session-eligibility policy for the multi-agent

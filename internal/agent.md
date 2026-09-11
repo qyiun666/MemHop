@@ -92,10 +92,21 @@ internal/{domain,scene,turn,dream,graph,plan,content}
 
 - 只经 `internal/repo`（及 `repo/core` 导出的 Slot 读写）访问数据；
   **禁止**直接操作帧、文件头、快照结构。
-- `StorageEngine` 句柄由装配层 `config.go` 的 `Open(cfg)`
-  唯一持有：注入 `DB.engine`，并经 `domain.NewContext` 注入每个域；业务代码
-  不得自行打开/关闭引擎。Open 不做任何目录扫描或能力注入——能力卡是宿主
-  自有的磁盘文档（目录即能力），库只提供 v4 解析校验导出。
+- `StorageEngine` 句柄由装配层 `config.go` 唯一持有：注入 `DB.engine`，并经
+  `domain.NewContext` 注入每个域；业务代码不得自行打开/关闭引擎。两个入口共用
+  `openEngine`（三态判定）与 `assemble`（装配）：`Open(cfg)` 无条件允许建文件，
+  `OpenDB(path, llm, defaults, primary)` 只在自己带了主域画像时才允许，且先校验
+  后建文件——被拒的打开不在宿主的路径上留任何东西。**建文件是带截断的**，所以
+  `openEngine` 只在 `errors.Is(err, os.ErrNotExist)` 时才走创建分支，其它 stat
+  失败一律上报；路径是目录时显式拒绝，否则 `core.Open` 会回一句误导的「文件太小
+  放不下双头」。
+- **域身份两个入口**：`Primary()` 返回零号域（一个文件恰好一个主域，无需扫描），
+  `SubAgent(llm, profile)` 按 `profile.Name` 幂等建/取一个注册域并挂上它自己的
+  LLM 端点。`SubAgent` 的顺序是硬约束：注册（`agentsMu`）→ 挂端点（`agentsMu`）
+  → 取会话句柄（`CheckSession` 读注册表，`agentsMu`）→ **最后**才 `lockAgent`
+  拿域锁写画像。反过来就是 `ac.Mu` 之下取 `agentsMu`，正是本文件域锁纪律第 2 条
+  禁止的那个环。写画像用 ensure 语义（已有就不动），所以注册记录写完、画像没写完
+  就崩的情况下，同名再调一次会把画像补上。
 - **能力下沉**：算法与策略在 `internal/cap/<feature>` 能力包；小方法在
   `internal/{scene,turn,dream,graph,plan,content}`；根只留"取数 → 调
   能力 → 落库"的大方法编排，不做算法。LLM 传输策略（截断升级重试）在

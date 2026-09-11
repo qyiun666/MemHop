@@ -5,6 +5,14 @@
 // the random 8-byte agentID to its external name. The record lives inside
 // the agent's own domain (idHash == agentID); Open rebuilds the name map by
 // scanning.
+//
+// The payload is that name and nothing else — a tenant key to resolve a domain
+// by, not a description of it. What kind of agent a domain holds lives on its
+// L0 profile instead (core.AgentTypePrimary / core.AgentTypeSub). Keeping
+// identity off this record is what makes the primary domain unnameable: the
+// primary carries no registry record at all, so no name can resolve to it, and
+// a caller asking for a sub agent by name can never land on the primary by
+// accident.
 
 package repo
 

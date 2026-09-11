@@ -21,8 +21,8 @@ import (
 
 // DB is the multi-agent database instance returned by Open. Business state
 // (L2Meta cache, Dream bookkeeping, locks) lives in one domain.Context per
-// agent; the llm provider is connection-level and stays shared at the DB
-// level.
+// agent. The LLM transport is shared by every domain unless one was given its
+// own endpoint when it was created.
 type DB struct {
 	engine *core.StorageEngine
 	config *MemHopConfig
@@ -35,12 +35,21 @@ type DB struct {
 	baseCtx    context.Context
 	baseCancel context.CancelFunc
 
-	// agentsMu guards the agents registry and the tenant name maps
-	// (nameToID/idToName).
+	// agentsMu guards the agents registry, the tenant name maps
+	// (nameToID/idToName) and the two LLM tables below.
 	agentsMu sync.Mutex
 	agents   map[uint64]*domain.Context
 	nameToID map[string]uint64 // tenant registry: name -> agentID
 	idToName map[uint64]string // tenant registry: agentID -> name
+
+	// llmByAgent is one domain's own endpoint, and providers dedupes
+	// transports by config value so a hundred sub-agents sharing an endpoint
+	// share one http.Client. Both deliberately outlive the domain contexts:
+	// the idle sweep drops a context and contextFor rebuilds it, so an override
+	// stored on the context would quietly fall back to the library-wide
+	// endpoint once a domain went idle long enough.
+	llmByAgent map[uint64]*llm.Provider
+	providers  map[LlmConfig]*llm.Provider
 
 	// mu serializes Close against itself; per-operation domain locking is on
 	// domain.Context.Mu instead of this DB-wide lock.
@@ -51,8 +60,8 @@ func (db *DB) IsClosed() bool { return db.closed.Load() }
 
 // contextFor returns the agent's context, creating it lazily on first
 // access, and opportunistically sweeps idle domains. Non-default IDs must
-// be registered tenants: a stale handle to a deleted agent never revives
-// its domain. The reserved shared-pool domain is exempt from the registry
+// be registered tenants, so an id nobody ever issued cannot open a domain of
+// its own. The reserved shared-pool domain is exempt from the registry
 // check: it has no tenant record and is created on first L3 access.
 func (db *DB) contextFor(agentID uint64) (*domain.Context, error) {
 	if db.closed.Load() {
@@ -71,11 +80,39 @@ func (db *DB) contextFor(agentID uint64) (*domain.Context, error) {
 	db.sweepIdleLocked()
 	ac := db.agents[agentID]
 	if ac == nil {
-		ac = domain.NewContext(agentID, db.baseCtx, db.engine, db.llm, &db.config.Defaults)
+		// A rebuild after the idle sweep lands here too, which is why the
+		// endpoint override lives in its own table rather than on the context.
+		chat := db.llm
+		if own, ok := db.llmByAgent[agentID]; ok {
+			chat = own
+		}
+		ac = domain.NewContext(agentID, db.baseCtx, db.engine, chat, &db.config.Defaults)
 		db.agents[agentID] = ac
 	}
 	ac.LastActiveAt.Store(time.Now().UnixMilli())
 	return ac, nil
+}
+
+// providerForLocked returns the transport for one endpoint, building it on
+// first use. Sub-agents are created per tenant and a process can hold many of
+// them against the same endpoint, so the config value is the dedupe key: one
+// http.Client per endpoint rather than one per domain. Caller holds agentsMu.
+func (db *DB) providerForLocked(cfg LlmConfig) *llm.Provider {
+	if p, ok := db.providers[cfg]; ok {
+		return p
+	}
+	p := llm.New(cfg)
+	db.providers[cfg] = p
+	return p
+}
+
+// setDomainLLM points one domain at its own endpoint. A later call for the same
+// domain replaces it, which is what a reconnecting host wants: the endpoint it
+// names now is the one its turns use from here on.
+func (db *DB) setDomainLLM(agentID uint64, cfg LlmConfig) {
+	db.agentsMu.Lock()
+	defer db.agentsMu.Unlock()
+	db.llmByAgent[agentID] = db.providerForLocked(cfg)
 }
 
 // lockAgent takes the domain lock and re-checks under it that the database is

@@ -30,6 +30,22 @@ func UpdateProfileL0(engine *core.StorageEngine, agentID uint64, slot *core.Prof
 	return core.WriteProfileSlot(engine, agentID, slot.IDHash, slot)
 }
 
+// HasProfileL0 reports whether a domain's profile record is there. It keeps
+// apart the two answers GetProfileL0 collapses into one: an absent record is
+// (false, nil), while a record that cannot be read is an error. A caller
+// deciding whether to seed a profile acts on that difference — reading a
+// transient failure as "no profile" would overwrite a record it could not see.
+func HasProfileL0(engine *core.StorageEngine, agentID uint64) (bool, error) {
+	_, err := core.ReadProfileSlot(engine, agentID, common.HashID("profile"))
+	if err == nil {
+		return true, nil
+	}
+	if common.CodeOf(err) == common.ErrNotFound {
+		return false, nil
+	}
+	return false, err
+}
+
 func BackfillL1Emotions(engine *core.StorageEngine, agentID uint64, perNode map[uint64]core.NodeEmotion) (int, error) {
 	written := 0
 	for id, em := range perNode {
