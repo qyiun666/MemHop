@@ -22,11 +22,11 @@ func TestTrimTailSnapshotOnWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	eng.Checkpoint() // second snapshot piles up at the tail
-	sizeWithSnaps := eng.FileSize()
+	sizeWithSnaps := eng.mappedSize()
 
 	// The first write after checkpoints must drop all tail snapshots.
 	eng.WriteRecord(DefaultAgentID, RecL2Topic, 2, []byte("second"))
-	sizeAfterWrite := eng.FileSize()
+	sizeAfterWrite := eng.mappedSize()
 	if sizeAfterWrite >= sizeWithSnaps {
 		t.Fatalf("tail snapshots not trimmed on write: with=%d after=%d",
 			sizeWithSnaps, sizeAfterWrite)
@@ -35,7 +35,7 @@ func TestTrimTailSnapshotOnWrite(t *testing.T) {
 	if want := uint64(DataStart) + 2*uint64(RecordHeaderSize) + uint64(len("first")+len("second")); sizeAfterWrite != want {
 		t.Fatalf("file size after trim: got %d, want %d", sizeAfterWrite, want)
 	}
-	if err := eng.CloseNoCheckpoint(); err != nil {
+	if err := eng.closeNoCheckpoint(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -44,8 +44,8 @@ func TestTrimTailSnapshotOnWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer eng2.Close()
-	if eng2.RecordCount() != 2 {
-		t.Fatalf("recordCount: want 2, got %d", eng2.RecordCount())
+	if eng2.liveRecordCount() != 2 {
+		t.Fatalf("recordCount: want 2, got %d", eng2.liveRecordCount())
 	}
 	if _, data, err := eng2.ReadRecord(DefaultAgentID, 2); err != nil || string(data) != "second" {
 		t.Fatalf("record 2: got %q err=%v", data, err)
@@ -68,7 +68,7 @@ func TestOpenAfterTrimTruncateWindow(t *testing.T) {
 		t.Fatal(err)
 	}
 	snapOff := int64(eng.activeHeaderRef().SnapshotOffset)
-	if err := eng.CloseNoCheckpoint(); err != nil {
+	if err := eng.closeNoCheckpoint(); err != nil {
 		t.Fatal(err)
 	}
 	// Simulate the crash: file truncated to the data-region end, header intact.
@@ -81,8 +81,8 @@ func TestOpenAfterTrimTruncateWindow(t *testing.T) {
 		t.Fatalf("open in reclaim truncate window: %v", err)
 	}
 	defer eng2.Close()
-	if eng2.RecordCount() != 2 {
-		t.Fatalf("recordCount: want 2, got %d", eng2.RecordCount())
+	if eng2.liveRecordCount() != 2 {
+		t.Fatalf("recordCount: want 2, got %d", eng2.liveRecordCount())
 	}
 	if _, data, err := eng2.ReadRecord(DefaultAgentID, 1); err != nil || string(data) != "first" {
 		t.Fatalf("record 1: got %q err=%v", data, err)
@@ -104,7 +104,7 @@ func TestOpenFallsBackToFullScanOnCorruptSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	snapOff := int64(eng.activeHeaderRef().SnapshotOffset)
-	if err := eng.CloseNoCheckpoint(); err != nil {
+	if err := eng.closeNoCheckpoint(); err != nil {
 		t.Fatal(err)
 	}
 	// Flip one byte inside the snapshot blob.
@@ -131,8 +131,8 @@ func TestOpenFallsBackToFullScanOnCorruptSnapshot(t *testing.T) {
 		t.Fatalf("open with corrupt snapshot: %v", err)
 	}
 	defer eng2.Close()
-	if eng2.RecordCount() != 2 {
-		t.Fatalf("recordCount: want 2, got %d", eng2.RecordCount())
+	if eng2.liveRecordCount() != 2 {
+		t.Fatalf("recordCount: want 2, got %d", eng2.liveRecordCount())
 	}
 	if _, data, err := eng2.ReadRecord(DefaultAgentID, 2); err != nil || string(data) != "second" {
 		t.Fatalf("record 2: got %q err=%v", data, err)

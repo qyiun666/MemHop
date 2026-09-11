@@ -26,7 +26,7 @@ func TestOpenRecoversRecordsAfterSnapshot(t *testing.T) {
 	eng.WriteRecord(DefaultAgentID, RecL2Topic, 3, []byte("three"))
 	eng.WriteRecord(DefaultAgentID, RecL2Topic, 1, []byte("one-updated"))
 	// Simulate a crash: close without checkpoint.
-	if err := eng.CloseNoCheckpoint(); err != nil {
+	if err := eng.closeNoCheckpoint(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -45,8 +45,8 @@ func TestOpenRecoversRecordsAfterSnapshot(t *testing.T) {
 	if _, data, err := eng2.ReadRecord(DefaultAgentID, 1); err != nil || string(data) != "one-updated" {
 		t.Fatalf("record 1: data=%q err=%v", data, err)
 	}
-	if eng2.RecordCount() != 3 {
-		t.Fatalf("recordCount: want 3, got %d", eng2.RecordCount())
+	if eng2.liveRecordCount() != 3 {
+		t.Fatalf("recordCount: want 3, got %d", eng2.liveRecordCount())
 	}
 	// nextOffset must be past the recovered tail: a new write must not
 	// clobber recovered records.
@@ -74,7 +74,7 @@ func TestCloseNoCheckpointPreservesDiskState(t *testing.T) {
 	}
 	hdr := eng.activeHeaderRef()
 	commitID, snapOff, snapLen := hdr.CommitID, hdr.SnapshotOffset, hdr.SnapshotLength
-	if err := eng.CloseNoCheckpoint(); err != nil {
+	if err := eng.closeNoCheckpoint(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -114,7 +114,7 @@ func TestIndexCallbackMayReadRecord(t *testing.T) {
 	// under RLock and yields lock-free, so engine methods stay callable.
 	writerDone := make(chan struct{})
 	first := true
-	for idHash := range eng.Index(DefaultAgentID) {
+	for idHash := range eng.allEntries(DefaultAgentID) {
 		if first {
 			first = false
 			go func() {
@@ -133,7 +133,7 @@ func TestIndexCallbackMayReadRecord(t *testing.T) {
 	}
 	// yield returning false stops iteration.
 	count := 0
-	for range eng.Index(DefaultAgentID) {
+	for range eng.allEntries(DefaultAgentID) {
 		count++
 		if count >= 3 {
 			break

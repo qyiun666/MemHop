@@ -90,8 +90,8 @@ func TestCheckpointReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer eng2.Close()
-	if eng2.RecordCount() != 1 {
-		t.Fatalf("recordCount: want 1, got %d", eng2.RecordCount())
+	if eng2.liveRecordCount() != 1 {
+		t.Fatalf("recordCount: want 1, got %d", eng2.liveRecordCount())
 	}
 	rt, data, err := eng2.ReadRecord(DefaultAgentID, 100)
 	if err != nil {
@@ -130,8 +130,8 @@ func TestDeleteRecord(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected not found after delete")
 	}
-	if eng.RecordCount() != 2 {
-		t.Fatalf("count: %d", eng.RecordCount())
+	if eng.liveRecordCount() != 2 {
+		t.Fatalf("count: %d", eng.liveRecordCount())
 	}
 	// Others still readable.
 	if _, _, err := eng.ReadRecord(DefaultAgentID, 1); err != nil {
@@ -162,8 +162,8 @@ func TestDeleteRecordBatch(t *testing.T) {
 	if n != 2 {
 		t.Fatalf("expected 2 deleted, got %d", n)
 	}
-	if eng.RecordCount() != 2 {
-		t.Fatalf("count: %d", eng.RecordCount())
+	if eng.liveRecordCount() != 2 {
+		t.Fatalf("count: %d", eng.liveRecordCount())
 	}
 	// Deleted ones unreadable, remaining ones readable
 	for _, id := range []uint64{1, 2} {
@@ -221,8 +221,8 @@ func TestConcurrentReadWrite(t *testing.T) {
 			t.Fatalf("seed record %d missing", i)
 		}
 	}
-	if eng.RecordCount() != 100+3*50 {
-		t.Fatalf("count: %d", eng.RecordCount())
+	if eng.liveRecordCount() != 100+3*50 {
+		t.Fatalf("count: %d", eng.liveRecordCount())
 	}
 }
 
@@ -263,8 +263,8 @@ func TestFileSize(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { eng.Close() })
-	if eng.FileSize() != DataStart {
-		t.Fatalf("initial size: %d", eng.FileSize())
+	if eng.mappedSize() != DataStart {
+		t.Fatalf("initial size: %d", eng.mappedSize())
 	}
 }
 
@@ -283,7 +283,7 @@ func TestContainsAndIndex(t *testing.T) {
 		t.Fatal("should not contain 99")
 	}
 	count := 0
-	for range eng.Index(DefaultAgentID) {
+	for range eng.allEntries(DefaultAgentID) {
 		count++
 	}
 	if count != 1 {

@@ -30,7 +30,7 @@ func TestAppendAfterReopenWithTailSnapshotSurvivesCrash(t *testing.T) {
 	if err := eng.Checkpoint(); err != nil {
 		t.Fatal(err)
 	}
-	if err := eng.CloseNoCheckpoint(); err != nil {
+	if err := eng.closeNoCheckpoint(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -42,7 +42,7 @@ func TestAppendAfterReopenWithTailSnapshotSurvivesCrash(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Simulate a crash: no checkpoint, no normal Close.
-	if err := eng2.CloseNoCheckpoint(); err != nil {
+	if err := eng2.closeNoCheckpoint(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -77,7 +77,7 @@ func TestAppendAfterReopenWithMultipleTailSnapshotsSurvivesCrash(t *testing.T) {
 	if err := eng.Checkpoint(); err != nil {
 		t.Fatal(err)
 	}
-	if err := eng.CloseNoCheckpoint(); err != nil {
+	if err := eng.closeNoCheckpoint(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -88,7 +88,7 @@ func TestAppendAfterReopenWithMultipleTailSnapshotsSurvivesCrash(t *testing.T) {
 	if _, err := eng2.WriteRecord(DefaultAgentID, RecL2Topic, 2, []byte("two")); err != nil {
 		t.Fatal(err)
 	}
-	if err := eng2.CloseNoCheckpoint(); err != nil {
+	if err := eng2.closeNoCheckpoint(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -132,7 +132,7 @@ func TestAppendAfterReopenWithLegacyHeaderRecordEnd(t *testing.T) {
 	if err := eng.file.Sync(); err != nil {
 		t.Fatal(err)
 	}
-	if err := eng.CloseNoCheckpoint(); err != nil {
+	if err := eng.closeNoCheckpoint(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -143,7 +143,7 @@ func TestAppendAfterReopenWithLegacyHeaderRecordEnd(t *testing.T) {
 	if _, err := eng2.WriteRecord(DefaultAgentID, RecL2Topic, 2, []byte("two")); err != nil {
 		t.Fatal(err)
 	}
-	if err := eng2.CloseNoCheckpoint(); err != nil {
+	if err := eng2.closeNoCheckpoint(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -175,7 +175,7 @@ func TestOpenRecoversWhenOneHeaderCorrupt(t *testing.T) {
 			if err := eng.Checkpoint(); err != nil {
 				t.Fatal(err)
 			}
-			if err := eng.CloseNoCheckpoint(); err != nil {
+			if err := eng.closeNoCheckpoint(); err != nil {
 				t.Fatal(err)
 			}
 
@@ -196,7 +196,7 @@ func TestOpenRecoversWhenOneHeaderCorrupt(t *testing.T) {
 				t.Fatalf("Open with one corrupt header: %v", err)
 			}
 			if _, data, err := eng2.ReadRecord(DefaultAgentID, 1); err != nil || string(data) != "keep me" {
-				eng2.CloseNoCheckpoint()
+				eng2.closeNoCheckpoint()
 				t.Fatalf("record 1: data=%q err=%v", data, err)
 			}
 			if err := eng2.Close(); err != nil {

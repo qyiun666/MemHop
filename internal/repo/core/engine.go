@@ -52,11 +52,11 @@ func (e *StorageEngine) Contains(agentID, idHash uint64) bool {
 	return ok
 }
 
-// Index iterates over all (idHash, offset) pairs of one agent domain. The
+// allEntries iterates over all (idHash, offset) pairs of one agent domain. The
 // index is copied first and the yield runs lock-free so engine methods may
 // be called; iteration sees a snapshot. Returning false from yield stops
 // iteration.
-func (e *StorageEngine) Index(agentID uint64) iter.Seq2[uint64, uint64] {
+func (e *StorageEngine) allEntries(agentID uint64) iter.Seq2[uint64, uint64] {
 	return func(yield func(uint64, uint64) bool) {
 		e.mu.RLock()
 		if e.closed {
@@ -121,13 +121,15 @@ func (e *StorageEngine) IterAgents() iter.Seq[uint64] {
 	}
 }
 
-func (e *StorageEngine) RecordCount() uint32 {
+// liveRecordCount is the number of live records across every agent domain.
+func (e *StorageEngine) liveRecordCount() uint32 {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return e.recordCount
 }
 
-func (e *StorageEngine) FileSize() uint64 {
+// mappedSize is the length of the mapped region, which is the file's length.
+func (e *StorageEngine) mappedSize() uint64 {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return uint64(len(e.mmap))

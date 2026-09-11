@@ -240,9 +240,11 @@ func (e *StorageEngine) shutdownHandles() error {
 	}
 }
 
-// CloseNoCheckpoint unmaps and closes without a snapshot or A/B flip; the
-// on-disk state stays as the last checkpoint plus appended records.
-func (e *StorageEngine) CloseNoCheckpoint() error {
+// closeNoCheckpoint unmaps and closes without a snapshot or A/B flip; the
+// on-disk state stays as the last checkpoint plus appended records. This is
+// how the recovery tests simulate a crash: the engine goes away mid-log
+// without the tidy-up a real Close performs.
+func (e *StorageEngine) closeNoCheckpoint() error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.closed {

@@ -23,7 +23,7 @@ func TestTombstoneReplayAfterCrash(t *testing.T) {
 		t.Fatalf("delete: ok=%v err=%v", ok, err)
 	}
 	// Simulate a crash: close without checkpoint.
-	if err := eng.CloseNoCheckpoint(); err != nil {
+	if err := eng.closeNoCheckpoint(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -38,8 +38,8 @@ func TestTombstoneReplayAfterCrash(t *testing.T) {
 	if !eng2.Contains(DefaultAgentID, 2) {
 		t.Fatal("live record lost after reopen")
 	}
-	if eng2.RecordCount() != 1 {
-		t.Fatalf("recordCount: want 1, got %d", eng2.RecordCount())
+	if eng2.liveRecordCount() != 1 {
+		t.Fatalf("recordCount: want 1, got %d", eng2.liveRecordCount())
 	}
 }
 
@@ -58,7 +58,7 @@ func TestTombstoneReplayOverridesSnapshot(t *testing.T) {
 	if ok, err := eng.DeleteRecord(DefaultAgentID, 1); err != nil || !ok {
 		t.Fatalf("delete: ok=%v err=%v", ok, err)
 	}
-	if err := eng.CloseNoCheckpoint(); err != nil {
+	if err := eng.closeNoCheckpoint(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -83,7 +83,7 @@ func TestTornTailFrameTruncatedOnOpen(t *testing.T) {
 		t.Fatal(err)
 	}
 	eng.WriteRecord(DefaultAgentID, RecL0Profile, 1, []byte("keep me"))
-	if err := eng.CloseNoCheckpoint(); err != nil {
+	if err := eng.closeNoCheckpoint(); err != nil {
 		t.Fatal(err)
 	}
 	cleanSize := fileSize(t, p)
@@ -108,7 +108,7 @@ func TestTornTailFrameTruncatedOnOpen(t *testing.T) {
 	if _, err := eng2.WriteRecord(DefaultAgentID, RecL2Topic, 3, []byte("after")); err != nil {
 		t.Fatal(err)
 	}
-	if err := eng2.CloseNoCheckpoint(); err != nil {
+	if err := eng2.closeNoCheckpoint(); err != nil {
 		t.Fatal(err)
 	}
 	if got := fileSize(t, p); got != cleanSize+int64(RecordHeaderSize+len("after")) {
@@ -141,7 +141,7 @@ func TestOrphanSnapshotBlobTruncatedOnOpen(t *testing.T) {
 		t.Fatal(err)
 	}
 	committedOff := eng.activeHeaderRef().SnapshotOffset
-	if err := eng.CloseNoCheckpoint(); err != nil {
+	if err := eng.closeNoCheckpoint(); err != nil {
 		t.Fatal(err)
 	}
 	// Simulate the crash window: snapshot blob synced, header never flipped.
