@@ -28,7 +28,7 @@ internal/{domain,scene,turn,dream,graph,plan,content}
 | 包 | 职责 |
 |---|---|
 | `domain` | 域状态容器 `Context`（Mu/L2Meta/L4/Plans/DreamInFlight/OpCtx，持 Engine/LLM/Defaults 注入）+ PlanCache + L2Meta 缓存维护（SyncL2Meta/RemoveTopicsFromIndices/RetargetL2Meta）；`L4` 是「话题 → 它名下的内容槽位（原文 + 事件）」的镜像 |
-| `scene` | L2 场景读写面：ResolveForRead/Create/FreshID/OpenTurn/SurfaceTopics/ContextTopic/DeleteTopics |
+| `scene` | L2 场景读写面：ResolveForRead/Create/FreshID/OpenTurn/SurfaceTopics/ContextTopic/DeleteCascade |
 | `turn` | 轮次归属：SettleTarget（可沉淀的轮次范围）、ReadProfile（Search 的 L0 读面）；进来的 hex 键已在根上解析完，本包不碰内容 |
 | `dream` | 巩固阶段：SceneSet、PruneContentStage(`l4_prune`) 与 PrunePlanStage(`l5_prune`)（共用 `ContentRetention` 窗口、各读自己的时间戳）、CompressScenes(+组回滚)、StructureStages、L1 各阶段、DistillL0Stage；调参常量随阶段在此 |
 | `graph` | L3 导入/查询：`ImportBatch`（一次批次的 mode + result + 缓存：domain→图、图→标题集、图→边键，外加两份图集「访问过」/「写过内容」；方法 ImportNode/ImportRelations/GraphIDs/StampChanged）、NodeFilter.Matches/ResolveSubgraphStart/SubgraphAdjacency/BfsWithinDepth/AllNodesVisited |
@@ -147,6 +147,10 @@ internal/{domain,scene,turn,dream,graph,plan,content}
   少它一份就让被删的是幸存那几条、被覆写的正是读不回的那一个。只有「从幸存记录
   重建一份视图或缓存」的扫描才允许跳过它，代价是那一条在这份缓存里缺席，
   而这个缺席与它被保留窗裁掉时形状相同。
+  **顺序是这条分界的一半**：决定删谁的枚举排在任何墓碑之前，被拒的一次才真的
+  什么都没做；反过来（先落墓碑再枚举）就是让一次拒绝留下盘上说不清的半成品，
+  而那半成品既不在「已删」也不在「未删」的状态里。撤销自己刚写的记录按那个 id
+  定点删，它不需要枚举，也就不能被域里另一条读不回的记录挡住。
 
 ## 读写路径契约
 
@@ -283,7 +287,7 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    一步的手段就是不在此后的轮里再创建它，旧树由 `l5_prune` 的保留窗回收。
 13. **破坏性写入先验 id**：`MergeScenes` 会删记录，所以主/次每个 id 都必须
    仍是一个场景（`requireScenes` 逐个回读比对），未知 id 报 `ErrNotFound`；
-   底层 `DeleteL2(DeleteScenesL2)` 直接按传入 id 批量删，少这一步时一个陈旧
+   底层 `repo.DeleteL2Records` 只照给定的 id 落墓碑、不认 id 是什么，少这一步时一个陈旧
    的 secondary id 就能带走存活主场景自己的记录，而调用还返回成功。
    删除面其余各口同此：`DeleteScene`/`DeleteTopic`/`DeleteL3` 都先回读确认目标
    存在（不认识的 id 正是 `CheckSession` 拒的那类 id）——没有一处把「记录不在」

@@ -8,7 +8,8 @@
 - `CompressScenes`：每场景一 goroutine，取回融合组并逐组应用。一组的摘要是父话题
   名下 `Seq=SeqUser`、`Kind=KindUtterance`、`Role=RoleDream` 的一条 L4 内容，
   `RoleDream` 只由本包戳写；空摘要在组落下第一条记录之前就被拒，其后任一步失败才经
-  `discardFusedGroup` 按话题键回滚整组（话题上没有引用清单可回填）。
+  `discardFusedGroup` 回滚整组：只照本组自己写过的 id 定点撤销（话题上没有引用清单可
+  回填，也不需要看域里别的记录——要看就可能被正是引发回滚的那一条挡住）。
 - `StructureStages`：L2Meta 重建并即刻装回 → L1 同步/建边/重建/衰减（用装回那份）→ L0 蒸馏。
 - `DistillL0Stage`：L0 蒸馏，只被本包的 `StructureStages` 调用。
 - 阶段报告：`AppendStage`/`StageCancelled`/`stageStatus`。

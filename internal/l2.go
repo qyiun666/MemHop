@@ -259,7 +259,7 @@ func (db *DB) DeleteTopic(agentID uint64, topicID string) error {
 	if len(topics) == 0 {
 		return common.NewError(common.ErrNotFound, "topic not found")
 	}
-	return scene.DeleteTopics(ac, agentID, topics)
+	return scene.DeleteCascade(ac, agentID, nil, topics)
 }
 
 // DeleteScene removes a scene: its scene record, every topic (all depths),
@@ -278,16 +278,13 @@ func (db *DB) DeleteScene(agentID uint64, sceneID string) error {
 	if _, err := core.ReadSceneSlot(db.engine, agentID, sceneHash); err != nil {
 		return err
 	}
-	// One enumeration serves both halves of the cascade: the batch delete below and
-	// the content/plan/mirror cleanup that follows it key on the same list.
+	// The scene's topics are enumerated once, here, and the cascade deletes from that
+	// list: a domain that will not read back is refused before any record goes.
 	topics, err := repo.TopicIDsBySceneL2(db.engine, agentID, sceneHash)
 	if err != nil {
 		return err
 	}
-	if err := repo.DeleteL2(db.engine, agentID, []uint64{sceneHash}, repo.DeleteScenesL2); err != nil {
-		return err
-	}
-	if err := scene.DeleteTopics(ac, agentID, topics); err != nil {
+	if err := scene.DeleteCascade(ac, agentID, []uint64{sceneHash}, topics); err != nil {
 		return err
 	}
 	// Drop the L1 scene node right away (its ID is derivable without an

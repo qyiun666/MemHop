@@ -51,14 +51,18 @@ func DeletePlanNodesByIDs(engine *core.StorageEngine, agentID uint64, idHashes [
 	return n, nil
 }
 
-// DeletePlanNodesByTopicIDs tombstones every plan tree a topic owns. A node has
-// no content-side key to hang on, so the owning topic is found by scanning the
-// node bucket — strictly, because this is the pass that deletes what it finds —
-// the same way a topic's whole subtree is enumerated for a scene or topic deletion.
-func DeletePlanNodesByTopicIDs(engine *core.StorageEngine, agentID uint64, topics []uint64) (int, error) {
+// PlanNodeIDsByTopicIDs enumerates the record ids of every plan node a listed
+// topic owns. A node has no content-side key to hang on, so the owning topic is
+// found by scanning the node bucket — strictly, because the result is what a
+// cascade tombstones afterwards, exactly like a topic subtree. This only
+// enumerates: whoever deletes runs every enumeration before the first tombstone.
+func PlanNodeIDsByTopicIDs(engine *core.StorageEngine, agentID uint64, topics []uint64) ([]uint64, error) {
+	if len(topics) == 0 {
+		return nil, nil
+	}
 	nodes, err := core.CollectAllPlanNodesStrict(engine, agentID)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	inTopic := make(map[uint64]struct{}, len(topics))
 	for _, id := range topics {
@@ -70,7 +74,7 @@ func DeletePlanNodesByTopicIDs(engine *core.StorageEngine, agentID uint64, topic
 			doomed = append(doomed, node.IDHash)
 		}
 	}
-	return DeletePlanNodesByIDs(engine, agentID, doomed)
+	return doomed, nil
 }
 
 // PlanAggregate is one topic's plan footprint: its whole tree, computed in a

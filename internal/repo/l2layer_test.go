@@ -490,11 +490,10 @@ func TestTopicClosureL2RefusesUnreadableChild(t *testing.T) {
 	}
 }
 
-// Both halves of a scene delete key on the same enumeration, so an unreadable
-// topic has to stop the batch: deleting the scene and the topics that did read
-// would leave a topic whose scene no longer exists, still listed by nothing and
-// deleted by nobody.
-func TestDeleteL2RefusesUnreadableSceneTopic(t *testing.T) {
+// A scene cascade tombstones what this enumeration returns, so a topic of the scene
+// that will not read back has to be reported, not dropped: the deleted scene would
+// otherwise leave a topic naming nothing, listed by nobody and deleted by nobody.
+func TestTopicIDsBySceneL2RefusesUnreadableTopic(t *testing.T) {
 	engine := tempEngine(t)
 	const sceneID = uint64(7)
 	writeTopic(t, engine, core.TopicSlot{ID: 11, SceneID: sceneID, Depth: 1, FusedKeywords: []string{"k"}})
@@ -503,20 +502,19 @@ func TestDeleteL2RefusesUnreadableSceneTopic(t *testing.T) {
 		t.Fatalf("write scene: %v", err)
 	}
 
-	err := DeleteL2(engine, core.DefaultAgentID, []uint64{sceneID}, DeleteScenesL2)
+	ids, err := TopicIDsBySceneL2(engine, core.DefaultAgentID, sceneID)
 	if common.CodeOf(err) != common.ErrDeserialization {
-		t.Fatalf("the batch delete must report the topic it could not enumerate, got %v", err)
+		t.Fatalf("the enumeration must report the topic it could not read, got %v", err)
 	}
-	if _, err := core.ReadTopicSlot(engine, core.DefaultAgentID, 11); err != nil {
-		t.Fatalf("a refused batch must delete nothing: %v", err)
-	}
-	if _, err := core.ReadSceneSlot(engine, core.DefaultAgentID, sceneID); err != nil {
-		t.Fatalf("the scene record is not to be tombstoned either: %v", err)
+	if ids != nil {
+		t.Fatalf("a refused enumeration returns no list to delete from, got %v", ids)
 	}
 }
 
-// A merge that could not see every topic of a secondary scene must not move the
-// ones it could: the orphan would be left naming a scene the same call then deletes.
+// A merge sees the domain once, before it writes anything: a topic it could not
+// read must leave the sibling on its own scene and that scene still there. Moving
+// what did read and then refusing would hand the primary a topic set its own record
+// no longer describes.
 func TestMergeScenesL2RefusesUnreadableTopic(t *testing.T) {
 	engine := tempEngine(t)
 	const (
@@ -539,5 +537,8 @@ func TestMergeScenesL2RefusesUnreadableTopic(t *testing.T) {
 	}
 	if got.SceneID != secondary {
 		t.Fatalf("a refused merge must retarget nothing, got scene %d", got.SceneID)
+	}
+	if _, rerr := core.ReadSceneSlot(engine, core.DefaultAgentID, secondary); rerr != nil {
+		t.Fatalf("a refused merge must delete no scene record: %v", rerr)
 	}
 }

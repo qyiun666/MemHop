@@ -162,3 +162,56 @@ func TestApplyGroupsRefusesCollidingParentID(t *testing.T) {
 		t.Fatalf("the landed parent must still carry the first group's summary, got %q", summary.Content)
 	}
 }
+
+// A member that will not read back fails the sink after the parent and its summary
+// are already on disk, so the rollback is what keeps the scene from gaining a
+// surface topic summarising turns that never moved. Undoing it by id is the point:
+// a rollback that enumerated the domain would be refused by this very record and
+// leave the half-applied group exactly where it is.
+func TestApplyGroupsRollsBackTheGroupWhenASinkRefuses(t *testing.T) {
+	engine, err := core.Create(filepath.Join(t.TempDir(), "test.meh"))
+	if err != nil {
+		t.Fatalf("create engine: %v", err)
+	}
+	t.Cleanup(func() { _ = engine.Close() })
+
+	const sceneID = uint64(7)
+	topics := make([]core.TopicSlot, 0, 2)
+	for i, id := range []uint64{31, 32} {
+		topic := core.TopicSlot{
+			ID: id, SceneID: sceneID, Depth: 1,
+			FusedKeywords: []string{"原文"}, UserTimestamp: int64(1000 + i), AgentTimestamp: int64(2000 + i),
+		}
+		if err := core.WriteTopicSlot(engine, core.DefaultAgentID, id, &topic); err != nil {
+			t.Fatalf("write topic %d: %v", id, err)
+		}
+		topics = append(topics, topic)
+	}
+	if _, err := engine.WriteRecord(core.DefaultAgentID, core.RecL2Topic, 32, []byte(`{"id":`)); err != nil {
+		t.Fatalf("make the second member unreadable: %v", err)
+	}
+	ac := domain.NewContext(core.DefaultAgentID, context.Background(), engine, anyKeywords{}, &config.MemHopDefaults{})
+
+	out := &llmops.ConsolidationOutput{L2Groups: []llmops.L2Group{
+		{SceneID: sceneID, NodeHashes: []uint64{31, 32}, MergedSummary: "两轮把登录链路讲完"},
+	}}
+	applied, rejected := applyGroups(context.Background(), ac, sceneID, topics, out)
+	if applied != 0 || rejected != 1 {
+		t.Fatalf("a group whose sink refused must be rejected, got applied=%d rejected=%d", applied, rejected)
+	}
+
+	parentID := core.ComputeTopicID(sceneID, 1000, 2001)
+	if stored, err := core.ReadTopicLenient(engine, core.DefaultAgentID, parentID); common.CodeOf(err) != common.ErrNotFound || stored != nil {
+		t.Fatalf("the rolled-back group left its parent behind: %+v err=%v", stored, err)
+	}
+	if _, err := core.ReadArchiveSlot(engine, core.DefaultAgentID, core.HashContent(parentID, core.SeqUser)); common.CodeOf(err) != common.ErrNotFound {
+		t.Fatalf("and its summary content: err=%v", err)
+	}
+	member, err := core.ReadTopicSlot(engine, core.DefaultAgentID, 31)
+	if err != nil {
+		t.Fatalf("read the member the sink never reached: %v", err)
+	}
+	if member.Depth != 1 || member.ParentID != nil {
+		t.Fatalf("a rejected group moves no member: depth=%d parent=%v", member.Depth, member.ParentID)
+	}
+}

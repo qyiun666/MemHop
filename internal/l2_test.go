@@ -347,6 +347,46 @@ func TestDeleteSceneRemovesEverything(t *testing.T) {
 	}
 }
 
+// The cascade's last whole-bucket enumeration runs before its first tombstone, so a
+// node that will not read back — even one belonging to another turn — stops the
+// delete with everything in place. Tombstoning the scene and its topics first would
+// leave a turn whose tree is still on disk, and a retry could never see that the
+// deletion it is being asked for already happened.
+func TestDeleteSceneRefusesWhileThePlanBucketIsUnreadable(t *testing.T) {
+	engine := newTestEngine(t)
+	db := newTestDB(t, engine)
+	ac := testDefaultContext(db)
+	scene := mustScene(t, engine, 3, "工作")
+	t1 := newTopic(common.HashID("t1"), scene.SceneID, 1000, []string{"a"})
+	if err := core.WriteTopicSlot(engine, core.DefaultAgentID, t1.ID, &t1); err != nil {
+		t.Fatal(err)
+	}
+	ac.L2Meta.Update(index.L2MetaFromTopic(&t1))
+
+	const otherTurn = uint64(99)
+	dangling := core.HashPlanNode(otherTurn, 1)
+	if err := core.WritePlanNode(engine, core.DefaultAgentID, dangling,
+		&core.PlanNode{IDHash: dangling, TopicID: otherTurn, Seq: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := engine.WriteRecord(core.DefaultAgentID, core.RecL5PlanNode, dangling, []byte(`{"id":`)); err != nil {
+		t.Fatalf("make the node unreadable: %v", err)
+	}
+
+	if err := db.DeleteScene(core.DefaultAgentID, common.FormatHash(scene.SceneID)); common.CodeOf(err) != common.ErrDeserialization {
+		t.Fatalf("the cascade must refuse on a bucket it could not enumerate, got %v", err)
+	}
+	if _, err := core.ReadSceneSlot(engine, core.DefaultAgentID, scene.SceneID); err != nil {
+		t.Fatalf("a refused cascade deletes no scene record: %v", err)
+	}
+	if _, err := core.ReadTopicSlot(engine, core.DefaultAgentID, t1.ID); err != nil {
+		t.Fatalf("nor any of its topics: %v", err)
+	}
+	if ac.L2Meta.Get(t1.ID) == nil {
+		t.Fatal("the mirror is untouched until the disk agrees")
+	}
+}
+
 // A scene is named by the library when it is created; UpdateScene is the
 // host's only way to title one. The title must survive a later Search, which
 // rewrites that very record to bump its hit counter and turn sequence.

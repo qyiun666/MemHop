@@ -60,12 +60,6 @@ func CompressTopicsL2(engine *core.StorageEngine, agentID uint64, ids []uint64, 
 	return nil
 }
 
-// Delete targets of DeleteL2.
-const (
-	DeleteScenesL2 uint8 = iota + 1 // ids are scenes: their topics at every depth, then the scene records
-	DeleteTopicsL2                  // ids are topics
-)
-
 // TopicIDsBySceneL2 enumerates every topic (any depth) owned by one of the
 // given scenes. The scan is strict: the list is what a cascade tombstones
 // afterwards, and a topic that merely would not read must not be dropped from it.
@@ -84,42 +78,25 @@ func TopicIDsBySceneL2(engine *core.StorageEngine, agentID uint64, sceneIDs ...u
 	return ids, nil
 }
 
-// DeleteL2 batch-deletes: DeleteScenesL2 treats ids as scene IDs (all topics
-// of the scene plus the scene record itself); DeleteTopicsL2 treats them as
-// topic IDs. An unreadable topic aborts the batch with that cause rather than
-// returning a delete that left a record alive.
-func DeleteL2(engine *core.StorageEngine, agentID uint64, ids []uint64, target uint8) error {
-	var targets []uint64
-	switch target {
-	case DeleteScenesL2: // scenes
-		sceneTopics, err := TopicIDsBySceneL2(engine, agentID, ids...)
-		if err != nil {
-			return err
-		}
-		targets = append(sceneTopics, ids...) // the scene records themselves
-	case DeleteTopicsL2: // topics
-		topics, err := core.CollectAllTopicsStrict(engine, agentID)
-		if err != nil {
-			return err
-		}
-		idSet := common.ToSet(ids)
-		for _, topic := range topics {
-			if _, ok := idSet[topic.ID]; ok {
-				targets = append(targets, topic.ID)
-			}
-		}
-	default:
-		return common.NewError(common.ErrInvalidQuery, "unknown L2 delete target")
-	}
-	if len(targets) == 0 {
+// DeleteL2Records tombstones the given L2 ids — scene slots and topics in any
+// mix — and reads nothing. The set is complete by the time this runs: every
+// caller derives it from a strict enumeration (TopicIDsBySceneL2,
+// TopicClosureL2) or wrote it itself, so re-scanning here would only add a second
+// answer to a question already answered. An id the disk does not hold simply
+// produces no tombstone.
+func DeleteL2Records(engine *core.StorageEngine, agentID uint64, ids []uint64) error {
+	if len(ids) == 0 {
 		return nil
 	}
-	_, err := engine.DeleteRecordBatch(agentID, targets)
+	_, err := engine.DeleteRecordBatch(agentID, ids)
 	return err
 }
 
 // MergeScenesL2 rewrites topics of the secondary scenes to the primary
 // scene in one batch, then deletes the secondary scene records (now empty).
+// The domain scan happens once, before either batch: once the topics have moved,
+// a second refusal would leave the scene records of a domain whose contents
+// already say they belong to another one.
 func MergeScenesL2(engine *core.StorageEngine, agentID uint64, primaryID uint64, secondaryIDs []uint64) error {
 	topics, err := core.CollectAllTopicsStrict(engine, agentID)
 	if err != nil {
@@ -143,7 +120,7 @@ func MergeScenesL2(engine *core.StorageEngine, agentID uint64, primaryID uint64,
 			return err
 		}
 	}
-	return DeleteL2(engine, agentID, secondaryIDs, DeleteScenesL2)
+	return DeleteL2Records(engine, agentID, secondaryIDs)
 }
 
 // OpenSceneTurn opens the scene's next turn: it bumps the scene's

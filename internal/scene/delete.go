@@ -9,18 +9,26 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
-// DeleteTopics removes the given topics together with the L4 content they own,
-// the plan trees they opened and their cache entries, in one engine pass.
-// Records go first and the mirrors are dropped only after the disk agrees, so a
-// failed pass never leaves an index entry naming a deleted record. The two passes
-// that enumerate a whole domain bucket run before the topic's own content goes, so
-// a bucket holding a record that will not read back costs nothing instead of
-// leaving a deleted turn behind with its tree still on the disk. Callers hold ac.Mu.
-func DeleteTopics(ac *domain.Context, agentID uint64, topics []uint64) error {
-	if _, err := repo.DeletePlanNodesByTopicIDs(ac.Engine, agentID, topics); err != nil {
+// DeleteCascade removes the given L2 records — scene slots and/or topics — with
+// the L4 content and L5 plan trees they own and their cache entries. The id sets
+// come from a strict enumeration the caller has already run, so the only
+// whole-bucket scan left here is the plan-node one, and it runs before the first
+// tombstone: a refusal therefore leaves the disk exactly as it was. After that
+// point the only failures left are the deletes themselves, and the mirrors go
+// last, so a failed pass never leaves an index entry naming a deleted record.
+// Callers hold ac.Mu.
+func DeleteCascade(ac *domain.Context, agentID uint64, scenes, topics []uint64) error {
+	planNodes, err := repo.PlanNodeIDsByTopicIDs(ac.Engine, agentID, topics)
+	if err != nil {
 		return err
 	}
-	if err := repo.DeleteL2(ac.Engine, agentID, topics, repo.DeleteTopicsL2); err != nil {
+	records := make([]uint64, 0, len(scenes)+len(topics))
+	records = append(records, topics...)
+	records = append(records, scenes...)
+	if err := repo.DeleteL2Records(ac.Engine, agentID, records); err != nil {
+		return err
+	}
+	if _, err := repo.DeletePlanNodesByIDs(ac.Engine, agentID, planNodes); err != nil {
 		return err
 	}
 	if err := repo.DeleteTopicArchives(ac.Engine, agentID, ac.L4, topics); err != nil {

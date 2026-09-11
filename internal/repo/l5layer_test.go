@@ -140,7 +140,7 @@ func TestCollectPlanNodesGroupsTrees(t *testing.T) {
 	}
 }
 
-func TestDeletePlanNodesByTopicIDsTakesWholeTrees(t *testing.T) {
+func TestPlanNodeIDsByTopicIDsTakesWholeTrees(t *testing.T) {
 	engine := tempEngine(t)
 	agentID := core.DefaultAgentID
 	for _, n := range []*core.PlanNode{
@@ -152,12 +152,16 @@ func TestDeletePlanNodesByTopicIDsTakesWholeTrees(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	n, err := DeletePlanNodesByTopicIDs(engine, agentID, []uint64{9})
+	ids, err := PlanNodeIDsByTopicIDs(engine, agentID, []uint64{9})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n != 2 {
-		t.Fatalf("deleted %d nodes, want the two of topic 9", n)
+	if len(ids) != 2 {
+		t.Fatalf("enumerated %v, want the two nodes of topic 9", ids)
+	}
+	n, err := DeletePlanNodesByIDs(engine, agentID, ids)
+	if err != nil || n != 2 {
+		t.Fatalf("delete the enumerated nodes: %d/%v", n, err)
 	}
 	left, err := CollectPlanNodes(engine, agentID)
 	if err != nil {
@@ -166,15 +170,15 @@ func TestDeletePlanNodesByTopicIDsTakesWholeTrees(t *testing.T) {
 	if len(left) != 1 || left[0].TopicID != 10 {
 		t.Fatalf("another turn's tree must survive: %+v", left)
 	}
-	if n, err := DeletePlanNodesByTopicIDs(engine, agentID, nil); err != nil || n != 0 {
-		t.Fatalf("no topics = no writes, got %d/%v", n, err)
+	if ids, err := PlanNodeIDsByTopicIDs(engine, agentID, nil); err != nil || ids != nil {
+		t.Fatalf("no topics names no tree, so no scan either: %v/%v", ids, err)
 	}
 }
 
-// The retention sweep and the by-topic tombstone pass both decide deletions off a
-// whole-bucket scan, so an unreadable node has to stop them: a tree missing one of
-// its steps looks finished and expired, and a delete that names what it could not
-// see reports a cascade that did not happen.
+// Both passes over the node bucket decide something — what to tombstone, what to
+// exempt from the retention window — so an unreadable node has to stop them: a tree
+// missing one of its steps looks finished and expired, and a delete that names what
+// it could not see reports a cascade that did not happen.
 func TestPlanNodeScansReportAnUnreadableNode(t *testing.T) {
 	engine := tempEngine(t)
 	agentID := core.DefaultAgentID
@@ -193,10 +197,7 @@ func TestPlanNodeScansReportAnUnreadableNode(t *testing.T) {
 	if _, err := CollectPlanNodes(engine, agentID); common.CodeOf(err) != common.ErrDeserialization {
 		t.Fatalf("collect must report the unreadable node, got %v", err)
 	}
-	if _, err := DeletePlanNodesByTopicIDs(engine, agentID, []uint64{9}); common.CodeOf(err) != common.ErrDeserialization {
-		t.Fatalf("the tombstone pass must not run on a bucket it could not read, got %v", err)
-	}
-	if _, err := core.ReadPlanNode(engine, agentID, core.HashPlanNode(9, 1)); err != nil {
-		t.Fatalf("the refused pass must have deleted nothing: %v", err)
+	if _, err := PlanNodeIDsByTopicIDs(engine, agentID, []uint64{9}); common.CodeOf(err) != common.ErrDeserialization {
+		t.Fatalf("the cascade's enumeration must refuse a bucket it could not read, got %v", err)
 	}
 }

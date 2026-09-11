@@ -193,12 +193,13 @@ func applyOneGroup(ctx context.Context, ac *domain.Context, sceneID uint64, g ll
 
 // discardFusedGroup rolls back a partially applied merge group: no orphan
 // summary content and no fused parent sitting above children that were never
-// sunk. The fused topic owns exactly the one slot this group wrote, so dropping
-// the topic's content by key is the whole rollback — no id has to be carried
-// forward to undo a write. Rollback failures only warn — the children stay at
-// depth 1, so the next Dream re-picks the group.
+// sunk. Undo is keyed by the one id this group wrote, so it needs nothing else in
+// the domain — and it must not: a rollback that scanned the topic bucket could be
+// refused by the very record whose write failed, leaving behind exactly the
+// half-applied group it exists to erase. Rollback failures only warn — the children
+// stay at depth 1, so the next Dream re-picks the group.
 func discardFusedGroup(ac *domain.Context, parentID uint64) {
-	if err := repo.DeleteL2(ac.Engine, ac.ID, []uint64{parentID}, repo.DeleteTopicsL2); err != nil {
+	if err := repo.DeleteL2Records(ac.Engine, ac.ID, []uint64{parentID}); err != nil {
 		slog.Warn("dream: rollback fused topic failed", "parent", common.FormatHash(parentID), "err", err)
 	}
 	if err := repo.DeleteTopicArchives(ac.Engine, ac.ID, ac.L4, []uint64{parentID}); err != nil {
