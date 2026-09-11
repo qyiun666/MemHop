@@ -86,7 +86,7 @@ func TestMultiAgentDBPublicSurface(t *testing.T) {
 	// The whole DB handle is the assembly/lifecycle face: host code sets up
 	// and tears down domains, no LLM tool binds here.
 	want := []string{
-		"CreateAgent", "ListAgents", "DeleteAgent", "Session",
+		"CreateAgent", "ListAgents", "Session",
 		"Checkpoint", "CompactTo", "Close", "IsClosed",
 	}
 	sort.Strings(want)

@@ -36,31 +36,6 @@ func (e *StorageEngine) DeleteRecordBatch(agentID uint64, idHashes []uint64) (in
 	return e.deleteRecordBatchLocked(agentID, idHashes)
 }
 
-// DeleteAgentRecords tombstones every record of the agent domain,
-// including its registration record. The domain disappears from the index
-// immediately; disk space is reclaimed by the Compact path.
-func (e *StorageEngine) DeleteAgentRecords(agentID uint64) (int, error) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if e.closed {
-		return 0, common.NewError(common.ErrClosed, "engine is closed")
-	}
-	ids := make([]uint64, 0, len(e.index[agentID]))
-	for id := range e.index[agentID] {
-		ids = append(ids, id)
-	}
-	if len(ids) == 0 {
-		return 0, nil
-	}
-	deleted, err := e.deleteRecordBatchLocked(agentID, ids)
-	if err != nil {
-		return deleted, err
-	}
-	delete(e.index, agentID)
-	delete(e.byAgentType, agentID)
-	return deleted, nil
-}
-
 // deleteRecordBatchLocked appends tombstones, syncs once, remaps once, then
 // bulk-updates the index. Caller must hold e.mu.
 func (e *StorageEngine) deleteRecordBatchLocked(agentID uint64, idHashes []uint64) (int, error) {

@@ -3,8 +3,8 @@
 
 // Agent tenant registry records: one RecAgentRegistry frame per agent maps
 // the random 8-byte agentID to its external name. The record lives inside
-// the agent's own domain (idHash == agentID), so DeleteAgentRecords removes
-// it together with everything else; Open rebuilds the name map by scanning.
+// the agent's own domain (idHash == agentID); Open rebuilds the name map by
+// scanning.
 
 package repo
 

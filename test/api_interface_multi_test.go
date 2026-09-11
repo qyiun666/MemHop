@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 // Offline interface tests for the file-level surface a host holds: the tenant
-// registry (CreateAgent / ListAgents / DeleteAgent / Session) and CompactTo.
+// registry (CreateAgent / ListAgents / Session) and CompactTo.
 // These are the MultiAgentDB methods, so this file works against the handle
 // directly rather than through the single-domain testDB used elsewhere.
 
@@ -135,42 +135,7 @@ func TestInterfaceAgentDomainsAreIsolated(t *testing.T) {
 		}
 	}
 
-	// Deleting a tenant destroys its memories and its handle, and leaves the
-	// neighbour alone. The tombstones cost bytes until the host compacts.
-	if err := m.DeleteAgent(beta); err != nil {
-		t.Fatalf("DeleteAgent(beta): %v", err)
-	}
-	if _, err := m.Session(beta); err == nil {
-		t.Fatal("Session on a deleted tenant should be refused")
-	}
-	if agents, err := m.ListAgents(); err != nil || len(agents) != 1 || agents[0].Name != "alpha" {
-		t.Fatalf("registry after delete = %+v err %v", agents, err)
-	}
-	if scenes, err := sa.ListScenes(""); err != nil || len(scenes) != 1 || scenes[0].SceneID != sceneA {
-		t.Fatalf("deleting beta disturbed alpha: %+v err %v", scenes, err)
-	}
-	// The tombstone rejects handles the host still holds: a stale session must
-	// report a failure, not answer with an empty result.
-	if _, err := sb.SearchL4(queryFor("beta 的专属")); err == nil {
-		t.Fatal("a handle to a deleted tenant must stop working")
-	}
-	if _, err := sb.ListL3(); err == nil {
-		t.Fatal("a handle to a deleted tenant must stop reaching the shared L3 pool")
-	}
-
-	// The implicit domain is not a tenant and cannot be destroyed by name, and
-	// an id the registry never issued is refused at the handle boundary.
-	if err := m.DeleteAgent(memhop.DefaultAgentID); err == nil {
-		t.Fatal("the default domain must not be deletable")
-	}
-	// Deleting a domain that is not there is reported, not accepted: the
-	// success return would claim a record deletion this call did not do.
-	if err := m.DeleteAgent(beta); err == nil {
-		t.Fatal("deleting a tenant twice should be refused")
-	}
-	if err := m.DeleteAgent("ffffffffffffffff"); err == nil {
-		t.Fatal("deleting an unregistered agent id should be refused")
-	}
+	// An id the registry never issued is refused at the handle boundary.
 	if _, err := m.Session("ffffffffffffffff"); err == nil {
 		t.Fatal("Session on an unknown agent id should be refused")
 	}

@@ -78,10 +78,10 @@ func (db *DB) contextFor(agentID uint64) (*domain.Context, error) {
 	return ac, nil
 }
 
-// lockAgent takes the domain lock and re-checks the DeleteAgent tombstone
-// under it: a handle that raced a deletion is rejected instead of writing
-// into a tombstoned domain. Every business entry point must go through
-// this helper.
+// lockAgent takes the domain lock and re-checks under it that the database is
+// still open: a caller that fetched its context before Close ran can still be
+// waiting here when the barrier passes. Every business entry point must go
+// through this helper.
 func (db *DB) lockAgent(agentID uint64) (*domain.Context, error) {
 	ac, err := db.contextFor(agentID)
 	if err != nil {
@@ -94,10 +94,6 @@ func (db *DB) lockAgent(agentID uint64) (*domain.Context, error) {
 		// reject instead of reporting success on a closed database.
 		ac.Mu.Unlock()
 		return nil, common.NewError(common.ErrClosed, "database is closed")
-	}
-	if ac.Deleted.Load() {
-		ac.Mu.Unlock()
-		return nil, common.NewError(common.ErrAgentNotFound, "agent is being deleted")
 	}
 	return ac, nil
 }
@@ -175,20 +171,6 @@ func (db *DB) sweepIdleLocked() {
 		ac.OpCancel()
 		delete(db.agents, id)
 	}
-}
-
-// destroyContext cancels the agent's cancellable work (Dreams and in-flight
-// LLM calls) and removes its context. Returns the destroyed context (nil when
-// absent) so callers can wait for in-flight work if needed.
-func (db *DB) destroyContext(agentID uint64) *domain.Context {
-	db.agentsMu.Lock()
-	defer db.agentsMu.Unlock()
-	ac := db.agents[agentID]
-	if ac != nil {
-		ac.OpCancel()
-		delete(db.agents, agentID)
-	}
-	return ac
 }
 
 func (db *DB) Close() error {

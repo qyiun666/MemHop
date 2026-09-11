@@ -1,19 +1,16 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// Multi-agent lifecycle tests: registry stability across restarts, domain
-// isolation at identical idHashes, and full-domain deletion.
+// Multi-agent lifecycle tests: registry stability across restarts and domain
+// isolation at identical idHashes.
 
 package internal
 
 import (
 	"path/filepath"
-	"sync"
 	"testing"
-	"time"
 
 	"github.com/qyiun666/MemHop/internal/common"
-	"github.com/qyiun666/MemHop/internal/repo"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
@@ -119,130 +116,5 @@ func TestAgentDomainIsolation(t *testing.T) {
 	}
 	if eb[0].Seq != core.LastUtteranceSeq+1 || eb[1].Seq != core.LastUtteranceSeq+2 {
 		t.Errorf("b Seq allocation leaked across domains: %d %d", eb[0].Seq, eb[1].Seq)
-	}
-}
-
-// TestDeleteAgent removes every record of the domain and the tenant
-// mapping; the name can be re-registered afterwards with a fresh ID.
-func TestDeleteAgent(t *testing.T) {
-	db := openMultiTestDB(t, filepath.Join(t.TempDir(), "delete.meh"))
-	t.Cleanup(func() { _ = db.Close() })
-	a, err := db.CreateAgent("victim")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.UpdateL0(a, &core.ProfileSlot{Name: "victim"}); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := db.DeleteAgent(core.DefaultAgentID); err == nil {
-		t.Fatal("DeleteAgent must reject the default domain")
-	}
-	if err := db.DeleteAgent(a); err != nil {
-		t.Fatalf("DeleteAgent: %v", err)
-	}
-
-	agents, err := db.ListAgents()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(agents) != 0 {
-		t.Fatalf("ListAgents after delete = %+v, want empty", agents)
-	}
-	// The domain's records are gone: fresh profile in the re-created domain.
-	a2, err := db.CreateAgent("victim")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if a2 == a {
-		t.Fatal("re-registered tenant must get a fresh agentID")
-	}
-	if p, err := db.GetL0(a2); err != nil || (p != nil && p.Name == "victim") {
-		t.Fatalf("deleted domain leaked into re-registration: %+v err=%v", p, err)
-	}
-}
-
-// TestDeleteAgentUnderConcurrency races domain operations against
-// DeleteAgent: every op either completes before the delete or fails with
-// ErrAgentNotFound, and a stale handle never revives the deleted domain.
-func TestDeleteAgentUnderConcurrency(t *testing.T) {
-	db := openMultiTestDB(t, filepath.Join(t.TempDir(), "delcon.meh"))
-	t.Cleanup(func() { _ = db.Close() })
-	a, err := db.CreateAgent("busy")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var wg sync.WaitGroup
-	for range 8 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for range 200 {
-				if err := db.UpdateL0(a, &core.ProfileSlot{Name: "busy"}); err != nil {
-					if common.CodeOf(err) != common.ErrAgentNotFound {
-						t.Errorf("UpdateL0 racing DeleteAgent: %v", err)
-					}
-					return
-				}
-			}
-		}()
-	}
-	time.Sleep(5 * time.Millisecond) // let the writers ramp up
-	if err := db.DeleteAgent(a); err != nil {
-		t.Fatalf("DeleteAgent: %v", err)
-	}
-	wg.Wait()
-
-	// No orphan records: the engine's agent index must not contain the domain.
-	for id := range db.engine.IterAgents() {
-		if id == a {
-			t.Fatal("orphan records survived DeleteAgent")
-		}
-	}
-
-	if err := db.UpdateL0(a, &core.ProfileSlot{Name: "zombie"}); common.CodeOf(err) != common.ErrAgentNotFound {
-		t.Fatalf("deleted domain revived on write: err=%v", err)
-	}
-	if _, err := db.GetL0(a); common.CodeOf(err) != common.ErrAgentNotFound {
-		t.Fatalf("deleted domain revived on read: err=%v", err)
-	}
-}
-
-// TestDeleteAgentVsLockedDomain an operation already holding the domain
-// lock (a long LLM-bound pipeline) completes its write before the engine
-// deletion, and every later lock attempt is rejected.
-func TestDeleteAgentVsLockedDomain(t *testing.T) {
-	db := openMultiTestDB(t, filepath.Join(t.TempDir(), "locked.meh"))
-	t.Cleanup(func() { _ = db.Close() })
-	a, err := db.CreateAgent("locked")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	ac, err := db.lockAgent(a)
-	if err != nil {
-		t.Fatal(err)
-	}
-	done := make(chan error, 1)
-	go func() { done <- db.DeleteAgent(a) }()
-	time.Sleep(20 * time.Millisecond) // DeleteAgent parks on the domain-lock barrier
-	if err := repo.UpdateProfileL0(db.engine, a, &core.ProfileSlot{Name: "inflight"}); err != nil {
-		t.Fatalf("in-flight write under the domain lock: %v", err)
-	}
-	ac.Mu.Unlock()
-	if err := <-done; err != nil {
-		t.Fatalf("DeleteAgent: %v", err)
-	}
-
-	// The in-flight write completed before the barrier, so it was deleted
-	// with the domain: no orphan records may survive.
-	for id := range db.engine.IterAgents() {
-		if id == a {
-			t.Fatal("orphan records survived DeleteAgent")
-		}
-	}
-	if _, err := db.lockAgent(a); common.CodeOf(err) != common.ErrAgentNotFound {
-		t.Fatalf("deleted domain accepted a new lock: err=%v", err)
 	}
 }

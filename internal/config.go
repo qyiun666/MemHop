@@ -64,10 +64,9 @@ func loadTenantRegistry(engine *core.StorageEngine) (idToName map[uint64]string,
 	for _, id := range ids {
 		name := listed[id]
 		idToName[id] = name
-		// Two active registry records carrying the same name (possible after
-		// a failed DeleteAgent plus a concurrent same-name CreateAgent)
-		// resolve to the highest agentID deterministically: Go map iteration
-		// order must never decide which domain a tenant lands in.
+		// Should two active registry records ever carry the same name, the
+		// higher agentID wins deterministically: Go map iteration order must
+		// never decide which domain a tenant lands in.
 		if prev, ok := nameToID[name]; !ok || id > prev {
 			nameToID[name] = id
 		}

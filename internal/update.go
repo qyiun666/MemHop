@@ -61,8 +61,8 @@ func (db *DB) Update(agentID uint64, sceneID, topicID string) error {
 	if len(utterances) == 0 {
 		return common.NewError(common.ErrInvalidQuery, "this turn holds no content to distill")
 	}
-	// Extract on the domain's cancellable context: a Close/DeleteAgent racing
-	// an in-flight Update cancels the LLM call instead of waiting a full
+	// Extract on the domain's cancellable context: a Close racing an
+	// in-flight Update cancels the LLM call instead of waiting a full
 	// round-trip behind the lifecycle barrier.
 	keywords, err := llmops.ExtractKeywords(ac.OpCtx, db.llm, content.RenderForDistill(utterances))
 	if err != nil {

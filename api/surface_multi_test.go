@@ -79,13 +79,6 @@ func TestSurfaceMultiAgent(t *testing.T) {
 	if rep, err := bobSess.Dream(context.Background(), ""); err != nil || rep == nil {
 		t.Fatalf("bob empty dream: rep=%v err=%v", rep, err)
 	}
-	if err := m.DeleteAgent(alice); err != nil {
-		t.Fatalf("delete alice: %v", err)
-	}
-	// The deleted domain's handle must no longer resolve.
-	if _, err := m.Session(alice); CodeOf(err) != ErrAgentNotFound {
-		t.Fatalf("session after delete: want ErrNotFound, got %v", err)
-	}
 	// Multi-agent DB-level ops and hex id helpers.
 	if err := m.Checkpoint(); err != nil {
 		t.Fatalf("multi checkpoint: %v", err)

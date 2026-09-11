@@ -40,13 +40,12 @@ type Context struct {
 	DreamInFlight map[uint64]struct{} // scenes with a scheduled background Dream
 
 	LastActiveAt atomic.Int64 // Unix ms of the last context access (idle sweep)
-	Deleted      atomic.Bool  // DeleteAgent tombstone: contextFor rejects a destroyed domain
 
 	// OpCtx bounds the agent's cancellable work: background Dream pipelines
 	// and foreground LLM calls made while holding Mu (Update's turn
-	// distillation). DeleteAgent, the idle sweep and Close cancel it so
-	// pending work exits promptly instead of blocking the lifecycle barriers
-	// for a full LLM round-trip.
+	// distillation). The idle sweep and Close cancel it so pending work exits
+	// promptly instead of blocking the lifecycle barriers for a full LLM
+	// round-trip.
 	OpCtx    context.Context
 	OpCancel context.CancelFunc
 }

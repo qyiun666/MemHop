@@ -78,37 +78,12 @@ func TestL3PoolSharedAcrossAgents(t *testing.T) {
 	}
 }
 
-// The pool outlives the agent that imported into it; the deleted agent's
-// stale handle stops reaching it.
-func TestL3PoolSurvivesDeleteAgent(t *testing.T) {
-	srv := mockLLMServer(t, `{"keywords":["x"]}`)
-	db, _ := newSharedL3DB(t, srv.URL)
-	alpha, beta := createPair(t, db)
-
-	if _, err := db.ImportL3(alpha, []L3ImportItem{{Title: "n", Domain: "d", Content: "c"}}, L3ImportSkip); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.DeleteAgent(alpha); err != nil {
-		t.Fatal(err)
-	}
-	graphs, err := db.ListL3(beta)
-	if err != nil || len(graphs) != 1 {
-		t.Fatalf("shared pool lost alpha's graph: %+v err %v", graphs, err)
-	}
-	if _, err := db.ListL3(alpha); err == nil {
-		t.Fatal("a deleted tenant's handle must not reach the shared pool")
-	}
-}
-
-// The shared domain is reserved infrastructure: never listed, never bindable,
-// never deletable — yet reachable through any live caller.
+// The shared domain is reserved infrastructure: never listed, never bindable
+// — yet reachable through any live caller.
 func TestSharedL3DomainIsReserved(t *testing.T) {
 	srv := mockLLMServer(t, `{"keywords":["x"]}`)
 	db, _ := newSharedL3DB(t, srv.URL)
 
-	if err := db.DeleteAgent(core.SharedPoolAgentID); common.CodeOf(err) != common.ErrInvalidQuery {
-		t.Fatalf("delete the shared domain: %v", err)
-	}
 	if err := db.CheckSession(core.SharedPoolAgentID); err == nil {
 		t.Fatal("Session on the shared domain must be refused")
 	}

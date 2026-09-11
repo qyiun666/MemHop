@@ -2,7 +2,7 @@
 
 - **职责**：`Context`（原 agentContext）= 单个 agent 域的业务状态：`Mu` 域锁、
   `L2Meta`/`L4`/`Plans` 缓存、`DreamInFlight`、`OpCtx`/`OpCancel`、
-  `LastActiveAt`/`Deleted`，以及构造时注入的 `Engine`/`LLM`/`Defaults`。
+  `LastActiveAt`，以及构造时注入的 `Engine`/`LLM`/`Defaults`。
   另有 `PlanCache`（无自带锁，靠 `Context.Mu` 串行；键是**开出该计划的那一轮**的
   话题 ID，一个聚合存在当且仅当该键下还有节点）。面只有
   `Aggregate`/`HasSeq`/`Subtree`/`NextSeq`/`UpsertNode`/`RemoveNodes`/

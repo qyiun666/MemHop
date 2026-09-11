@@ -69,18 +69,6 @@ func (m *MultiAgentDB) ListAgents() ([]AgentInfo, error) {
 	return out, nil
 }
 
-// DeleteAgent removes a tenant domain: in-flight Dreams are cancelled, every
-// record of the domain is tombstoned and the name mapping is dropped. An id the
-// registry does not know — never issued, or already deleted — is an error, not a
-// no-op success. The implicit default domain cannot be deleted.
-func (m *MultiAgentDB) DeleteAgent(agentIDHex string) error {
-	id, err := internal.ParseID(agentIDHex)
-	if err != nil {
-		return err
-	}
-	return m.db.DeleteAgent(id)
-}
-
 // Session returns the per-agent handle bound to the 16-char hex agent id.
 // The id must address a registered tenant or the implicit default domain
 // (all-zero hex); admission is enforced in the internal layer.

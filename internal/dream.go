@@ -74,9 +74,8 @@ func (db *DB) RunDream(ctx context.Context, agentID uint64, sceneID uint64) (*Dr
 // exits when RunDream returns or the DB is closed; the per-agent in-flight
 // set prevents stacking multiple Dreams for the same scene. Failures are
 // logged and never fail the caller. RunDream runs under the agent's
-// opCtx, cancelled at Close/DeleteAgent so a pending Dream never writes
-// to a destroyed domain nor blocks shutdown on LLM calls. Caller must hold
-// ac.Mu.
+// opCtx, cancelled at Close so a pending Dream never blocks shutdown on
+// LLM calls. Caller must hold ac.Mu.
 func (db *DB) triggerSceneDream(ac *domain.Context, sceneID uint64) {
 	if _, ok := ac.DreamInFlight[sceneID]; ok {
 		return

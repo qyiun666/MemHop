@@ -37,8 +37,7 @@ const (
 	RecL5PlanNode  uint8 = 0x0F // one node of an L5 plan tree
 	// RecAgentRegistry marks an agent's registration record: idHash equals
 	// the agentID itself and data carries the agent name JSON. One record
-	// per agent, stored inside the agent's own domain; DeleteAgent
-	// tombstones it together with the rest of the domain.
+	// per agent, stored inside the agent's own domain.
 	RecAgentRegistry uint8 = 0x10
 )
 

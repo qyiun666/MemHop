@@ -40,10 +40,10 @@ internal/{domain,scene,turn,dream,graph,plan,content}
 ## agentContext（domain.Context）域级锁纪律
 
 1. **先域锁后存储**：所有大方法统一走 `db.lockAgent(agentID)`（内部：
-   `contextFor` 取域 + `ac.Mu.Lock()` + 锁内复检 `Deleted` 墓碑），再调小
+   `contextFor` 取域 + `ac.Mu.Lock()` + 锁内复检库未关），再调小
    方法；引擎自带的锁在内层，顺序不可颠倒。同 agent 串行、跨 agent 并行。
-   `contextFor` 对非默认域校验注册表：未注册/已删除的 agentID 直接
-   `ErrAgentNotFound`，域永不复活；与删除对撞的陈旧句柄由锁内墓碑复检拒绝。
+   `contextFor` 对非默认域校验注册表：未注册的 agentID 直接
+   `ErrAgentNotFound`。
    L5 族统一走 `db.lockSession(agentID, turnID)`（lockAgent +
    `content.ParseTopicID`，解析失败先解锁）：一个话题键同时寻址两样东西——
    它的内容（L4 的原文与事件，`SearchL4{TopicID, Kind}` 按 Kind 取）与它开出的
@@ -51,7 +51,7 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    门面侧的会话准入策略在 `CheckSession`。L3 的方法是唯一例外：走
    `db.lockSharedPool(callerID)`——先 `CheckSession` 校验调用方域活着，再锁
    保留公共域 `core.SharedPoolAgentID`（L3 记录全部住该域，跨 agent
-   全局串行；公共域无墓碑、免空闲回收）。锚点校验（`scene.Create`/
+   全局串行；公共域免空闲回收）。锚点校验（`scene.Create`/
    `ResolveForRead`/`UpdateScene`）持调用方锁无锁读公共域记录，由引擎级
    互斥兜底。
 2. **缓存刷新序**：写记录帧后紧跟 `ac.SyncL2Meta`（**存储 -> l2meta**）。
@@ -60,17 +60,14 @@ internal/{domain,scene,turn,dream,graph,plan,content}
 3. **Dream 域化**：`RunDream` 全程持本域锁；后台触发经
    `triggerSceneDream(ac, sceneID)`（调用方持 `ac.Mu`，留在根里因为它管理
    goroutine 生命周期），goroutine 运行在 `ac.OpCtx` 下——
-   `Close`/`DeleteAgent`/空闲回收取消它，任何在飞 Dream 在下一阶段边界退出，
-   绝不写入已销毁的域。域锁内的前台 LLM 调用（`Update` 的轮次提炼）同样挂
+   `Close` 与空闲回收取消它，任何在飞 Dream 在下一阶段边界退出，
+   不会把生命周期屏障堵在一次完整 LLM 往返上。域锁内的前台 LLM 调用（`Update` 的轮次提炼）同样挂
    `ac.OpCtx`，避免生命周期屏障被一次完整往返阻塞。
 4. **空闲回收**：无后台定时器；`contextFor` 顺带清扫超
    `Defaults.AgentIdleTTLMs` 未访问的域（默认域与共享 L3 域豁免），回收前先对域锁
    `TryLock`：锁被占用（在飞操作）或 `dreamInFlight` 非空则跳过，留待下轮。
    回收时不快照任何东西：L2Meta 在下次访问时从记录重建，数据始终在文件里。
-5. **DeleteAgent 顺序**：先摘租户映射（断绝新 `contextFor`）→
-   `destroyContext`（取消 `ac.OpCtx`）→ `ac.Deleted` 墓碑（`lockAgent` 拿锁后
-   复检，与删除对撞的在飞操作被拒）→ `ac.Mu` 屏障等待在飞操作 → 引擎域删除。
-6. **planCache 域内索引**：L5 计划聚合缓存 `ac.Plans`（`domain` 包）
+5. **planCache 域内索引**：L5 计划聚合缓存 `ac.Plans`（`domain` 包）
    **不内置锁**，完全依赖 `ac.Mu` 串行（区别于自带 RWMutex 的 `L4Index`）。
    所有计划写路径（节点增删改、Dream 清理）必须先取 `ac.Mu` 再同步缓存；
    `domain.NewContext` 构建，idle 重建时一并重建。**一个键算不算一棵活树的
@@ -80,12 +77,12 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    （`DeleteTopicArchives` / `DropExpiredArchives`）在**磁盘删成功后**摘。
    漏摘 `Plans` 与漏摘 `L4` 的代价不对称：后者让该话题每次读都报 `ErrIO`
    直到重启重建索引，前者留下一条陈旧的 `LastActiveAt` 让死树长期豁免清扫。
-7. **L5 键全零保留**：`0` 是每条记录未赋键时的值，故 `0000000000000000` 不是
+6. **L5 键全零保留**：`0` 是每条记录未赋键时的值，故 `0000000000000000` 不是
    合法的 L5 键。读写两侧一律经 `content.ParseTopicID` 拒它
    （`AppendArchive`/`PlanCreate`/`PlanNodeAdd`/`PlanNodeUpdate`/`PlanState`）
    ——只在写侧拒，
    全零键下就会攒出永远读不出的记录。
-8. **计划清理有界**：dream 的 `l5_prune` 只豁免「持非 done 节点 **且** 窗口内
+7. **计划清理有界**：dream 的 `l5_prune` 只豁免「持非 done 节点 **且** 窗口内
    仍有节点活动」的计划，其中活动只看节点自己的 `UpdatedAt`；宿主中断或放弃而
    静默超 `ContentRetention` 的计划照常清理。豁免保住的是**整棵活树**（含早已
    不更新的 done 父节点），不是「有事件在写所以树还活着」——事件住在 L4，
@@ -187,7 +184,7 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    故同一对节点可并存多种关系。`ImportL3` 结果带 `GraphIDs`
    （图 id = `hash(Domain)`，没有别的公开调用能渲染它）。全部 L3 记录住保留公共域
    `core.SharedPoolAgentID`（文件级公共池：`contextFor`/空闲回收/租户注册表
-   三处豁免，`CreateAgent` 拒撞、`DeleteAgent` 拒删、`Session` 拒绑）。
+   三处豁免，`CreateAgent` 拒撞、`Session` 拒绑）。
    `DeleteL3` 两阶段：公共锁内删图，释放后遍历「默认域 + 注册表」逐域
    `lockAgent` 清锚（`detachGraphAnchors`），不嵌套双锁——代价是「删图后、
    清锚前」窗口内同名重导入（图 id = hash(Domain) 同 id）的锚点会被清成
@@ -223,8 +220,8 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    仍是一个场景（`requireScenes` 逐个回读比对），未知 id 报 `ErrNotFound`；
    底层 `DeleteL2(DeleteScenesL2)` 直接按传入 id 批量删，少这一步时一个陈旧
    的 secondary id 就能带走存活主场景自己的记录，而调用还返回成功。
-   `DeleteAgent` 也先查注册表（注册表不认识
-   的 id 正是 `CheckSession` 拒的那个 id）——至此删除面没有一处把「记录不在」
+   删除面其余各口同此：`DeleteScene`/`DeleteTopic`/`DeleteL3` 都先回读确认目标
+   存在（不认识的 id 正是 `CheckSession` 拒的那类 id）——没有一处把「记录不在」
    当成成功返回。
 14. **`SceneContext` 的说话顺序是读出来的语义**：融合父话题的时间戳就是它吞掉
    的第一轮的 `UserTimestamp`，两者必然同值，所以排序在时间戳之后加
