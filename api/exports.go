@@ -15,34 +15,6 @@ import "github.com/qyiun666/MemHop/internal"
 // it to MultiAgentDB.Session to work in the default agent domain.
 const DefaultAgentID = "0000000000000000"
 
-// ---- L5 capability constants ----
-
-const (
-	CapabilityMCP       = internal.CapabilityMCP
-	CapabilitySkill     = internal.CapabilitySkill
-	CapabilityAPI       = internal.CapabilityAPI
-	CapabilityComposite = internal.CapabilityComposite
-)
-
-// CapabilityFormatV4 is the format string a memhop-capability/v4 document
-// must declare.
-const CapabilityFormatV4 = internal.CapabilityFormatV4
-
-// ParseCapabilityPackage parses and validates one memhop-capability/v4
-// package document (the JSON bytes of a capability.json) into its capability
-// cards. The engine stores no capability records — a host owns its capability
-// directory, reads each capability.json and reuses this parser as the disk
-// format's single source of truth.
-func ParseCapabilityPackage(data []byte, source string) ([]CapabilityImport, error) {
-	return internal.ParseCapabilityPackage(data, source)
-}
-
-// ValidateCapabilityCard checks one capability card against the v4 rules
-// (name, trigger or summary, resource shape, action-chain tool keys).
-func ValidateCapabilityCard(card *CapabilityImport) error {
-	return internal.ValidateCapabilityCard(card)
-}
-
 // ---- L3 edge kind constants ----
 
 const (

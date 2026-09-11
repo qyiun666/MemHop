@@ -40,10 +40,6 @@ func ParseTopicID(topicID string) (uint64, error) {
 	return h, nil
 }
 
-// MaxCrystallizePayload caps the event payload bytes fed to one crystallize LLM
-// call; over-budget events drop from the oldest.
-const MaxCrystallizePayload = 128 * 1024
-
 // MaxEventPayload caps a single event payload (no raw token streams). An event
 // over the budget is refused: the payload is the host's own record of what
 // happened, and silently shortening it would leave a truncated event that reads
@@ -197,24 +193,4 @@ func speaker(role uint8) string {
 	default:
 		return "User"
 	}
-}
-
-// TrimByBudget keeps the newest events within budget payload bytes (at least
-// one). ponytail: dropping the oldest is lossy for very
-// long turns; map-reduce induction over chunks is the upgrade path.
-func TrimByBudget(events []core.ArchiveSlot, budget int) []core.ArchiveSlot {
-	total := 0
-	start := len(events)
-	for start > 0 {
-		p := len(events[start-1].Content)
-		if total+p > budget {
-			break
-		}
-		total += p
-		start--
-	}
-	if start == len(events) && len(events) > 0 {
-		start = len(events) - 1
-	}
-	return events[start:]
 }

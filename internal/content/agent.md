@@ -4,9 +4,7 @@
   `ValidateAppend`（内容写入契约，两种 Kind 各管各的轴）、`Append`（把一条记录写进
   该话题的内容轨，必要时分配 Seq）、`Read`（经域 `L4` 索引按 Kind 读一个话题的内容，
   Seq 升序）、`RenderForDistill`（把一个话题的原文渲染成提炼要读的转录）、
-  `TrimByBudget`（预算内保最新，至少留一条；升级路径见函数注释）、
-  `MaxEventPayload`（单事件 4 KiB）/`MaxUtterancePayload`（单条原文 64 KiB）/
-  `MaxCrystallizePayload`（结晶读侧的 128 KiB 预算）。
+  `MaxEventPayload`（单事件 4 KiB）/`MaxUtterancePayload`（单条原文 64 KiB）。
 - **为什么叫 content 而不叫 trajectory**：一轮的对话原文与操作事件同住 L4，只差一个
   `Kind`；计划节点挂在同一个话题键上但住在 L5。本包服务的是「内容与它的键」，
   不是六层里的某一层。

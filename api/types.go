@@ -33,27 +33,23 @@ var DefaultMemHopDefaults = internal.DefaultMemHopDefaults
 // ---- input / shared aliases ----
 
 type (
-	SearchQuery          = internal.SearchQuery
-	L3ImportItem         = internal.L3ImportItem
-	L3Relation           = internal.L3Relation
-	L3ImportMode         = internal.L3ImportMode
-	L3ImportResult       = internal.L3ImportResult
-	L3NodeQuery          = internal.L3NodeQuery
-	L4Query              = internal.L4Query
-	ScenePatch           = internal.ScenePatch
-	CapabilityImport     = internal.CapabilityImport
-	CapabilityPackageDoc = internal.CapabilityPackageDoc
-	PlanStatus           = internal.PlanStatus
-	DreamReport          = internal.DreamReport
-	DreamStage           = internal.DreamStage
-	SceneContext         = internal.SceneContext
-	SceneContextTopic    = internal.SceneContextTopic
-	SceneMessage         = internal.SceneMessage
-	ResourceRef          = internal.ResourceRef
-	GraphEdgeKind        = internal.GraphEdgeKind
-	CapabilityType       = internal.CapabilityType
-	ContentType          = internal.ContentType
-	ArchiveKind          = internal.ArchiveKind
+	SearchQuery       = internal.SearchQuery
+	L3ImportItem      = internal.L3ImportItem
+	L3Relation        = internal.L3Relation
+	L3ImportMode      = internal.L3ImportMode
+	L3ImportResult    = internal.L3ImportResult
+	L3NodeQuery       = internal.L3NodeQuery
+	L4Query           = internal.L4Query
+	ScenePatch        = internal.ScenePatch
+	PlanStatus        = internal.PlanStatus
+	DreamReport       = internal.DreamReport
+	DreamStage        = internal.DreamStage
+	SceneContext      = internal.SceneContext
+	SceneContextTopic = internal.SceneContextTopic
+	SceneMessage      = internal.SceneMessage
+	GraphEdgeKind     = internal.GraphEdgeKind
+	ContentType       = internal.ContentType
+	ArchiveKind       = internal.ArchiveKind
 )
 
 // ---- response DTOs (ids are 16-char hex strings) ----

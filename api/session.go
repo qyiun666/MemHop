@@ -14,9 +14,7 @@
 // The assembly/admin face (7, plus all of
 // MultiAgentDB) is host code at session boundaries and management channels
 // only — never an LLM tool: UpdateScene, MergeScenes, DeleteTopic,
-// DeleteScene, UpdateL3, DeleteL3, DeleteL3Nodes. The engine stores no
-// capability records: v4 parsing/validation is package-level
-// (ParseCapabilityPackage / ValidateCapabilityCard).
+// DeleteScene, UpdateL3, DeleteL3, DeleteL3Nodes.
 
 package api
 

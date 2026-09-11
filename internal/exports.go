@@ -11,7 +11,6 @@
 package internal
 
 import (
-	"github.com/qyiun666/MemHop/internal/cap/capability"
 	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/config"
 	"github.com/qyiun666/MemHop/internal/repo/core"
@@ -42,7 +41,6 @@ type (
 	ArchiveKind      = core.ArchiveKind
 	GraphEdgeKind    = core.GraphEdgeKind
 	TopicSlot        = core.TopicSlot
-	ResourceRef      = capability.ResourceRef
 	ContentType      = core.ContentType
 )
 
@@ -73,36 +71,6 @@ const (
 	ErrDeserialization = common.ErrDeserialization
 	ErrLLM             = common.ErrLLM
 )
-
-// ---- L5 capability surface ----
-
-// The engine stores no capability records: a host owns its capability
-// directory and reuses the v4 parser as the disk format's single source of
-// truth. These forwarders expose the parse/validate half of the retired
-// record layer.
-
-type CapabilityType = capability.CapabilityType
-
-const (
-	CapabilityMCP       = capability.CapabilityMCP
-	CapabilitySkill     = capability.CapabilitySkill
-	CapabilityAPI       = capability.CapabilityAPI
-	CapabilityComposite = capability.CapabilityComposite
-)
-
-// CapabilityFormatV4 is the format string a v4 document must declare.
-const CapabilityFormatV4 = capability.FormatV4
-
-// ParseCapabilityPackage parses and validates one memhop-capability/v4
-// package document into its capability cards.
-func ParseCapabilityPackage(data []byte, source string) ([]capability.CapabilityImport, error) {
-	return capability.BuildPackage(data, source)
-}
-
-// ValidateCapabilityCard checks one capability card against the v4 rules.
-func ValidateCapabilityCard(card *capability.CapabilityImport) error {
-	return capability.ValidateCard(card)
-}
 
 // ---- L3 edge kind constants ----
 

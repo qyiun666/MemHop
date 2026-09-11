@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 // Package llmops hosts the LLM-assisted cognitive capabilities of the
-// memory engine: keyword extraction, L2 consolidation, L1->L0 distillation
-// and capability crystallization. Each is a self-contained prompt contract plus
+// memory engine: keyword extraction, L2 consolidation and L1->L0
+// distillation. Each is a self-contained prompt contract plus
 // response parser; the transport is injected as Chat, so the package never
 // depends on the composition root or a specific provider.
 package llmops

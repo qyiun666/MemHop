@@ -7,8 +7,7 @@
 // enumerates registered agents; DeleteAgent destroys the domain context and
 // tombstones every record of the domain. Two reserved domains are never
 // handed out: the default domain and the file-wide shared pool domain
-// (core.SharedPoolAgentID, carrying the L3 knowledge graph and the L5
-// capability pool).
+// (core.SharedPoolAgentID, carrying the L3 knowledge graph).
 
 package internal
 
