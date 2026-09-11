@@ -40,7 +40,11 @@ type DecayReport struct {
 func RebuildFromL2(engine *core.StorageEngine, agentID uint64, l2Meta *index.L2MetaIndex, cfg *DecayParams) ([]string, error) {
 	var updated []string
 	for _, node := range core.CollectAllSceneNodes(engine, agentID) {
-		if !isNodeStale(&node, engine, agentID, l2Meta) {
+		stale, err := isNodeStale(&node, engine, agentID, l2Meta)
+		if err != nil {
+			return updated, err
+		}
+		if !stale {
 			continue
 		}
 		for _, edgeID := range node.EdgeIDs {
@@ -56,36 +60,47 @@ func RebuildFromL2(engine *core.StorageEngine, agentID uint64, l2Meta *index.L2M
 	return updated, nil
 }
 
-func isNodeStale(node *core.SceneNode, engine *core.StorageEngine, agentID uint64, l2Meta *index.L2MetaIndex) bool {
+func isNodeStale(node *core.SceneNode, engine *core.StorageEngine, agentID uint64, l2Meta *index.L2MetaIndex) (bool, error) {
 	if len(node.TopicIDs) == 0 {
-		return true
+		return true, nil
 	}
 	firstID := node.TopicIDs[0]
 	if firstID == 0 || !engine.Contains(agentID, firstID) {
-		return true
+		return true, nil
 	}
 	meta := l2Meta.Get(firstID)
 	if meta == nil {
-		return false
+		return false, nil
 	}
 	if meta.Depth <= 2 {
-		return false
+		return false, nil
 	}
-	return !keepDeepNode(node, firstID, meta, engine, agentID, l2Meta)
+	keep, err := keepDeepNode(firstID, meta, engine, agentID, l2Meta)
+	if err != nil {
+		return false, err
+	}
+	return !keep, nil
 }
 
 // keepDeepNode keeps depth-3 nodes whose parent topic is depth <= 2
 // (compression-group nodes stay visible while the parent is retrievable).
-func keepDeepNode(node *core.SceneNode, topicID uint64, meta *index.L2Meta, engine *core.StorageEngine, agentID uint64, l2Meta *index.L2MetaIndex) bool {
+func keepDeepNode(topicID uint64, meta *index.L2Meta, engine *core.StorageEngine, agentID uint64, l2Meta *index.L2MetaIndex) (bool, error) {
 	if meta.Depth != 3 {
-		return false
+		return false, nil
 	}
 	topic, err := core.ReadTopicLenient(engine, agentID, topicID)
-	if err != nil || topic == nil || topic.ParentID == nil {
-		return false
+	switch {
+	case err != nil && common.CodeOf(err) != common.ErrNotFound:
+		// A topic that cannot be read is not a topic that went away, and the
+		// answer here is used to delete an L1 node: stop the pass instead.
+		return false, err
+	case err != nil, topic == nil, topic.ParentID == nil:
+		// Gone, or the id names something that is not a topic: the node has no
+		// depth-3 topic standing for it.
+		return false, nil
 	}
 	parentMeta := l2Meta.Get(*topic.ParentID)
-	return parentMeta != nil && parentMeta.Depth <= 2
+	return parentMeta != nil && parentMeta.Depth <= 2, nil
 }
 
 // DecayNetwork decays node and edge weights exponentially: nodes first

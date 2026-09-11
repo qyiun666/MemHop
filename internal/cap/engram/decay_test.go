@@ -9,6 +9,7 @@ import (
 
 	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/repo/core"
+	"github.com/qyiun666/MemHop/internal/repo/index"
 )
 
 // An edge the decay pass cannot read is not an edge that went away: reporting it
@@ -48,6 +49,60 @@ func TestRemoveNodeFromEdgeReportsUnreadableEdge(t *testing.T) {
 	}
 	if deleted {
 		t.Fatal("nothing was deleted, so the report must not say otherwise")
+	}
+}
+
+// A depth-3 node survives the pass only if its topic can be read and its parent
+// is shallow enough. Answering「don't keep」for a read that merely failed deleted
+// an L1 record over one unreadable payload, so the failure now stops the pass.
+func TestRebuildFromL2StopsOnUnreadableDeepTopic(t *testing.T) {
+	engine, err := core.Create(filepath.Join(t.TempDir(), "decay.meh"))
+	if err != nil {
+		t.Fatalf("create engine: %v", err)
+	}
+	t.Cleanup(func() { _ = engine.Close() })
+
+	var (
+		nodeID   = uint64(0xA1)
+		topicID  = uint64(0xB1)
+		parentID = uint64(0xB2)
+	)
+	parent := &core.TopicSlot{ID: parentID, SceneID: 7, Depth: 2,
+		FusedKeywords: []string{"p"}, UserTimestamp: 5, AgentTimestamp: 6}
+	if err := core.WriteTopicSlot(engine, core.DefaultAgentID, parentID, parent); err != nil {
+		t.Fatalf("write parent: %v", err)
+	}
+	topic := &core.TopicSlot{ID: topicID, SceneID: 7, Depth: 3, ParentID: &parentID,
+		FusedKeywords: []string{"k"}, UserTimestamp: 1, AgentTimestamp: 2}
+	if err := core.WriteTopicSlot(engine, core.DefaultAgentID, topicID, topic); err != nil {
+		t.Fatalf("write topic: %v", err)
+	}
+	node := &core.SceneNode{IDHash: nodeID, SceneID: 7, TopicIDs: []uint64{topicID},
+		Importance: 1, CreatedAt: 1, UpdatedAt: 2}
+	if err := core.WriteSceneNode(engine, core.DefaultAgentID, nodeID, node); err != nil {
+		t.Fatalf("write node: %v", err)
+	}
+
+	// The cache is built first: the rule reads the cached depth, and the payload
+	// is made unreadable afterwards.
+	l2Meta := index.BuildL2MetaFromEngine(engine, core.DefaultAgentID)
+	if _, err := engine.WriteRecord(core.DefaultAgentID, core.RecL2Topic, topicID,
+		[]byte(`{"id":`)); err != nil {
+		t.Fatalf("replace the topic payload with an undecodable one: %v", err)
+	}
+
+	removed, err := RebuildFromL2(engine, core.DefaultAgentID, l2Meta, &DecayParams{MinEdgeNodes: 2})
+	if err == nil {
+		t.Fatal("an unreadable topic must stop the pass, not delete the node standing on it")
+	}
+	if common.CodeOf(err) != common.ErrDeserialization {
+		t.Fatalf("want the read's own classification, got %v", err)
+	}
+	if len(removed) != 0 {
+		t.Fatalf("a stopped pass removes nothing, got %v", removed)
+	}
+	if _, err := core.ReadSceneNode(engine, core.DefaultAgentID, nodeID); err != nil {
+		t.Fatalf("the node must still be there: %v", err)
 	}
 }
 
