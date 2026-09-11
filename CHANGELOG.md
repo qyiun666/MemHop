@@ -32,7 +32,7 @@ README 的版本表与 git log。
     - **重放一轮不再把已沉入组的轮次拉回 surface**：`depth` 与 `parent_id` 连同宿主的 `name` 一起从存量记录带过来，否则第二次结算会让那一轮的原文与取代它的那份组摘要并排出现、组还少一个子；存量记录读不回时这次沉淀**拒绝**而不是猜一个位置（`TestCreateTurnTopicL2RefusesUndecodableRecord`）；`ReadTopicLenient` 此前把解不开的 payload 原样交出 `json` 错误，任何按错误码分道的调用方看到的都是 0 码，现在与 `readJSON` 同口径报 `ErrDeserialization`。
     - **衰减级联不再把读不动的边说成「已剪好」**：`removeNodeFromEdge` 此前把任何读失败都返回成「没删、也没错」，于是一个节点继续指向一张没人剪过的边；现在与它的对向函数同一口径（只有 `ErrNotFound` 算已消失，其余上报），两处手写的「从切片里摘掉一个 id 并记住有没有摘到」换成 `slices.DeleteFunc`（`TestRemoveNodeFromEdgeReportsUnreadableEdge`）。
     - **话题列举给出确定顺序**：排序键是 (UserTimestamp, Depth)，而**同深度**的两个话题可以共用一个 user 时间戳（融合父带的就是它组内首轮的 `UserTimestamp`，任何同深度、时间戳相同的话题都与它打平），打平时顺序只能由记录扫描给出——现在以记录 id 收尾，同一个场景两次读给出同一个顺序（`TestListTopicsL2BreaksTiesOnID`）。
-    - **顺手净删**：`index` 里与 `core.IterAll` 同形的第二份扫描（自己 `json.Unmarshal`，绕过帧类型校验）、`domain` 两处永不成立的 `L2Meta == nil` 分支（同文件第三个函数就直接解引用）、`ensureRegistered` 里第二份永不触发的空名校验（唯一的调用方 `SubAgent` 先拒）、一个零调用的 L3 测试辅助函数。
+    - **顺手净删**：`index` 里与 `core.IterAll` 同形的第二份扫描（自己 `json.Unmarshal`，绕过帧类型校验）、`domain` 两处永不成立的 `L2Meta == nil` 分支（同文件第三个函数就直接解引用）、`ensureRegistered` 里第二份永不触发的空名校验（唯一的调用方 `SubAgent` 先拒）、一个零调用的 L3 测试辅助函数；`scene.DetachGraph` 扫完一遍场景后又按 id 把每条命中的重读一次再改写，同锁内那次重读的失败分支永不成立——现在直接用扫描已解出的 slot 改写。
     - **文档四处不实/越界**：`cap` 的「不认识层，收到的都是渲染好的文本」与四个包的现状冲突（`profile.Samples` 自己扫 L1 并按本包常量裁剪，`engram`/`knowledge` 收的是 engine/节点原语），改写为「不认识编排，预算各归各包」；`domain` 两处复制根条目已有的镜像属主纪律、`turn` 一处替键的语义说话、`dream` 一处断言别包的写入集合，各按 D01 收回或上移（「内容只被话题寻址、话题里推不出场景」此前只写在 `turn` 里，现归根条目）；两个写入口的取舍与代价落为决策档案 `notes/implemented/architecture/2026-09-11-l4-content-two-write-entries.md`。
 
 ## v1.6.2 — 2026-09-07 — 计划事件不再受词表约束（`EventType` 归宿主）

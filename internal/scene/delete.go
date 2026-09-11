@@ -33,19 +33,15 @@ func DeleteTopics(ac *domain.Context, agentID uint64, topics []uint64) error {
 // the domain because anchors live only on scenes — a graph slot keeps no reverse
 // list. Callers hold the domain lock.
 func DetachGraph(engine *core.StorageEngine, agentID uint64, graphID uint64) error {
-	var targets []uint64
+	var targets []core.SceneSlot
 	for s := range core.IterAll[core.SceneSlot](engine, agentID, core.RecL2Scene) {
 		if s.L3ID == graphID {
-			targets = append(targets, s.SceneID)
+			targets = append(targets, s)
 		}
 	}
-	for _, sceneID := range targets {
-		slot, err := core.ReadSceneSlot(engine, agentID, sceneID)
-		if err != nil {
-			return err
-		}
+	for _, slot := range targets {
 		slot.L3ID = 0
-		if err := core.WriteSceneSlot(engine, agentID, sceneID, slot); err != nil {
+		if err := core.WriteSceneSlot(engine, agentID, slot.SceneID, &slot); err != nil {
 			return err
 		}
 	}
