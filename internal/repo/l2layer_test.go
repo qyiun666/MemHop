@@ -87,7 +87,7 @@ func TestListTopicsL2FromL2Meta(t *testing.T) {
 		{ID: 11, SceneID: sceneA, Depth: 1, FusedKeywords: []string{"k1"},
 			UserTimestamp: 300},
 		{ID: 12, SceneID: sceneB, Depth: 1, FusedKeywords: []string{"k2", "a2"},
-			AgentTimestamp: 400, UserTimestamp: 100, ChildrenIDs: []uint64{13}},
+			AgentTimestamp: 400, UserTimestamp: 100},
 		{ID: 13, SceneID: sceneA, Depth: 2, FusedKeywords: []string{"f3"},
 			UserTimestamp: 200, ParentID: &parentID},
 		{ID: 14, SceneID: sceneB, Depth: 3, FusedKeywords: []string{"k4"},
@@ -272,16 +272,6 @@ func TestRenameTopicL2KeepsTheRestOfTheRecord(t *testing.T) {
 	if !CreateTurnTopicL2(engine, core.DefaultAgentID, sceneID, topicID, []string{"登录", "JWT"}, 1000, 1001) {
 		t.Fatal("create turn topic")
 	}
-	const child = uint64(555)
-	stored, err := core.ReadTopicSlot(engine, core.DefaultAgentID, topicID)
-	if err != nil {
-		t.Fatalf("read topic: %v", err)
-	}
-	stored.ChildrenIDs = []uint64{child}
-	if err := core.WriteTopicSlot(engine, core.DefaultAgentID, topicID, stored); err != nil {
-		t.Fatalf("give the topic a child: %v", err)
-	}
-
 	const want = "决定把 L5 让给计划树的那一轮"
 	got, err := RenameTopicL2(engine, core.DefaultAgentID, topicID, want)
 	if err != nil {
@@ -293,8 +283,8 @@ func TestRenameTopicL2KeepsTheRestOfTheRecord(t *testing.T) {
 	if !slices.Equal(got.FusedKeywords, []string{"登录", "JWT"}) {
 		t.Fatalf("keyword track disturbed: %v", got.FusedKeywords)
 	}
-	if !slices.Equal(got.ChildrenIDs, []uint64{child}) || got.SceneID != sceneID || got.Depth != 1 {
-		t.Fatalf("tree links or scene ownership disturbed: %+v", got)
+	if got.SceneID != sceneID || got.Depth != 1 {
+		t.Fatalf("scene ownership or depth disturbed: %+v", got)
 	}
 	if cached := index.L2MetaFromTopic(got).ToTopicSlot(); cached.Name != want {
 		t.Fatalf("cache path lost the name: %+v", cached)

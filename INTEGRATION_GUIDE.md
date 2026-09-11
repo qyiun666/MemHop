@@ -306,7 +306,7 @@ with Dream: there is no standalone distill entry point.
 | `db.SceneContext(sceneID) (*SceneContext, error)` | the scene's whole transcript (topics + their L4 originals) and **no write at all** — no turn is opened; **use for session resume**. Unlike `Search` it flattens to depth 2, because a Dream-fused group keeps its originals on the children it sank, and this is the only read that brings them back: entries carry `Depth` and `ChildCount` so a fused parent (whose message is Dream's summary) can be told from the turns it grouped. `TopicCount` counts the entries returned — roots and the sunk children this read alone brings back, alike |
 | `db.UpdateScene(sceneID, api.ScenePatch{Name, L3ID, Force}) (SceneSlot, error)` | title it (`Name`), anchor it to an L3 project domain (`L3ID`), or clear the anchor (`L3ID: &""`); nil fields keep their stored value, and the **written scene comes back** |
 | `db.MergeScenes(primaryID, []secondaryIDs) error` | merge scenes |
-| `db.DeleteTopic(topicID) error` | delete a topic subtree + its L4 archives + indexes; prunes parent `ChildrenIDs` (memory correction) |
+| `db.DeleteTopic(topicID) error` | delete a topic subtree + its L4 archives + indexes; the subtree is the topics whose `parent_id` points into it (memory correction) |
 | `db.DeleteScene(sceneID) error` | delete a scene + all topics/archives + L1 node; `ErrNotFound` if missing (memory correction) |
 
 Renaming and anchoring are one call: `UpdateScene` reads the scene once,

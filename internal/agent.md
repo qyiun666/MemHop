@@ -30,7 +30,7 @@ internal/{domain,scene,turn,dream,graph,plan,content}
 | 包 | 职责 |
 |---|---|
 | `domain` | 域状态容器 `Context`（Mu/L2Meta/L4/Plans/DreamInFlight/OpCtx，持 Engine/LLM/Defaults 注入）+ PlanCache + L2Meta 缓存维护（SyncL2Meta/RemoveTopicsFromIndices/RetargetL2Meta）；`L4` 是「话题 → 它名下的内容槽位（原文 + 事件）」的镜像 |
-| `scene` | L2 场景读写面：ResolveForRead/Create/FreshID/OpenTurn/SurfaceTopics/ContextTopic/PruneParentChild/DeleteTopics |
+| `scene` | L2 场景读写面：ResolveForRead/Create/FreshID/OpenTurn/SurfaceTopics/ContextTopic/DeleteTopics |
 | `turn` | 轮次归属：SettleTarget（可沉淀的轮次范围）、ReadProfile（Search 的 L0 读面）；进来的 hex 键已在根上解析完，本包不碰内容 |
 | `dream` | 巩固阶段：SceneSet、PruneContentStage(`l4_prune`) 与 PrunePlanStage(`l5_prune`)（共用 `ContentRetention` 窗口、各读自己的时间戳）、CompressScenes(+组回滚)、StructureStages、L1 各阶段、DistillL0Stage；调参常量随阶段在此 |
 | `graph` | L3 导入/查询：`ImportBatch`（一次批次的 mode + result + 三张缓存，方法 ImportNode/ImportRelations/GraphIDs）、NodeFilter.Matches/ResolveSubgraphStart/SubgraphAdjacency/BfsWithinDepth/AllNodesVisited |

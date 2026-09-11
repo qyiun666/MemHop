@@ -20,7 +20,6 @@ type L2Meta struct {
 	Depth          uint8
 	SceneID        uint64
 	ParentID       *uint64
-	ChildrenIDs    []uint64
 	Name           string
 	FusedKeywords  []string
 	UserTimestamp  int64
@@ -50,7 +49,6 @@ func L2MetaFromTopic(t *core.TopicSlot) *L2Meta {
 		Depth:          t.Depth,
 		SceneID:        t.SceneID,
 		ParentID:       t.ParentID,
-		ChildrenIDs:    t.ChildrenIDs,
 		Name:           t.Name,
 		FusedKeywords:  t.FusedKeywords,
 		UserTimestamp:  t.UserTimestamp,
@@ -131,7 +129,6 @@ func (m *L2Meta) ToTopicSlot() core.TopicSlot {
 		ID:             m.IDHash,
 		SceneID:        m.SceneID,
 		ParentID:       m.ParentID,
-		ChildrenIDs:    m.ChildrenIDs,
 		Depth:          m.Depth,
 		Name:           m.Name,
 		FusedKeywords:  m.FusedKeywords,

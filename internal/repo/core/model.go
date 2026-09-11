@@ -95,14 +95,15 @@ func NewSceneSlot(sceneID uint64, name string) SceneSlot {
 // turns. A topic carries exactly one keyword track (FusedKeywords); what was
 // said lives in the L4 archives keyed by this topic's own id, which a topic does
 // not list.
-// Tree: parent_id (nil = depth-1 root) + children_ids. Depth 1 is the surface a
-// scene read lists, 2+ is sunk history; depth >= 4 is never kept.
+// Tree: ParentID (nil = depth-1 root) is the only link a record carries — a
+// topic's children are found by the readers that look for them, not by a list on
+// the parent. Depth 1 is the surface a scene read lists, 2+ is sunk history;
+// depth >= 4 is never kept.
 type TopicSlot struct {
-	ID          uint64   `json:"id"`
-	SceneID     uint64   `json:"scene_id"`
-	ParentID    *uint64  `json:"parent_id,omitempty"`
-	ChildrenIDs []uint64 `json:"children_ids"`
-	Depth       uint8    `json:"depth"`
+	ID       uint64  `json:"id"`
+	SceneID  uint64  `json:"scene_id"`
+	ParentID *uint64 `json:"parent_id,omitempty"`
+	Depth    uint8   `json:"depth"`
 
 	// Name is a caller-supplied label for this topic. Nothing here derives into
 	// it, so consolidating or rewriting the record goes around the name and never

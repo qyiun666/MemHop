@@ -10,27 +10,6 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
-// PruneParentChild removes the deleted topic from its surviving parent's
-// ChildrenIDs and refreshes the parent record and L2Meta entry, so no
-// dangling child reference survives the deletion. Callers hold ac.Mu.
-func PruneParentChild(ac *domain.Context, topicID uint64) error {
-	root, err := core.ReadTopicSlot(ac.Engine, ac.ID, topicID)
-	if err != nil || root == nil || root.ParentID == nil {
-		return err
-	}
-	parentID := *root.ParentID
-	parent, err := core.ReadTopicSlot(ac.Engine, ac.ID, parentID)
-	if err != nil || parent == nil {
-		return err
-	}
-	parent.ChildrenIDs = common.RemoveOnce(parent.ChildrenIDs, topicID)
-	if err := core.WriteTopicSlot(ac.Engine, ac.ID, parentID, parent); err != nil {
-		return err
-	}
-	ac.SyncL2Meta(parentID)
-	return nil
-}
-
 // DeleteTopics removes the given topics together with the L4 content they own,
 // the plan trees they opened and their cache entries, in one engine pass.
 // Records go first and the mirrors are dropped only after the disk agrees, so a

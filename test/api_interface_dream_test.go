@@ -47,8 +47,20 @@ func TestInterfaceDream(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Search after dream: %v", err)
 	}
-	if len(res.Topics) != 1 || len(res.Topics[0].ChildrenIDs) == 0 {
-		t.Fatalf("surface = %+v, want one fused topic owning the turns", res.Topics)
+	if len(res.Topics) != 1 || res.Topics[0].ParentID != nil {
+		t.Fatalf("surface = %+v, want one fused topic as the scene's only root", res.Topics)
+	}
+	// The turns it swallowed are not gone: the transcript read brings them back
+	// as that topic's children, and it counts exactly the children it has.
+	full, err := db.SceneContext(sceneID)
+	if err != nil {
+		t.Fatalf("SceneContext after dream: %v", err)
+	}
+	if len(full.Topics) != 3 {
+		t.Fatalf("scene context after fusion = %+v, want the fused parent over its 2 sunk turns", full.Topics)
+	}
+	if fused := full.Topics[0]; fused.Depth != 1 || fused.ChildCount != 2 {
+		t.Fatalf("fused parent = %+v, want depth 1 owning 2 children", fused)
 	}
 	// Stage timeline covers the full pipeline, distillation included.
 	if len(rep.Stages) == 0 {

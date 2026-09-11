@@ -236,8 +236,8 @@ func TestInterfaceSceneContextReadsThroughFusion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Search after Dream: %v", err)
 	}
-	if len(fused.Topics) != 1 || len(fused.Topics[0].ChildrenIDs) == 0 {
-		t.Fatalf("surface after Dream = %+v, want one fused group owning the turns", fused.Topics)
+	if len(fused.Topics) != 1 || fused.Topics[0].ParentID != nil {
+		t.Fatalf("surface after Dream = %+v, want one fused group as the scene's only root", fused.Topics)
 	}
 	ctx2, err := db.SceneContext(sceneID)
 	if err != nil {
@@ -254,6 +254,10 @@ func TestInterfaceSceneContextReadsThroughFusion(t *testing.T) {
 	parent := ctx2.Topics[0]
 	if parent.Depth != 1 || parent.ChildCount == 0 {
 		t.Fatalf("first entry after fusion = %+v, want the fused parent", parent)
+	}
+	if parent.TopicID != fused.Topics[0].ID {
+		t.Fatalf("the root the ordinary read shows (%s) is not the parent this read expands (%s)",
+			fused.Topics[0].ID, parent.TopicID)
 	}
 	sunk := 0
 	for _, e := range ctx2.Topics[1:] {

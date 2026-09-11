@@ -293,15 +293,20 @@ func TestDreamCompressionFidelity(t *testing.T) {
 		if len(after.Topics) >= len(before.Topics) {
 			t.Errorf("surface did not shrink: %d -> %d", len(before.Topics), len(after.Topics))
 		}
-		// The fused topic owns the merged turns and carries the single track.
+		// The fused topic owns the merged turns: they come back as its children
+		// on the transcript read, which is the only read that flattens to 2.
+		full, err := db.SceneContext(sceneID)
+		if err != nil {
+			t.Fatalf("scene context after dream: %v", err)
+		}
 		var fusedSeen bool
-		for _, tp := range after.Topics {
-			if len(tp.ChildrenIDs) > 0 && len(tp.FusedKeywords) > 0 {
+		for _, tp := range full.Topics {
+			if tp.Depth == 1 && tp.ChildCount > 0 {
 				fusedSeen = true
 			}
 		}
 		if !fusedSeen {
-			t.Error("no fused topic (with children and keywords) on the post-dream surface")
+			t.Error("no fused topic owning sunk turns on the post-dream transcript")
 		}
 	}
 

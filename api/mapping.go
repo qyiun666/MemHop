@@ -87,7 +87,6 @@ func fromTopicSlot(t internal.TopicSlot) TopicSlot {
 		ID:             formatID(t.ID),
 		SceneID:        formatID(t.SceneID),
 		ParentID:       formatPtr(t.ParentID),
-		ChildrenIDs:    formatIDs(t.ChildrenIDs),
 		Depth:          t.Depth,
 		Name:           t.Name,
 		FusedKeywords:  slices.Clone(t.FusedKeywords),

@@ -7,8 +7,7 @@
   `OpenTurn`（把场景的轮次计数器推到下一轮）。
 - 读面渲染：`SurfaceTopics`（一个场景的 depth-1 话题，轮次序）、
   `ContextTopic`（把一个话题的关键词轨、子话题数与递给它的原文渲染成一个场景条目）。
-- 删除步：`PruneParentChild`（从存活父话题的 `ChildrenIDs` 摘掉被删话题，刷新父
-  记录与缓存）、`DeleteTopics`（话题 + 它名下的内容 + 它开出的计划树 + 各份缓存）、
+- 删除步：`DeleteTopics`（话题 + 它名下的内容 + 它开出的计划树 + 各份缓存）、
   `DetachGraph`（清掉命名某张 L3 图的锚点）。
 
 ## 契约

@@ -87,17 +87,12 @@ func makeTopic(id uint64, depth uint8) TopicSlot {
 		v := uint64(1)
 		parentID = &v
 	}
-	childrenIDs := []uint64{}
-	if depth == 1 {
-		childrenIDs = []uint64{2, 3}
-	}
 	keywords := []string{"登录", "JWT"}
 	if depth >= 2 {
 		keywords = []string{"认证"}
 	}
 	return TopicSlot{
-		ID: id, SceneID: 100, ParentID: parentID,
-		ChildrenIDs: childrenIDs, Depth: depth,
+		ID: id, SceneID: 100, ParentID: parentID, Depth: depth,
 		FusedKeywords: keywords,
 		UserTimestamp: 1000, AgentTimestamp: 1001,
 	}

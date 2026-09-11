@@ -174,7 +174,6 @@ func TestDeleteTopicRemovesSubtreeAndArchives(t *testing.T) {
 	childID := common.HashID("child")
 	arcID := core.HashContent(parentID, core.SeqUser)
 	parent := newTopic(parentID, scene.SceneID, 1000, []string{"a"})
-	parent.ChildrenIDs = []uint64{childID}
 	child := newTopic(childID, scene.SceneID, 2000, []string{"b"})
 	child.ParentID = &parentID
 	if err := core.WriteTopicSlot(engine, core.DefaultAgentID, parentID, &parent); err != nil {
@@ -245,38 +244,60 @@ func TestTopicKeyEntryPointsRejectReservedZero(t *testing.T) {
 	}
 }
 
-// TestDeleteTopicPrunesParentChild deleting a child removes it from the
-// surviving parent's ChildrenIDs.
-func TestDeleteTopicPrunesParentChild(t *testing.T) {
+// TestDeleteTopicSubtreeComesFromParentID a topic names no children of its own;
+// the tree is the children's ParentID. So deleting one turn leaves the parent and
+// its other children standing, and the scene read still counts exactly the
+// children that remain.
+func TestDeleteTopicSubtreeComesFromParentID(t *testing.T) {
 	engine := newTestEngine(t)
 	db := newTestDB(t, engine)
-	_ = testDefaultContext(db)
+	ac := testDefaultContext(db)
 	scene := mustScene(t, engine, 71, "工作")
 
 	parentID := common.HashID("parent")
 	childID := common.HashID("child")
+	siblingID := common.HashID("sibling")
 	parent := newTopic(parentID, scene.SceneID, 1000, []string{"a"})
-	parent.ChildrenIDs = []uint64{childID}
-	child := newTopic(childID, scene.SceneID, 2000, []string{"b"})
-	child.ParentID = &parentID
-	if err := core.WriteTopicSlot(engine, core.DefaultAgentID, parentID, &parent); err != nil {
-		t.Fatal(err)
+	kids := []core.TopicSlot{
+		newTopic(childID, scene.SceneID, 2000, []string{"b"}),
+		newTopic(siblingID, scene.SceneID, 3000, []string{"c"}),
 	}
-	if err := core.WriteTopicSlot(engine, core.DefaultAgentID, childID, &child); err != nil {
-		t.Fatal(err)
+	for i := range kids {
+		kids[i].Depth = 2
+		kids[i].ParentID = &parentID
+	}
+	for _, topic := range append([]core.TopicSlot{parent}, kids...) {
+		write := topic
+		if err := core.WriteTopicSlot(engine, core.DefaultAgentID, write.ID, &write); err != nil {
+			t.Fatal(err)
+		}
+		ac.L2Meta.Update(index.L2MetaFromTopic(&write))
 	}
 
 	if err := db.DeleteTopic(core.DefaultAgentID, common.FormatHash(childID)); err != nil {
 		t.Fatalf("DeleteTopic: %v", err)
 	}
-	stored, err := core.ReadTopicSlot(engine, core.DefaultAgentID, parentID)
-	if err != nil || stored == nil {
-		t.Fatalf("parent should survive: %v", err)
+	if _, err := core.ReadTopicSlot(engine, core.DefaultAgentID, childID); err == nil {
+		t.Error("the named child should be gone")
 	}
-	for _, id := range stored.ChildrenIDs {
-		if id == childID {
-			t.Fatal("parent ChildrenIDs must not reference the deleted child")
+	ctx, err := db.SceneContext(core.DefaultAgentID, common.FormatHash(scene.SceneID))
+	if err != nil {
+		t.Fatalf("SceneContext: %v", err)
+	}
+	var parentView, siblingView *core.SceneContextTopic
+	for i := range ctx.Topics {
+		switch ctx.Topics[i].TopicID {
+		case common.FormatHash(parentID):
+			parentView = &ctx.Topics[i]
+		case common.FormatHash(siblingID):
+			siblingView = &ctx.Topics[i]
 		}
+	}
+	if parentView == nil || siblingView == nil {
+		t.Fatalf("deleting one child lost the rest of the tree: %+v", ctx.Topics)
+	}
+	if parentView.ChildCount != 1 {
+		t.Fatalf("parent reports %d children, want the one still on disk", parentView.ChildCount)
 	}
 }
 

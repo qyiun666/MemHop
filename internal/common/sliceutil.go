@@ -21,16 +21,6 @@ func ToSet(ids []uint64) map[uint64]struct{} {
 	return s
 }
 
-// RemoveOnce removes the first occurrence of v from s (no-op when absent).
-func RemoveOnce[T comparable](s []T, v T) []T {
-	for i, x := range s {
-		if x == v {
-			return append(s[:i], s[i+1:]...)
-		}
-	}
-	return s
-}
-
 // Union returns a ++ b with duplicates removed, keeping first-seen order.
 func Union[T comparable](a, b []T) []T {
 	out := make([]T, 0, len(a)+len(b))

@@ -268,7 +268,7 @@ err = db.UpdateL0(&api.ProfileSlot{Name: "..."})
 | `db.SceneContext(sceneID) (*SceneContext, error)` | 场景全貌（含各话题的 L4 原文），且**完全不写**——不开轮次，**会话恢复用这个**。与 `Search` 的取数差异是刻意的：它平铺到 depth 2，因为 Dream 融合组把原文下沉到了子话题，只有这条路能取回；每条带 `Depth` 与 `ChildCount`，于是一个融合父节点（它的消息是 Dream 的摘要）与它归并的那几轮可分辨。`TopicCount` 计的是本次返回的条目数（根与只有这条路能带回的下沉子条目都算） |
 | `db.UpdateScene(sceneID, api.ScenePatch{Name, L3ID, Force}) (SceneSlot, error)` | 一次调用改标题（`Name`）/ 锚定到 L3 项目域（`L3ID`）/ 清除锚定（`L3ID: &""`）；未传的字段保持库里现值，**返回值就是写入后的场景** |
 | `db.MergeScenes(primaryID, []secondaryIDs) error` | 场景合并 |
-| `db.DeleteTopic(topicID) error` | 删除话题子树 + 其 L4 原文 + 索引，并修剪父话题 `ChildrenIDs`（记忆纠错） |
+| `db.DeleteTopic(topicID) error` | 删除话题子树 + 其 L4 原文 + 索引；子树即 `parent_id` 指向它的那批话题（记忆纠错） |
 | `db.DeleteScene(sceneID) error` | 删除场景 + 全部话题/原文 + L1 节点；不存在返回 `ErrNotFound`（记忆纠错） |
 
 改名与锚定是同一次调用：`UpdateScene` 读一次场景、只覆盖你点名的字段、写回一次，

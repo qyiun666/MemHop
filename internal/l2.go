@@ -241,9 +241,8 @@ func (db *DB) SceneContext(agentID uint64, sceneID string) (*SceneContext, error
 
 // DeleteTopic removes a topic and its whole subtree (children at any
 // depth), the L4 archives they own, and their L2Meta cache entries,
-// so the deleted topic no longer surfaces in any scene read. The surviving
-// parent (if any) has its ChildrenIDs pruned. Deleting a missing topic
-// returns ErrNotFound.
+// so the deleted topic no longer surfaces in any scene read. Deleting a
+// missing topic returns ErrNotFound.
 func (db *DB) DeleteTopic(agentID uint64, topicID string) error {
 	ac, err := db.lockAgent(agentID)
 	if err != nil {
@@ -257,9 +256,6 @@ func (db *DB) DeleteTopic(agentID uint64, topicID string) error {
 	topics := repo.TopicClosureL2(db.engine, agentID, parsedID)
 	if len(topics) == 0 {
 		return common.NewError(common.ErrNotFound, "topic not found")
-	}
-	if err := scene.PruneParentChild(ac, parsedID); err != nil {
-		return err
 	}
 	return scene.DeleteTopics(ac, agentID, topics)
 }

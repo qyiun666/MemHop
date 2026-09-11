@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 // L2 topic record primitives: listing, creation and the read-modify-write
-// mutations of the keyword track and tree links. Scene primitives
+// mutations of the keyword track and parent link. Scene primitives
 // stay in l2layer.go.
 package repo
 
@@ -73,7 +73,7 @@ func ListTopicsL2(q TopicListQuery) ([]core.TopicSlot, error) {
 }
 
 // RenameTopicL2 writes a caller-chosen name onto one topic. The record is
-// rewritten whole, so the keyword track and the tree links survive untouched. A
+// rewritten whole, so the keyword track and the parent link survive untouched. A
 // topic that is not there is an error rather than a new record: inventing one
 // would leave a topic with no scene, no depth and no keywords behind an id
 // nothing else refers to.
@@ -106,7 +106,8 @@ func CreateTurnTopicL2(engine *core.StorageEngine, agentID uint64, sceneHash, to
 // CreateFusedTopicL2 creates a compressed topic (depth 1) whose Keywords are
 // the fusion of its children. The group's reconstructed text is an ordinary L4
 // archive under the parent's own id, so the topic needs no follow-up write.
-func CreateFusedTopicL2(engine *core.StorageEngine, agentID uint64, sceneID uint64, fusedKeywords []string, userTS, agentTS int64, childrenIDs []uint64) bool {
+// The children are addressed by their own ParentID, never by a list here.
+func CreateFusedTopicL2(engine *core.StorageEngine, agentID uint64, sceneID uint64, fusedKeywords []string, userTS, agentTS int64) bool {
 	topic := core.TopicSlot{
 		ID:             core.ComputeTopicID(sceneID, userTS, agentTS),
 		SceneID:        sceneID,
@@ -114,7 +115,6 @@ func CreateFusedTopicL2(engine *core.StorageEngine, agentID uint64, sceneID uint
 		UserTimestamp:  userTS,
 		AgentTimestamp: agentTS,
 		FusedKeywords:  fusedKeywords,
-		ChildrenIDs:    childrenIDs,
 	}
 	return core.WriteTopicSlot(engine, agentID, topic.ID, &topic) == nil
 }

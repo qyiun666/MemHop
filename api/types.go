@@ -96,13 +96,14 @@ type SceneSlot struct {
 // Dream-fused group of turns. FusedKeywords is its only keyword track — the
 // set a host reads back as its conversation context. What was said is not on
 // the topic: the L4 archives a turn owns are addressed by that topic's id.
+// A fused group names no children either; the turns it swallowed carry
+// ParentID pointing back here.
 // Name is the host's own label for it, written by RenameTopic and never derived
 // by the engine; empty means nobody has named this topic yet.
 type TopicSlot struct {
 	ID             string   `json:"id"`
 	SceneID        string   `json:"scene_id"`
 	ParentID       *string  `json:"parent_id,omitempty"`
-	ChildrenIDs    []string `json:"children_ids"`
 	Depth          uint8    `json:"depth"`
 	Name           string   `json:"name,omitempty"`
 	FusedKeywords  []string `json:"fused_keywords"`

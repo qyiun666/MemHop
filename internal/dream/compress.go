@@ -142,7 +142,7 @@ func applyOneGroup(ctx context.Context, ac *domain.Context, sceneID uint64, g ll
 		return common.NewError(common.ErrLLM, "dream: extract keywords from merged summary", err)
 	}
 
-	if !repo.CreateFusedTopicL2(ac.Engine, ac.ID, sceneID, keywords, minTS, maxTS, g.NodeHashes) {
+	if !repo.CreateFusedTopicL2(ac.Engine, ac.ID, sceneID, keywords, minTS, maxTS) {
 		discardFusedGroup(ac, parentID)
 		return common.NewError(common.ErrIO, "dream: create fused topic", nil)
 	}
