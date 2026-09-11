@@ -243,8 +243,7 @@ func fromPlanNodeView(v internal.PlanNodeView) PlanNodeView {
 		Seq: v.Seq, ParentSeq: v.ParentSeq, Title: v.Title, Status: string(v.Status),
 		Summary: v.Summary, CreatedAt: v.CreatedAt,
 		FinishedAt: v.FinishedAt, UpdatedAt: v.UpdatedAt,
-		ChildCount: v.ChildCount,
-		Children:   make([]PlanNodeView, 0, len(v.Children)),
+		Children: make([]PlanNodeView, 0, len(v.Children)),
 	}
 	for _, c := range v.Children {
 		out.Children = append(out.Children, fromPlanNodeView(c))

@@ -39,14 +39,14 @@ type PlanNodeView struct {
 	CreatedAt  int64          `json:"created_at"`
 	FinishedAt int64          `json:"finished_at"`
 	UpdatedAt  int64          `json:"updated_at"`
-	ChildCount int            `json:"child_count"`
 	Children   []PlanNodeView `json:"children"`
 }
 
 // PlanTree is the external forest view of one plan. A plan may hold several
-// roots (each root a step created with no parent); Done/Total cover every root.
-// Nodes whose parent record is missing surface as roots too, so an expired root
-// never hides its live subtree.
+// roots (each root a step created with no parent); Done/Total are summed over
+// every node of every tree, not just the roots — the roots are where the walk
+// starts. Nodes whose parent record is missing surface as roots too, so an
+// expired root never hides its live subtree.
 type PlanTree struct {
 	Roots      []PlanNodeView `json:"roots"`
 	DoneCount  int            `json:"done_count"`
@@ -127,8 +127,7 @@ func ToNodeView(n *planNode) (PlanNodeView, error) {
 		Seq: n.seq, ParentSeq: n.parentSeq, Title: title, Status: status,
 		Summary: n.summary, CreatedAt: n.createdAt,
 		FinishedAt: n.finishedAt, UpdatedAt: n.updatedAt,
-		ChildCount: len(n.children),
-		Children:   make([]PlanNodeView, 0, len(n.children)),
+		Children: make([]PlanNodeView, 0, len(n.children)),
 	}
 	for _, c := range n.children {
 		cv, err := ToNodeView(c)

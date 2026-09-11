@@ -54,12 +54,10 @@ type SceneContextTopic struct {
 // SceneContext is a scene's whole transcript, flattened to depth 2 on purpose:
 // a Dream-fused group keeps its originals on the child topics it sunk, and this
 // is the only read that brings them back. Search returns depth-1 topics only,
-// so it shows a fused group as its summary. TopicCount counts the entries
-// returned — roots and sunk children alike.
+// so it shows a fused group as its summary.
 type SceneContext struct {
-	SceneName  string              `json:"scene_name"`
-	TopicCount int                 `json:"topic_count"`
-	Topics     []SceneContextTopic `json:"topics"`
+	SceneName string              `json:"scene_name"`
+	Topics    []SceneContextTopic `json:"topics"`
 }
 
 type L3Graph struct {

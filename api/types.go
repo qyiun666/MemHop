@@ -230,7 +230,6 @@ type PlanNodeView struct {
 	CreatedAt  int64          `json:"created_at"`
 	FinishedAt int64          `json:"finished_at"`
 	UpdatedAt  int64          `json:"updated_at"`
-	ChildCount int            `json:"child_count"`
 	Children   []PlanNodeView `json:"children"`
 }
 
@@ -250,8 +249,9 @@ type PlanStep struct {
 	Summary string     `json:"summary"`
 }
 
-// PlanTree is the external forest view of one plan: every top-level step is
-// a root, and Done/Total count all roots.
+// PlanTree is the external forest view of one plan: every top-level step is a
+// root, and Done/Total count every step of every tree rather than the roots
+// alone.
 type PlanTree struct {
 	Roots      []PlanNodeView `json:"roots"`
 	DoneCount  int            `json:"done_count"`

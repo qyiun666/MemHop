@@ -194,7 +194,7 @@ func TestInterfaceSceneContextReadsThroughFusion(t *testing.T) {
 	if got := llm.calls["keywords"]; got != before {
 		t.Fatalf("SceneContext triggered %d distillations, want 0", got-before)
 	}
-	if len(ctx.Topics) != 2 || ctx.TopicCount != 2 {
+	if len(ctx.Topics) != 2 {
 		t.Fatalf("context = %+v, want the two turns", ctx.Topics)
 	}
 	// Entries come in speaking order, each carrying its own two originals.
@@ -245,9 +245,6 @@ func TestInterfaceSceneContextReadsThroughFusion(t *testing.T) {
 	}
 	if len(ctx2.Topics) <= len(fused.Topics) {
 		t.Fatalf("SceneContext returned %d entries, want more than the %d depth-1 topics it flattens", len(ctx2.Topics), len(fused.Topics))
-	}
-	if ctx2.TopicCount != len(ctx2.Topics) {
-		t.Fatalf("TopicCount %d does not count the entries returned (%d)", ctx2.TopicCount, len(ctx2.Topics))
 	}
 	// The fused parent is Dream's summary; the originals survive on its
 	// children, which is the whole reason this read exists.

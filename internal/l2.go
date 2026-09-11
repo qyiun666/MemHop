@@ -235,7 +235,6 @@ func (db *DB) SceneContext(agentID uint64, sceneID string) (*SceneContext, error
 		}
 		out.Topics = append(out.Topics, scene.ContextTopic(t, children, utterances))
 	}
-	out.TopicCount = len(out.Topics)
 	return out, nil
 }
 
