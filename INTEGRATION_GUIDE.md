@@ -1,19 +1,17 @@
 # MemHop Host Integration Guide (Go API)
 
 > How to embed MemHop **directly as a Go module** (no MCP server) from your host
-> process. Applies to **v1.6.3**. Module path `github.com/qyiun666/MemHop` — you
+> process. Applies to **v1.6.4**. Module path `github.com/qyiun666/MemHop` — you
 > only ever import the `api` package.
 
-> ⚠️ **Partly updated for the surface rebuild.** §4, §5 and §11 show the current
-> entry point (`api.Open` → `api.DB`, domains as handles from `Primary` /
-> `SubAgent`; agent ids never cross the boundary). Two sections still describe
-> methods and types that are **gone**: §8's *Capabilities* and *Turn events and
-> crystallization* subsections, and the exported-type list in §9. `OpenMulti`,
-> `MultiAgentDB`, `CreateAgent`, `Session(hexID)`, `ListAgents`, `DefaultAgentID`,
-> `MemHopConfig`, `Crystallize`, `ListTrajectorySessions` and `DeleteL3Nodes` no
-> longer exist; the L2 surface gained `RenameTopic` and the L1 surface gained
-> `ListL1`. For the authoritative current surface use
-> [`go doc github.com/qyiun666/MemHop/api.Session`](https://pkg.go.dev/github.com/qyiun666/MemHop/api) and the API table in the README.
+> This guide describes the surface as it is now: `api.Open` → `api.DB`, domains held
+> as handles from `Primary` / `SubAgent` (no agent id crosses the boundary), no
+> capability surface, and no trajectory-session enumeration — a host reads a turn's
+> events with `SearchL4{TopicID, Kind: event}`. The method lists below are the ones
+> `api/surface_public_test.go` pins; `go doc
+> github.com/qyiun666/MemHop/api.Session` stays the authoritative per-method text,
+> because `internal` is not published and that command is the only documentation of a
+> promoted method.
 
 ---
 
@@ -23,9 +21,11 @@
 host process
  ├─ go.mod: require github.com/qyiun666/MemHop (or go.work replace → local checkout)
  ├─ import only github.com/qyiun666/MemHop/api (never internal/)
- ├─ one .meh file = many agent domains (isolated except the file-wide L3 pool), addressed by Session(hexID)
+ ├─ one .meh file = many agent domains (isolated except the file-wide L3 pool), each reached
+ │   through a handle: DB.Primary() for the domain the file was opened on,
+ │   DB.SubAgent(llm, profile) for one created under it — no agent id ever crosses this line
  └─ external services:
-      └─ ONE OpenAI-compatible LLM (turn distillation / Dream consolidation / Crystallize)
+      └─ ONE OpenAI-compatible LLM (turn distillation / Dream consolidation)
       └─ no embedding / vector service
 ```
 
@@ -33,10 +33,10 @@ host process
 
 | Contract | Meaning |
 |---|---|
-| **Single instance** | One `.meh` file is locked exclusively; a second `OpenMulti` on the same file fails. Every call runs through a `Session` bound to one agent domain. |
-| **Serial calls** | Same-agent operations (Search / Update / Dream / write APIs) are serialized by the library's per-agent domain lock; different agents run in parallel on a `*MultiAgentDB`. The host needs no external queue. `Lock()`/`Unlock()` remain for host-critical sections around raw file access — they serialize **the default domain only** and panic on a closed DB (`Unlock` on a closed DB is a no-op). |
-| **LLM on the write path** | `Update`, `Dream` and `Crystallize` call the LLM and fail when it is down (no silent degradation) — `Update` exactly once per turn. `Search` never calls it: a read cannot be blocked by the LLM. |
-| **ID shape** | All external IDs are 16-char lowercase hex strings (xxhash64). Treat them as opaque: the library issues every id and a host only echoes it back — there is nothing to convert. `api.DefaultAgentID` names the implicit agent domain, and the turn topic id `Search` returns is what addresses that turn's L4 content and the L5 plan tree it opened. |
+| **Single instance** | One `.meh` file is locked exclusively; a second `api.Open` on the same file fails. Every call runs through a `Session` bound to one agent domain. |
+| **Serial calls** | Same-agent operations (Search / Update / Dream / write APIs) are serialized by the library's per-agent domain lock — the LLM call runs inside that lock, so one slow response holds its own domain and no other. Different agents run in parallel. The host needs no external queue, and there is no raw-file access path left for it to guard. |
+| **LLM on the write path** | `Update` and `Dream` call the LLM and fail when it is down (no silent degradation) — `Update` exactly once per turn, and a failed distillation writes nothing. `Search` never calls it: a read cannot be blocked by the LLM. |
+| **ID shape** | All external IDs are 16-char lowercase hex strings (xxhash64). Treat them as opaque: the library issues every id and a host only echoes it back — there is nothing to convert. An agent domain is never named by an id at this boundary: you hold the `*Session` the library gave you. The turn topic id `Search` returns is what addresses that turn's L4 content and the plan tree it opened. |
 | **Timestamps** | Unix milliseconds everywhere; `<= 0` is `ErrInvalidQuery`. |
 
 ---
@@ -103,7 +103,7 @@ should not need to tune them; if you think you do, open an issue.
 ## 5. Open / Close
 
 ```go
-db, err := api.Open(
+lib, err := api.Open(
     "/data/agent.meh",     // path
     api.LlmConfig{         // endpoint: required, validated before the path is touched
         APIURL:          os.Getenv("LLM_URL"),
@@ -116,11 +116,12 @@ db, err := api.Open(
     &api.ProfileInput{Name: "guide", Role: "assistant"}, // required for a new file
 )
 if err != nil { /* ErrConfig / ErrInvalidQuery / ErrInvalidMagic / ErrCorruption */ }
-defer db.Close() // checkpoint snapshot + release mmap/file lock
+defer lib.Close() // checkpoint snapshot + release mmap/file lock
 
-// Domains come back as handles, never as ids.
-sess, err := db.Primary()                       // the domain the file was opened on
-worker, err := db.SubAgent(workerLLM, api.ProfileInput{Name: "worker"}) // by name
+// Domains come back as handles, never as ids. `db` below is always one of them:
+// a *api.Session, and every business call in this guide runs on it.
+db, err := lib.Primary()                        // the domain the file was opened on
+worker, err := lib.SubAgent(workerLLM, api.ProfileInput{Name: "worker"}) // by name
 ```
 
 `api.Open` is the only entry point, and what it does depends on the file and on the
@@ -145,8 +146,8 @@ primary domain's profile:
   domain created this way is a sub-agent.
 - Both refusals happen before anything touches the filesystem, so a refused `Open`
   leaves no file behind for the next attempt to trip over.
-- Explicit flush: `db.Checkpoint()`.
-- Space reclamation: `db.CompactTo(newPath)` writes a defragmented copy of the whole
+- Explicit flush: `lib.Checkpoint()`.
+- Space reclamation: `lib.CompactTo(newPath)` writes a defragmented copy of the whole
   file (live records only, its own rebuilt index) and never touches the open one —
   `newPath` must not exist yet. Deletes are tombstones, so a domain that dropped
   scenes or graphs only gives bytes back here; the swap (Close → rename → Open) stays
@@ -251,7 +252,7 @@ rep, err := db.Dream(ctx, "")      // empty sceneID sweeps every scene of the do
 Usually **the host does not need to call it**: once a scene's depth-1 topic count passes `Defaults.SceneDreamTopicThreshold` (default 24), `Update` schedules that scene's Dream in the background (one in flight per scene).
 
 Runs L2→L1→L0 compression / decay / profile distillation (several LLM calls, slow) — keep it in a goroutine or between turns.
-Returns a structured `*DreamReport`: `ConsolidatedScenes / L2TopicsCompressed / L1NodesAdded|Removed / L1EdgesAdded|Removed / L0Updated` plus `Stages []DreamStage{Name, Status, DurationMs}` (status `ok | skipped | cancelled | error`). An empty report is not an error; a mid-pipeline failure returns the partial report with the error. After compression each scene keeps at most 20 depth-1 topics (`Consolidate` rule), which is the size bound on what a host reads back.
+Returns a structured `*DreamReport`: `ConsolidatedScenes / L2TopicsCompressed / L1NodesAdded|Removed / L1EdgesAdded|Removed / L0Updated` plus `Stages []DreamStage{Name, Status, DurationMs}` (status `ok | skipped | cancelled | error`). An empty report is not an error; a mid-pipeline failure returns the partial report with the error. What a host reads back is bounded by convergence, not by a cap: passing the threshold schedules that scene's Dream, and Dream only merges the groups the model judges one — topics it never picked stay at depth 1.
 
 ---
 
@@ -266,8 +267,9 @@ What happens *while* the turn runs (tool calls, intermediate output, subagent re
 is not conversation, so it goes in as `Kind: api.KindEvent` beside the utterances —
 under the same key, and out of the transcript reads: `SceneContext` and
 `SearchL4(L4Query{TopicID, Kind: &KindUtterance})` show what was said,
-`SearchL4{..., Kind: &KindEvent}` shows what happened, and `Crystallize` reads only
-the events.
+`SearchL4{..., Kind: &KindEvent}` shows what happened. What a host turns those
+events into is its own business: the engine stores no capability cards and offers no
+crystallization call.
 
 The write side owns the axes: content type (`text`/`image`/`video`/`document`/`audio`/
 `code`/`other`) and speaker are declared per record by `AppendArchive` and reported
@@ -279,10 +281,12 @@ summary is the one record whose type and role the library fixes — `text`, role
 
 ## 8. Layer API quick reference
 
-The 27 session methods split by audience:
+The 26 session methods split by audience:
 
-- **Runtime/task face (20)** — the host drives these every turn and LLM tools bind to them: `Search` / `AppendArchive` / `Update` / `Dream` (the host-driven loop), `GetL0` / `UpdateL0`, `ListScenes` / `SceneContext`, `GetL3` / `ListL3` / `ImportL3` / `QueryL3Nodes` / `QueryL3Subgraph`, `SearchL4`, `ListTrajectorySessions` / `Crystallize`, `PlanCreate` / `PlanNodeAdd` / `PlanNodeUpdate` / `PlanState`.
-- **Assembly/admin face (7, plus all of `MultiAgentDB`)** — host code at session boundaries and management channels only, never an LLM tool: `UpdateScene` / `MergeScenes` / `DeleteScene` / `DeleteTopic`, `UpdateL3` / `DeleteL3` / `DeleteL3Nodes`. The capability format left the method surface entirely: `ParseCapabilityPackage` / `ValidateCapabilityCard` are package-level functions (§8 L5).
+- **Runtime/task face (19)** — the host drives these every turn and LLM tools bind to them: `Search` / `AppendArchive` / `Update` / `Dream` (the host-driven loop), `GetL0` / `UpdateL0`, `ListL1`, `ListScenes` / `SceneContext`, `GetL3` / `ListL3` / `ImportL3` / `QueryL3Nodes` / `QueryL3Subgraph`, `SearchL4`, `PlanCreate` / `PlanNodeAdd` / `PlanNodeUpdate` / `PlanState`.
+- **Assembly/admin face (7)** — host code at session boundaries and management channels only, never an LLM tool: `UpdateScene` / `RenameTopic` / `MergeScenes` / `DeleteScene` / `DeleteTopic`, `UpdateL3` / `DeleteL3`.
+
+The file-level lifecycle sits on `api.DB` instead (6): `Primary` / `SubAgent`, then `Checkpoint` / `CompactTo` / `Close` / `IsClosed`. There is no capability surface anywhere: the engine neither stores nor parses cards, so a host reads the events of a turn with `SearchL4{Kind: event}` and organizes them itself.
 
 ### L0 profile
 
@@ -352,17 +356,16 @@ members + kind). Unresolvable / self / invalid-kind entries land in `Errors`.
 public call renders that derivation, so `ImportL3` reports it directly —
 `SearchQuery.L3ID` / `UpdateScene` need that id.
 
-`GetL3 / ListL3 / QueryL3Nodes / QueryL3Subgraph / UpdateL3 / DeleteL3 /`
-`DeleteL3Nodes`.
+`GetL3` / `ListL3` / `QueryL3Nodes` / `QueryL3Subgraph` / `UpdateL3` / `DeleteL3`.
+Deletion has one granularity: the whole graph.
 
 `QueryL3Nodes` filters AND together (`IDs` / `Keyword` / `NodeType`), so naming
 only `GraphID` lists that graph's nodes and `Keyword` is case-insensitive — like
-the L4 keyword filter. `DeleteL3` removes the graph with every node and edge;
-`DeleteL3Nodes(graphID, nodeIDs)` removes specific nodes and cascades the
-hyperedges touching them (Go-only, like the other memory-correction calls), so
-correcting one wrong fact no longer means rebuilding the graph and losing the
-edges bound to it. An id that names no node of that graph is refused and nothing
-is deleted.
+the L4 keyword filter. Every L3 read comes back sorted by id (its nodes, its
+edges, the graph slots of `ListL3`) and `Limit` keeps the first N of that order,
+so the same query gives the same list in the same order every time. `DeleteL3`
+removes the graph with every node and edge in it, then clears the scene anchors
+that named it in every domain of the file.
 
 Every L3 id the library issued names exactly one record type: `GetL3(nodeID)`,
 `UpdateL3(nodeID, …)` or `UpdateScene(sceneID, ScenePatch{L3ID: &nodeID})`
@@ -404,28 +407,14 @@ id (a missing id yields an empty slice, a malformed one `ErrInvalidQuery`). An e
 query returns the domain's whole content set — bound it with a time range or `Limit`
 on a large domain.
 
-### Capabilities (directory-as-capability — the host owns the files)
-
-The engine **stores no capability records**. The single source of truth is the host's own capability directory (e.g. `plug/<package>/capability.json` next to the `.meh` file): the host scans it, projects cards into its tool surface, and restart-picks-up changes; activating a draft is promoting its file. The library keeps the format itself, exported as package-level functions:
-
-| Function | Meaning |
-|---|---|
-| `api.ParseCapabilityPackage(data, source)` | parse a `memhop-capability/v4` document (one file = one package, 1..N cards) into `[]CapabilityImport`, validating the whole package |
-| `api.ValidateCapabilityCard(card)` | check one card against the same contract (name, summary, resources, action chains) |
-
-> One card = a name + any number of function entries (`resources`, no card-level type); each entry self-describes its launch (`type: mcp|skill|api|composite` + `ref`/`config`), purpose (`desc`) and usage (`input`/`output`), mirroring the host tool spec field-for-field — hosts project them with a pure field copy. A composite entry carries its action chain in `config` as `{"steps":[{"tool":"...","args":{...}}]}` (every step needs a non-empty `tool`). For the LLM-facing block, the capability package's `PromptCard` renders one card: name, version, summary, trigger, then per-resource launch/description/input/output/steps — no `id:`/`package:`/`usage:` lines, since the host directory, not a stored record, is the card's identity.
-
-### Turn events + crystallization
+### Turn events (what a turn did, beside what it said)
 
 ```go
 // A turn's events are L4 content of kind event, under the NewTopicID Search
 // returned for this turn — the host never derives a turn key itself.
 err := db.AppendArchive(turnIDHex, api.ArchiveSlot{
     Kind:      api.KindEvent,
-    EventType: "tool_call",   // names the step:
-                              // llm_request / llm_output / tool_call / tool_result /
-                              // subagent_spawn / subagent_done / context_inject /
-                              // ask_user / user_reply (free-form; no whitelist)
+    EventType: "tool_call",   // any non-empty name the host chooses; no whitelist
     Content:   "tool name + arg summary", // 4 KiB budget, over-budget is refused
     CreatedAt: time.Now().UnixMilli(),
 })
@@ -433,34 +422,23 @@ err := db.AppendArchive(turnIDHex, api.ArchiveSlot{
 // turn's topic id, and the plan nodes that turn opened live under the same key.
 // `NodeSeq` is what binds an event to a step — see the plan surface below;
 // leave it 0 for a plain turn event.
-
-// Turn events → capability candidates: distill one turn's trajectory against the
-// host's current catalog (capped at 128KB payload, oldest events dropped).
-res, err := db.Crystallize(ctx, turnIDHex, existingCards)
-// existingCards []api.CapabilityImport — the host's current catalog, read
-// from its own directory (empty on first run).
-// res.Capabilities — []CrystallizeCapability: {Action: "create|reuse|merge",
-// ReuseID (the existing card's NAME, not a hex id)} + the card
-// payload. The engine writes nothing: validate, dedupe against your
-// directory and persist drafts (e.g. plug/draft/) yourself — a file
-// promotion activates.
-
-// Enumerate turns (e.g. to pick crystallize candidates).
-sessions, err := db.ListTrajectorySessions()
-// sessions[i] = TrajectorySessionSummary{SessionID hex (the turn's topic id), Events, LastAppendAt}
 ```
 
-A turn's event track reads back with `SearchL4(L4Query{TopicID: &topicID, Kind:
-&event})` in Seq order. The track is addressed **by turn key only**: nothing returns an
-event handle on write, because no public call takes one, and Dream drops content
-older than the retention window. Of an event you hand in, `EventType`, `NodeSeq`,
-`Content` and `CreatedAt` are used as given; the library assigns `Seq` and the owning
-topic and forces `ContentType` to `text` with no speaker — a thing that happened has
-neither. Content over 4 KiB is refused: a shortened event would read back exactly
-like a complete one.
+The track reads back with `SearchL4(L4Query{TopicID: &topicID, Kind: &event})`, in Seq
+order, and it is addressed **by turn key only**: nothing returns an event handle on
+write because no public call takes one, and Dream drops content older than the
+retention window. Of an event you hand in, `EventType`, `NodeSeq`, `Content` and
+`CreatedAt` are used as given; the library assigns `Seq` and the owning topic and
+forces `ContentType` to `text` with no speaker — a thing that happened has neither.
+Payload over 4 KiB is refused: a shortened event would read back exactly like a
+complete one.
 
-`ListTrajectorySessions` enumerates the turns that hold events, so a host can find
-crystallization candidates without remembering which ids it logged.
+What those events become is the host's decision and the engine takes no part in it.
+There is no capability surface: the library stores no cards, parses no card format and
+offers no crystallization call, so a host that distills its own action log does that
+with its own prompt, its own dedupe and its own file layout. Nor is there a call that
+enumerates the turns holding events — `Search` issued those keys, and the host that
+appended under them still has them.
 
 ### L5 plan tree (Go host surface)
 
@@ -485,7 +463,7 @@ Status has three values and one string encoding each: `api.PlanStatusInProgress`
 engine keeps no "planned but not started" state — a step exists because the host created
 it, and it exists in progress.
 
-The plan write surface is Go-only: `api.Session`'s 20 task-face methods include it, but
+The plan write surface is Go-only: `api.Session`'s 19 task-face methods include it, but
 the MCP tool face exposes no plan call, because a tree has to be built by a caller that
 holds the turn it belongs to.
 
@@ -494,21 +472,27 @@ with) and every L5 entry rejects it — reads included.
 
 ---
 
-## 9. Exported types (v1.6.3)
+## 9. Exported types (v1.6.4)
 
 | Kind | Names | Use |
 |---|---|---|
+| entry & handles | **`Open`** → `*DB`, then `DB.Primary()` / `DB.SubAgent(llm, profile)` → `*Session` | the only ways in; an agent domain is held as a handle, never named by an id |
 | config | **`LlmConfig`** / `MemHopDefaults` + `DefaultMemHopDefaults` | the endpoint and tuning arguments `Open` takes |
-| input shapes | **`ProfileInput`** / `SearchQuery` / `ScenePatch` / `L3ImportItem` / `L3Relation` / `L3ImportMode` / `L3ImportResult` / `L3NodeQuery` / `L4Query` / `SceneContext` / `SceneMessage` / `TrajectorySessionSummary` / `DreamReport` / `DreamStage` / `CapabilityImport` / `CapabilityPackageDoc` / `CrystallizeOutput` / `CrystallizeCapability` / `ResourceRef` | inputs & id-free results (all string IDs are hex); `ProfileInput` is the only profile a host may write |
-| response DTOs | `ProfileSlot` / `SceneSlot` / `TopicSlot` / `SearchResult` / `HypergraphSlot` / `HypergraphNode` / `HypergraphEdge` / `HypergraphSource` / `L3Graph` / `L3Subgraph` / `ArchiveSlot` (write and read) | every ID field is a 16-hex string |
-| id surface | **`DefaultAgentID`** (the implicit domain) | the library issues every id — turn topics included; a host echoes them back and converts nothing |
-| enums | `GraphEdgeKind` / `CapabilityType` / `ContentType` / `PlanStatus` | enum aliases |
+| input shapes | **`ProfileInput`** / `SearchQuery` / `ScenePatch` / `L3ImportItem` / `L3Relation` / `L3ImportMode` / `L3NodeQuery` / `L4Query` / `PlanStep` / `ArchiveSlot` (also a result) | inputs; `ProfileInput` is the only profile a host may write, and of its four fields only `Name` is required |
+| response DTOs | `ProfileSlot` / `SceneNodeView` / `SceneSlot` / `TopicSlot` / `SceneContext` / `SceneContextTopic` / `SceneMessage` / `SearchResult` / `HypergraphSlot` / `HypergraphNode` / `HypergraphEdge` / `HypergraphSource` / `L3Graph` / `L3Subgraph` / `L3ImportResult` / `PlanTree` / `PlanNodeView` / `DreamReport` / `DreamStage` | every id field is a 16-char hex string, and every one of them was issued by the library |
+| enums | `GraphEdgeKind` / `ContentType` / `ArchiveKind` / `PlanStatus` / `AgentTypePrimary` + `AgentTypeSub` | the vocabulary a call is written in |
+| errors | `Code` + the `Err*` constants, read with `CodeOf(err)` | the numeric code behind an error string |
 
-Enum constants are exported too: `L3ImportSkip/Merge/Overwrite`,
-`CapabilityMCP/Skill/API/Composite`, `EdgeRelated...EdgeCustom`,
-`ContentText/Image/Video/Document/Audio/Code/Other`. The capability format
-survived the record layer's retirement as package-level surface:
-`CapabilityFormatV4` + `ParseCapabilityPackage` / `ValidateCapabilityCard`.
+Enum constants are exported too: `L3ImportSkip` / `Merge` / `Overwrite`,
+`EdgeRelated`…`EdgeCustom`, `ContentText`…`ContentOther`, `KindUtterance` /
+`KindEvent`, `RoleUser` / `RoleAgent` / `RoleSystem`,
+`PlanStatusInProgress` / `PlanStatusDone` / `PlanStatusFailed`.
+
+Nothing in this list converts an id: there is no `FormatID` / `ParseID` pair and no
+numeric id in any signature, because a host echoes back the hex strings it was given
+and builds none itself. There is no capability type either — the card format, its
+file layout and its activation are the host's own assets.
+
 
 > A record's kind is `api.KindUtterance` / `api.KindEvent`. L4 `role` is a bare
 > `uint8`, and the three a host may declare on an appended utterance are
@@ -625,20 +609,21 @@ func main() {
    distils once per turn and, on failure, returns an error having written no topic —
    the records you appended earlier stay. Hosts should retry a failed settle.
 2. **No embedding service, no dimension to declare**: the two header bytes at
-   offset 6 are reserved. The format version is `0x0011`: the L3 knowledge
-   graph lives in the reserved shared domain (`core.SharedPoolAgentID`); no
-   migration runs — `0x0010` and older files are rejected at Open. A `0x0010`
-   file stores its plan nodes under a dotted path string this reader never
-   consults, so every node arrives with ordinal `0` — not an address anything can
-   be found under — and its status bytes use the retired numbering, where `0`
-   meant pending and `2` meant done, so a finished step reads as an in-progress
-   one. `0x000F` and earlier may additionally hold a node with the retired
-   `running` status (which the current vocabulary reports as an undefined stored
-   value) and events attributed to steps no declaration ever made. `0x000E` and
-   earlier also name the archive's owning topic under a key the current record
-   does not carry (`context_id`) and derive their ids from namespaces that no
-   longer exist (`l1:`, `l4:`). None of it can be addressed under the current
-   rules.
+   offset 6 are reserved. The format version is `0x0012`: the L3 knowledge
+   graph lives in the reserved shared domain (`core.SharedPoolAgentID`), a
+   topic carries the `name` its host gave it, and a domain's identity
+   (`agent_type`) is stored on its own profile. No migration runs — `0x0011`
+   and older files are rejected at Open, and the reason is not a field this
+   reader would rather not decode: a pre-`0x0012` profile carries no
+   `agent_type` at all, so **every** domain in such a file arrives reading as
+   the primary agent while the current rules hold that one file has exactly
+   one. Loosen that and the file opens with its domain identities
+   simultaneously wrong everywhere. Older files also carry their own smaller
+   divergences — a plan node addressed by a dotted path string rather than an
+   ordinal, statuses under a numbering where `0` meant pending and `2` meant
+   done, events attributed to steps no declaration ever made, an archive's
+   owning topic under a `context_id` key, ids derived from `l1:` / `l4:`
+   namespaces — and none of it can be addressed under the current rules.
 3. **Timestamps in Unix ms**, `<= 0` → `ErrInvalidQuery` on every record you append;
    a turn's topic is stamped with the earliest and latest of its content.
 4. **IDs are opaque 16-hex strings**: never splice/truncate them; response ids
@@ -650,10 +635,11 @@ func main() {
    Replaying an append with the same `(TopicID, Seq)` is idempotent: the record
    hashes from that pair, so a retry rewrites it instead of duplicating — and a
    slot the replay stops filling is not reclaimed.
-6. **One file, many agent domains**: all tenants live inside one
-   `.meh` file (`OpenMulti` → `CreateAgent(name)` → `Session(hexID)`), fully
-   isolated per domain except the file-wide L3 pool; legacy files
-   (`FormatVersion < 0x0011`) cannot be opened or migrated.
+6. **One file, many agent domains**: all tenants live inside one `.meh` file —
+   `api.Open` settles the domain the file was opened on, and `DB.SubAgent(llm,
+   profile)` creates or returns one under it by name — fully isolated per domain
+   except the file-wide L3 pool; legacy files (`FormatVersion < 0x0012`) cannot be
+   opened or migrated.
 7. **Content and plans auto-expire**: Dream drops a topic's content older than 7
    days and plan nodes older than 7 days (a tree still in flight is exempt);
    `DeleteTopic` / `DeleteScene` are the explicit corrections. Past the window a

@@ -91,8 +91,9 @@ type L3Relation struct {
 }
 
 // L3ImportResult reports one import batch. CreatedIDs/UpdatedIDs are node ids;
-// GraphIDs are the graphs the batch wrote into (created or reused) — a graph id
-// derives from its domain label, and this is where a batch reports it.
+// GraphIDs are the graphs the batch resolved its domains into (created or reused,
+// and including one it added nothing to) — a graph id derives from its domain
+// label, and this is where a batch reports it.
 type L3ImportResult struct {
 	GraphIDs     []string `json:"graph_ids,omitempty"`
 	CreatedIDs   []string `json:"created_ids"`

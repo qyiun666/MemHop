@@ -1,16 +1,13 @@
 # MemHop 宿主集成指南（Go API 方式）
 
 > 面向直接以 **Go module 内嵌**方式集成 MemHop 的宿主程序（不经 MCP server）。
-> 适用版本：**v1.6.3**。模块路径 `github.com/qyiun666/MemHop`，只允许 import `api` 包。
+> 适用版本：**v1.6.4**。模块路径 `github.com/qyiun666/MemHop`，只允许 import `api` 包。
 
-> ⚠️ **本轮公开面重做后只改完了一部分。** §4 / §5 / §11 已换成当前入口
-> （`api.Open` → `api.DB`，域句柄由 `Primary` / `SubAgent` 取，agent id 不越边界）。
-> 仍有两处描述着**已不存在**的方法与类型：§8 的「能力」与「轮内事件 + 结晶」两个
-> 子节、§9 的导出类型清单。`OpenMulti`、`MultiAgentDB`、`CreateAgent`、
-> `Session(hexID)`、`ListAgents`、`DefaultAgentID`、`MemHopConfig`、`Crystallize`、
-> `ListTrajectorySessions`、`DeleteL3Nodes` 都已不存在；L2 面新增 `RenameTopic`，
-> L1 面新增 `ListL1`。当前面的权威来源是
-> `go doc github.com/qyiun666/MemHop/api.Session` 与 README 的 API 速览表。
+> 本指南描述的就是当前的面：`api.Open` → `api.DB`，域以句柄持有（`Primary` /
+> `SubAgent`，agent id 不越边界），没有能力面，也没有轮次列举——宿主读某一轮做过的事
+> 用 `SearchL4{TopicID, Kind: event}`。下面的方法清单与 `api/surface_public_test.go`
+> 钉住的一致；`go doc github.com/qyiun666/MemHop/api.Session` 仍是每个方法的权威文本，
+> 因为 `internal` 不发布，被内嵌提升的方法只有那一条命令能查到。
 
 ---
 
@@ -20,9 +17,11 @@
 宿主进程
  ├─ go.mod: require github.com/qyiun666/MemHop（或 go.work replace → 本地 checkout）
  ├─ 只 import github.com/qyiun666/MemHop/api（禁止碰 internal/）
- ├─ 一个 .meh 文件 = 多个 agent 域（除文件级 L3 公共池外相互隔离），调用一律经 Session(hexID) 定域
+ ├─ 一个 .meh 文件 = 多个 agent 域（除文件级 L3 公共池外相互隔离），每个域都是一个句柄：
+ │   DB.Primary() 拿文件被打开所依据的那个域，DB.SubAgent(llm, profile) 按名字建/取一个
+ │   ——agent id 从不越过这条边界
  └─ 外部服务依赖：
-      └─ 只有一个 OpenAI 兼容 LLM（轮次提炼 / Dream 巩固 / Crystallize）
+      └─ 只有一个 OpenAI 兼容 LLM（轮次提炼 / Dream 巩固）
       └─ 无 embedding / 向量服务
 ```
 
@@ -30,10 +29,10 @@
 
 | 契约 | 说明 |
 |---|---|
-| **单实例** | 一个 `.meh` 文件被排他锁独占；同一文件不能开第二个 `OpenMulti`。每次调用都跑在绑定某个 agent 域的 `Session` 上 |
-| **串行调用** | 同一 agent 的操作（Search / Update / Dream / 写 API）由库内域级锁串行，跨 agent 在 `*MultiAgentDB` 上并行；宿主无需自行排队。`Lock()`/`Unlock()` 保留给宿主对文件做旁路写入的关键区——只串行化**默认域**，其他域照常运行；对已关闭的 DB 调用 `Lock()` 会 panic（此时 `Unlock()` 为空操作） |
-| **LLM 只在写路径** | `Update` / `Dream` / `Crystallize` 会调 LLM，不可用即报错（不降级），`Update` 每轮恰好一次；`Search` 一次都不调——读路径永不被 LLM 拖住 |
-| **ID 形态** | 所有对外 ID 均为 16 位小写 hex 字符串（xxhash64）；ID 一律由库发号，宿主按不透明字符串原样回传即可，没有任何进制转换要做。`api.DefaultAgentID` 是隐式域；`Search` 返回的轮次话题 id 就是该轮 L4 内容与 L5 计划树的寻址键。 |
+| **单实例** | 一个 `.meh` 文件被排他锁独占；同一文件开不出第二个 `api.Open`。每次调用都跑在绑定某个 agent 域的 `Session` 上 |
+| **串行调用** | 同一 agent 的操作（Search / Update / Dream / 写 API）由库内域级锁串行——LLM 调用也在这把锁里，于是一次慢响应顶住的是它自己那个域，不是整个文件。跨 agent 并行，宿主无需自行排队；宿主没有对文件的旁路写入口，也就没有需要它自己守的关键区 |
+| **LLM 只在写路径** | `Update` 与 `Dream` 会调 LLM，不可用即报错（不降级）；`Update` 每轮恰好一次，提炼失败这一轮什么都不写。`Search` 一次都不调——读路径永不被 LLM 拖住 |
+| **ID 形态** | 所有对外 ID 均为 16 位小写 hex 字符串（xxhash64）；ID 一律由库发号，宿主按不透明字符串原样回传即可，没有任何进制转换要做。域在这条边界上不以 id 称呼——你握着库给你的那个 `*Session` 就是。`Search` 返回的轮次话题 id 就是该轮 L4 内容与该轮计划树的寻址键。 |
 | **时间戳** | 一律 Unix 毫秒；`<= 0` 视为非法参数（`ErrInvalidQuery`） |
 
 ---
@@ -93,7 +92,7 @@ import "github.com/qyiun666/MemHop/api"
 ## 5. 打开 / 关闭数据库
 
 ```go
-db, err := api.Open(
+lib, err := api.Open(
     "/data/agent.meh",     // 路径
     api.LlmConfig{         // LLM 端点：必填，在碰文件系统之前就校验
         APIURL:          os.Getenv("LLM_URL"),
@@ -106,11 +105,12 @@ db, err := api.Open(
     &api.ProfileInput{Name: "guide", Role: "assistant"}, // 文件还不存在时必填
 )
 if err != nil { /* 处理 ErrConfig / ErrInvalidQuery / ErrInvalidMagic / ErrCorruption */ }
-defer db.Close() // 写检查点快照 + 释放 mmap/文件锁
+defer lib.Close() // 写检查点快照 + 释放 mmap/文件锁
 
-// 域以句柄形式交回，不以 id 交回。
-sess, err := db.Primary()                                              // 文件被打开所依据的那个域
-worker, err := db.SubAgent(workerLLM, api.ProfileInput{Name: "worker"}) // 按名字
+// 域以句柄形式交回，不以 id 交回。下文的 `db` 始终是这样一个句柄：
+// 一个 *api.Session，本指南里每个业务调用都跑在它上面。
+db, err := lib.Primary()                                               // 文件被打开所依据的那个域
+worker, err := lib.SubAgent(workerLLM, api.ProfileInput{Name: "worker"}) // 按名字
 ```
 
 `api.Open` 是唯一入口，它做什么由「文件在不在」与「主域画像在不在」两件事决定：
@@ -131,8 +131,8 @@ worker, err := db.SubAgent(workerLLM, api.ProfileInput{Name: "worker"}) // 按�
   `AgentType` 由库盖章而不采信入参：这样建出来的域就是子 agent。
 - 两条拒绝都发生在碰文件系统之前，所以被拒的 `Open` 不在宿主的路径上留文件让下一次尝试
   走错分支。
-- 中途主动落盘：`db.Checkpoint()`。
-- 空间回收：`db.CompactTo(newPath)` 写出一份只含存活记录、自带重建索引的整理副本，**绝不碰正打开的文件**——`newPath` 必须还不存在。删除都是打墓碑，删过场景/图的域只在这里把字节还回来；换文件（Close → rename → Open）仍由宿主决定，这也是它留在 Go 侧、不做成 MCP 工具的原因（入参就是一个输出路径）。
+- 中途主动落盘：`lib.Checkpoint()`。
+- 空间回收：`lib.CompactTo(newPath)` 写出一份只含存活记录、自带重建索引的整理副本，**绝不碰正打开的文件**——`newPath` 必须还不存在。删除都是打墓碑，删过场景/图的域只在这里把字节还回来；换文件（Close → rename → Open）仍由宿主决定，这也是它留在 Go 侧、不做成 MCP 工具的原因（入参就是一个输出路径）。
 
 ---
 
@@ -220,7 +220,6 @@ LLM 调用，且排在该轮话题落盘之前，所以失败不会留下半轮�
 仍然合法：这正是「at-least-once 写循环安全」与「陈旧重试不得改写别轮」的交界线。
 
 ### 6.4 巩固：`Dream(ctx, sceneID)`
-### 6.3 巩固：`Dream(ctx, sceneID)`
 
 ```go
 rep, err := db.Dream(ctx, "")       // sceneID 传 "" = 遍历域内全部场景
@@ -230,7 +229,7 @@ rep, err := db.Dream(ctx, "")       // sceneID 传 "" = 遍历域内全部场景
 通常**不需要宿主调用**：某场景 depth-1 话题数超过 `Defaults.SceneDreamTopicThreshold`（默认 24）时，`Update` 会在后台调度该场景的巩固（同场景在途不重复调度）。
 
 执行 L2→L1→L0 压缩 / 衰减 / 画像蒸馏（多次 LLM 调用，耗时较长）——放后台 goroutine 或对话间隔执行。
-返回结构化 `*DreamReport` 供宿主观测：`ConsolidatedScenes / L2TopicsCompressed / L1NodesAdded|Removed / L1EdgesAdded|Removed / L0Updated`，外加 `Stages []DreamStage{Name, Status, DurationMs}`（状态取值 `ok | skipped | cancelled | error`）。空报告表示无内容可巩固，不算错误；管线中途失败时部分填充的报告随错误一起返回。压缩后每个场景的 depth-1 话题数受 `Consolidate` 约束（≤20），这就是宿主读回上下文的规模上界。
+返回结构化 `*DreamReport` 供宿主观测：`ConsolidatedScenes / L2TopicsCompressed / L1NodesAdded|Removed / L1EdgesAdded|Removed / L0Updated`，外加 `Stages []DreamStage{Name, Status, DurationMs}`（状态取值 `ok | skipped | cancelled | error`）。空报告表示无内容可巩固，不算错误；管线中途失败时部分填充的报告随错误一起返回。场景读回上下文的规模不是一条硬上限：depth-1 话题数越过 `SceneDreamTopicThreshold` 就调度该场景 Dream，Dream 只把 LLM 判定成一组的话题合并上去，没被选中的仍留在 depth-1。
 
 ---
 
@@ -238,7 +237,7 @@ rep, err := db.Dream(ctx, "")       // sceneID 传 "" = 遍历域内全部场景
 
 一轮就是**恰好一个话题**：`Search` 为它铸出的那个 id，宿主记录的这一轮的一切都在它下面。对话原文与操作事件是同一类记录、只差一个 `Kind`，所以一轮能装下宿主记下的任意多条，而一次 `Update` 把它们蒸馏成一条关键词轨。
 
-不发生长对话，而以 `Kind: api.KindEvent` 并排存在同一个键下——读的时候各走各的：`SceneContext` 与 `SearchL4(L4Query{TopicID, Kind: &KindUtterance})` 给说了什么，`Kind: &KindEvent` 给做了什么，`Crystallize` 只看事件轨。
+不发生长对话，而以 `Kind: api.KindEvent` 并排存在同一个键下——读的时候各走各的：`SceneContext` 与 `SearchL4(L4Query{TopicID, Kind: &KindUtterance})` 给说了什么，`Kind: &KindEvent` 给做了什么。这些事件之后变成什么由宿主自己决定——引擎不落能力卡，也没有结晶调用。
 
 **写入侧拥有各轴：** 内容类型（`text`/`image`/`video`/`document`/`audio`/`code`/`other`）与说话者由 `AppendArchive` 逐条声明，读回侧原样报告（`L4Query.Type` 过滤、`ArchiveSlot.ContentType`、`SceneContext` 的 `Messages[].Type`）；未定义的值以 `ErrInvalidQuery` 拒绝而不是落库。Dream 的融合摘要是唯一类型与角色都由库钉死的记录——`text` 与角色 3。一轮恰好一次 LLM 调用（`Update`），关键词永不落后于该话题现有内容。
 
@@ -246,10 +245,12 @@ rep, err := db.Dream(ctx, "")       // sceneID 传 "" = 遍历域内全部场景
 
 ## 8. 各层 API 速查
 
-27 个会话方法按使用者分两类：
+26 个会话方法按使用者分两类：
 
-- **任务面（20 个）**——宿主每轮驱动、LLM 工具绑定的方法：`Search` / `AppendArchive` / `Update` / `Dream`（宿主自动循环）、`GetL0` / `UpdateL0`、`ListScenes` / `SceneContext`、`GetL3` / `ListL3` / `ImportL3` / `QueryL3Nodes` / `QueryL3Subgraph`、`SearchL4`、`ListTrajectorySessions` / `Crystallize`、`PlanCreate` / `PlanNodeAdd` / `PlanNodeUpdate` / `PlanState`。
-- **组装/管理面（7 个，外加 `MultiAgentDB` 全部 8 个）**——宿主代码在会话边界与管理通道调用，**不做成 LLM 工具**：`UpdateScene` / `MergeScenes` / `DeleteScene` / `DeleteTopic`、`UpdateL3` / `DeleteL3` / `DeleteL3Nodes`。能力格式整体离开了方法面：`ParseCapabilityPackage` / `ValidateCapabilityCard` 是包级函数（§8 L5）。
+- **任务面（19 个）**——宿主每轮驱动、LLM 工具绑定的方法：`Search` / `AppendArchive` / `Update` / `Dream`（宿主自动循环）、`GetL0` / `UpdateL0`、`ListL1`、`ListScenes` / `SceneContext`、`GetL3` / `ListL3` / `ImportL3` / `QueryL3Nodes` / `QueryL3Subgraph`、`SearchL4`、`PlanCreate` / `PlanNodeAdd` / `PlanNodeUpdate` / `PlanState`。
+- **组装/管理面（7 个）**——宿主代码在会话边界与管理通道调用，**不做成 LLM 工具**：`UpdateScene` / `RenameTopic` / `MergeScenes` / `DeleteScene` / `DeleteTopic`、`UpdateL3` / `DeleteL3`。
+
+文件级生命周期在 `api.DB` 上（6 个）：`Primary` / `SubAgent`，加 `Checkpoint` / `CompactTo` / `Close` / `IsClosed`。整个面上没有任何能力相关的方法：引擎不存卡、不解析卡，宿主读某一轮做过的事就用 `SearchL4{Kind: event}`，之后怎么组织是它自己的事。
 
 ### L0 画像
 
@@ -299,9 +300,9 @@ res, err := db.ImportL3([]api.L3ImportItem{{
 
 `GraphIDs` 让这条路闭环：图 id = `hash(Domain)`，公开面上没有任何调用能渲染这个派生，所以 `ImportL3` 直接把它报出来——把场景挂到图上（`SearchQuery.L3ID` / `UpdateScene`）要的正是这个 id。
 
-`GetL3 / ListL3 / QueryL3Nodes / QueryL3Subgraph / UpdateL3 / DeleteL3 / DeleteL3Nodes`。
+`GetL3` / `ListL3` / `QueryL3Nodes` / `QueryL3Subgraph` / `UpdateL3` / `DeleteL3`。删除只有一个粒度：整图。
 
-`QueryL3Nodes` 的条件之间是 **AND**（`IDs` / `Keyword` / `NodeType`），所以只填 `GraphID` 即列出该图全部节点，`Keyword` 忽略大小写——与 L4 的关键词一致。`DeleteL3` 连节点带边整图删除；`DeleteL3Nodes(graphID, nodeIDs)` 只删指定节点并级联触及它们的超边（与其余记忆纠错接口一样仅 Go 侧），改一个错事实不再需要重建整图并丢掉绑定边。id 不是该图的节点即拒绝且什么都不删。
+`QueryL3Nodes` 的条件之间是 **AND**（`IDs` / `Keyword` / `NodeType`），所以只填 `GraphID` 即列出该图全部节点，`Keyword` 忽略大小写——与 L4 的关键词一致。L3 的每一份读都按 id 升序返回（图里的节点、边，`ListL3` 的图槽），`Limit` 取的是这条确定顺序的前 N 个，所以同一个查询每次给出的都是同一份清单。`DeleteL3` 连节点带边整图删掉，再清掉本文件里每个域中指向它的场景锚点；改一个错事实走 `ImportL3` 的 `Merge` 模式，不做节点级删除。
 
 库发出的每个 L3 id 都只对应一种记录：`GetL3(节点 id)`、`UpdateL3(节点 id, …)`、`UpdateScene(scene, ScenePatch{L3ID: &节点 id})` 一律 `ErrNotFound`，不会跨种类读到、更不会写到。
 
@@ -325,47 +326,19 @@ arcs, err := db.SearchL4(api.L4Query{
 `L4Query{IDs: []string{id}}` 取代原来的单条 getter（ID 不存在返回空列表，格式不合法返回 `ErrInvalidQuery`）；
 空查询返回该域全部原文——域大了请先加时间范围或 `Limit`，否则这就是文件里的每一条原文。
 
-### 能力（目录即能力——文件归宿主）
-
-引擎**不存储任何能力记录**。能力卡的唯一事实源是宿主自有的能力目录（如 `.meh` 同目录的 `plug/<包>/capability.json`）：宿主自扫自装配、变更重启生效；草稿转正 = 文件转正。库保留格式本身，以包级函数导出：
-
-| 函数 | 说明 |
-|---|---|
-| `api.ParseCapabilityPackage(data, source)` | 解析 `memhop-capability/v4` 文档（一个文件 = 一个包，1..N 张卡）为 `[]CapabilityImport`，整包校验 |
-| `api.ValidateCapabilityCard(card)` | 对单张卡按同一契约校验（名称、摘要、资源、动作链） |
-
-> 一张卡 = 名称 + N 个功能条目（resources，无卡片级 type），每个条目自带启动方式（`type: mcp|skill|api|composite` + `ref`/`config`）/说明（`desc`）/怎么用（`input`/`output`），与宿主工具规格逐字段同构——纯字段拷贝即可投影；composite 条目的动作链放 `config` 的 `{"steps":[{"tool":"...","args":{...}}]}`（每步 `tool` 必填）。面向 LLM 的整块文本用 capability 包的 `PromptCard` 渲染：名称、版本、摘要、触发条件，随后逐资源列启动方式/说明/用法——没有 `id:`/`package:`/`usage:` 三行，卡的身份就是宿主目录里的文件，不是库里的记录。
-
-### 轮内事件 + 结晶
+### 轮内事件（一轮做了什么，与它说了什么并排）
 
 ```go
 // 每轮的事件是 L4 里 Kind=event 的内容，键就是 Search 返回的 NewTopicID
 // （宿主不再自己派生轮键）。
 err := db.AppendArchive(turnIDHex, api.ArchiveSlot{
     Kind:      api.KindEvent,
-    EventType: "tool_call",   // 给这一步命名：
-                              // llm_request / llm_output / tool_call / tool_result /
-                              // subagent_spawn / subagent_done / context_inject /
-                              // ask_user / user_reply（自由字符串，库不做白名单校验）
+    EventType: "tool_call",   // 宿主自己起名，任意非空即可；库不设白名单
     Content:   "工具名+入参摘要", // 4 KiB 预算，超了直接拒
     CreatedAt: time.Now().UnixMilli(),
 })
 // Seq 与所属话题都由引擎按轮键填好；这一轮开出的计划节点也在同一个键下
 // （NodeSeq 才是把事件绑到某一步的字段，见下面的计划面；裸轮事件留 0）。
-
-// 事件 → 能力候选：把一轮的事件轨对照宿主现有卡清单做纯提炼
-// （payload 上限 128KB，超限从最旧丢弃）。
-res, err := db.Crystallize(ctx, turnIDHex, existingCards)
-// existingCards []api.CapabilityImport —— 宿主当前卡目录，从自己的能力
-// 目录读出（首次运行为空）。
-// res.Capabilities —— []CrystallizeCapability：{Action: "create|reuse|merge",
-// ReuseID（已有卡的名称，不是 16-hex id）} + 卡载荷。
-// 引擎不落盘：校验、对照目录去重、把草稿写进（如）plug/draft/ 全归宿主
-// ——文件转正即激活。
-
-// 轮枚举（如挑选可结晶轮次）。
-sessions, err := db.ListTrajectorySessions()
-// sessions[i] = TrajectorySessionSummary{SessionID hex（= 该轮话题 id）, Events, LastAppendAt}
 ```
 
 事件轨用 `SearchL4(L4Query{TopicID: &topicID, Kind: &event})` 按 Seq 序读回。它是**按轮键
@@ -374,8 +347,10 @@ sessions, err := db.ListTrajectorySessions()
 负责 `Seq` 与所属话题，并把 `ContentType` 钉成 text、角色留 0——发生了事，没有谁在说话。
 超过 4 KiB 拒写而不是截断：被剪短的事件读回来和完整事件无法区分。
 
-`ListTrajectorySessions` 枚举记了事件的轮次，宿主因此不必记住自己给哪些轮写过日志。
-
+这些事件之后变成什么，是宿主的决定，引擎不分毫插手：库里没有能力面——不落能力记录、
+不解析卡片格式、也没有结晶调用。宿主要从自己的动作日志里提炼东西，用的是自己的提示词、
+自己的去重规则、自己的文件布局。也没有一个「列出记了事件的轮次」的口：那些轮键是
+`Search` 发出去的，append 过的宿主自己手里就有。
 
 ### L5 计划树（Go 宿主面）
 
@@ -397,19 +372,24 @@ sessions, err := db.ListTrajectorySessions()
 
 ---
 
-## 9. 导出类型清单（v1.6.3）
+## 9. 导出类型清单（v1.6.4）
 
-| 类别 | 名称 | 用途 |
+| 类别 | 名字 | 用途 |
 |---|---|---|
-| 配置 | **`LlmConfig`** / `MemHopDefaults` + `DefaultMemHopDefaults` | `Open` 吃的端点与调参入参 |
-| 输入别名 | `SearchQuery` / `ScenePatch` /
-/ `ArchiveSlot`（写读两用） | 所有 ID 字段均为 16 位 hex 字符串 |
-| ID 面 | **`DefaultAgentID`**（隐式域） | ID 一律由库发号（含轮次话题 id），宿主只回传，不做任何进制转换 |
-| 枚举 | `GraphEdgeKind` / `CapabilityType` / `ContentType` / `PlanStatus` | 枚举别名 |
+| 入口与句柄 | **`Open`** → `*DB`，再由 `DB.Primary()` / `DB.SubAgent(llm, profile)` → `*Session` | 只有这两条进来路；agent 域是握在手里的句柄，从不以 id 命名 |
+| 配置 | **`LlmConfig`** / `MemHopDefaults` + `DefaultMemHopDefaults` | `Open` 要的端点与调参入参 |
+| 入参形状 | **`ProfileInput`** / `SearchQuery` / `ScenePatch` / `L3ImportItem` / `L3Relation` / `L3ImportMode` / `L3NodeQuery` / `L4Query` / `PlanStep` / `ArchiveSlot`（写与读同形） | 宿主唯一能写的画像形状就是 `ProfileInput`，它四项里只有 `Name` 必填 |
+| 响应 DTO | `ProfileSlot` / `SceneNodeView` / `SceneSlot` / `TopicSlot` / `SceneContext` / `SceneContextTopic` / `SceneMessage` / `SearchResult` / `HypergraphSlot` / `HypergraphNode` / `HypergraphEdge` / `HypergraphSource` / `L3Graph` / `L3Subgraph` / `L3ImportResult` / `PlanTree` / `PlanNodeView` / `DreamReport` / `DreamStage` | 每个 id 字段都是 16 位 hex 字符串，且每一个都由库发号 |
+| 枚举 | `GraphEdgeKind` / `ContentType` / `ArchiveKind` / `PlanStatus` / `AgentTypePrimary` + `AgentTypeSub` | 一次调用写在里面的词汇 |
+| 错误 | `Code` + 各 `Err*` 常量，用 `CodeOf(err)` 取回数字码 | 错误串背后的那一层分类 |
 
-枚举常量同样导出：`L3ImportSkip/Merge/Overwrite`、`CapabilityMCP/Skill/API/Composite`、`EdgeRelated...EdgeCustom`、`ContentText/Image/Video/Document/Audio/Code/Other`。能力格式随记录层退役转为包级面存活：`CapabilityFormatV4` + `ParseCapabilityPackage` / `ValidateCapabilityCard`。
+枚举常量同样导出：`L3ImportSkip` / `Merge` / `Overwrite`、`EdgeRelated`…`EdgeCustom`、
+`ContentText`…`ContentOther`、`KindUtterance` / `KindEvent`、`RoleUser` / `RoleAgent` /
+`RoleSystem`、`PlanStatusInProgress` / `PlanStatusDone` / `PlanStatusFailed`。
 
-> 记录的 `Kind` 是 `api.KindUtterance` / `api.KindEvent`。L4 的 `role` 是裸 `uint8`，宿主可声明的三个是 `api.RoleUser` / `RoleAgent` / `RoleSystem`；值 3 是库给融合摘要自己盖的标记，刻意不作公开常量、`AppendArchive` 也拒它，所以宿主写不出一个「看起来像被巩固过」的记录。计划状态只有字符串一种编码：`api.PlanStatus*`（`PlanNodeUpdate` 入参 / `PlanState` 出参）。
+这份清单里没有任何换算 id 的东西：没有 `FormatID` / `ParseID`，任何签名里也没有数字
+id——宿主把自己拿到的 hex 字符串原样回传，不自己拼。也没有任何能力类型：卡片形态、
+磁盘文档格式与激活语义都是宿主的资产，引擎一概不参与。
 
 ---
 
@@ -505,11 +485,20 @@ func main() {
 ## 12. 陷阱清单
 
 1. **LLM 只影响 `Update` 与 `Dream`**：`Search` 与 `AppendArchive` 零 LLM，记录与读取永不被 LLM 拖垮；`Update` 每轮一次提炼，失败即报错且不落该轮话题——你先前 append 的记录原样留着。宿主需为收口失败做好重试：重试同一个 `TopicID` 是安全的。
-格式版本为 `0x0011`：L3 知识图驻留保留共享域（`core.SharedPoolAgentID`），不跑迁移——`0x0010` 及更早的文件在 Open 时被拒绝。`0x0010` 文件把计划节点存在这个读者从不查的点号路径下，于是每个节点读回来序号都是 `0`——一个谁也指认不了东西的地址；它的状态字节用的又是已退役的编号（`0` 表示 pending、`2` 表示 done），一个已完成的步骤会被读成进行中。`0x000F` 及更早还可能出现带着 `running` 状态值的节点（当前词表把它报成未定义存储值）以及绑在从未建出的步骤上的事件。再往前的 `0x000E` 及更早还另有一层：归档把归属话题记在 `context_id` 这个当前记录已没有的键下、记录 id 又派生自 `l1:` / `l4:` 这两个已不存在的命名空间。按当前规则哪一条都指不到东西。
+2. **没有 embedding 服务，也没有维度要声明**：header 偏移 6 的两个字节是保留位。格式
+   版本为 `0x0012`：L3 知识图驻留保留共享域（`core.SharedPoolAgentID`），话题记录带着
+   宿主给它起的 `name`，域身份（`agent_type`）写在该域自己的画像上。不跑迁移——
+   `0x0011` 及更早的文件在 Open 时被拒绝，理由不是一个「可以容错解码」的字段：那批
+   文件的画像里根本没有 `agent_type`，于是**每一个**域都读成主 agent，而当前规则要求
+   一个文件恰好一个主；放它打开，错的是每个域的域身份，不是某一处取值。那批文件还各自
+   带着更细的偏差——计划节点存在点号路径下而不是轮内序号上、状态字节用的是已退役的
+   编号（`0` 表示 pending、`2` 表示 done）、事件绑在从未建出的步骤上、归档把归属话题记
+   在 `context_id` 这个当前记录已没有的键下、id 派生自 `l1:` / `l4:` 这两个已不存在的
+   命名空间。按当前规则，哪一条都指不到东西。
 3. **时间戳用 Unix 毫秒**，`<=0` 报 `ErrInvalidQuery`。
 4. **ID 是不透明 16 位 hex**：不要自行拼接/截断；响应里的 id 原样回传即可，门面上不再有 hex ⇄ 整数转换函数。
 5. **`Search` 不写记忆内容**：它开启一个轮次（场景的轮次计数 +1），但不建任何话题记录——开了没沉淀的轮次不留残渣。想读原文用 `SceneContext` / `SearchL4`。重放一次 append（同 `(话题, Seq)`）是幂等的：记录 id 由那一对派生，重试只会覆盖不会叠加；而重放不再去填的槽位不会被回收。
-6. **单文件多 agent 域**：所有租户驻留同一个 `.meh` 文件（`OpenMulti` → `CreateAgent(name)` → `Session(hexID)`），除文件级 L3 公共池外按域完全隔离；旧库（`FormatVersion < 0x0011`）既打不开也不迁移。
+6. **单文件多 agent 域**：所有租户驻留同一个 `.meh` 文件——`api.Open` 落定文件被打开所依据的那个域，`DB.SubAgent(llm, profile)` 按名字在其下建/取一个——除文件级 L3 公共池外按域完全隔离；旧库（`FormatVersion < 0x0012`）既打不开也不迁移。
 7. **内容与计划自动过期**：Dream 清掉 7 天前的话题内容与 7 天前的计划节点（仍在途的树豁免）；显式纠正走 `DeleteTopic` / `DeleteScene`。过了窗的话题只剩关键词轨，`Messages` 读回来是空的或 `Seq` 上有洞——那是合法的终局，不是读取失败。一切都按轮次话题 id 绑定，所以 `Update` 前后都能追加（id 在 `Search` 时已在手），但绝不要自造轮键。
 8. **场景 id 由宿主保管，话题 id 由库保管**：`Update` 只接受已存在场景（先 `Search` 得到 `Scene.SceneID`）+ 该次读铸出的话题 id——没开轮就沉淀不了。库不会为一次沉淀自动建场景，也不会在 Dream 里合并场景——合并只走显式 `MergeScenes`，而它会把被并场景连记录删掉，宿主手里的旧 id 随即失效。每次 `Search` 恰好开启一个轮次：读两次只沉淀一次，就是跳掉一个轮次号，空洞不产生成本，且已给出的 id 永不重复。
-9. **`SceneDreamTopicThreshold` 默认 24**：用部分字面量构造 `MemHopDefaults` 时该字段为 0，会**禁用**自动巩固——先赋 `api.DefaultMemHopDefaults` 再覆盖。上下文规模由 Dream 保证有界（压缩后每场景 ≤20），禁用自动巩固就等于让注入无界增长。
+9. **`SceneDreamTopicThreshold` 默认 24**：用部分字面量构造 `MemHopDefaults` 时该字段为 0，会**禁用**自动巩固——先赋 `api.DefaultMemHopDefaults` 再覆盖。上下文规模只由 Dream 收敛，不是硬上限，禁用自动巩固就等于让注入无界增长。

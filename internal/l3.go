@@ -81,8 +81,9 @@ func (db *DB) ListL3(agentID uint64) ([]core.HypergraphSlot, error) {
 // batch). The batch is validated up front — every item needs a Title and a
 // Domain — so a malformed request writes nothing at all; per-item storage
 // failures are what result.Errors reports. nil is only returned on success.
-// The result carries the graph ids the batch wrote into as well as the node
-// ids, because a host needs the former to hang the graph on a scene.
+// The result carries the graph ids each domain resolved into (a Skip-mode batch that
+// added nothing still reports its graph) as well as the node ids, because a host
+// needs the former to hang the graph on a scene.
 // Every graph this batch actually changed gets one slot write at the end, moving
 // its UpdatedAt forward; a graph it only read keeps its clock, and a stamp that
 // fails is reported in result.Errors rather than undoing records already stored.

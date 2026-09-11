@@ -97,10 +97,10 @@ func checkPayload(content string, budget int, what string) error {
 	return nil
 }
 
-// Append is the only path that writes a record into a topic: it lands one entry
-// on the topic's content track and returns the Seq it took. NodeSeq lives on the
-// record: a non-zero one names the plan step an event belongs to, which is how a
-// read attributes an event to a step afterwards.
+// Append is this package's only write path, and the one every host-side record of
+// a turn goes through: it lands one entry on the topic's content track and returns
+// the Seq it took. NodeSeq lives on the record: a non-zero one names the plan step
+// an event belongs to, which is how a read attributes an event to a step afterwards.
 //
 // Field ownership is the contract. Of the record a caller passes, the ones the
 // utterance kind owns are adopted verbatim (Role, ContentType, EventType,

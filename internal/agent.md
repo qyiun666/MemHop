@@ -17,11 +17,9 @@ internal/{domain,scene,turn,dream,graph,plan,content}
 ```
 
 - 大方法（`Search`/`Update`/`RunDream`/L0-L5 各面/
-  `CreateAgent` 等）只做：`db.lockAgent` 取域 → 顺序调小方法 → 组装返回。
+  `SubAgent` 等）只做：`db.lockAgent` 取域 → 顺序调小方法 → 组装返回。
   细节逻辑（循环、重试、缓存维护、ID 铸造、回滚）一律在小方法包。
-- 小方法包之间互不 import，一条都不例外（事件载荷预算原先由 `plan` 读
-  `trajectory` 的常量，现在事件写入整体归 `content`，那个例外随之消失）；
-  需要交互时回到根的大方法组装。
+- 小方法包之间互不 import，一条都不例外；需要交互时回到根的大方法组装。
 - 依赖方向单向：`根 -> 小方法包 -> {domain, cap, repo, llm} -> repo/core,index
   -> common`，禁止反向。
 
@@ -223,7 +221,7 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    故同一对节点可并存多种关系。`ImportL3` 结果带 `GraphIDs`
    （图 id = `hash(Domain)`，没有别的公开调用能渲染它）。全部 L3 记录住保留公共域
    `core.SharedPoolAgentID`（文件级公共池：`contextFor`/空闲回收/租户注册表
-   三处豁免，`CreateAgent` 拒撞、`Session` 拒绑）。
+   三处豁免，域发号时跳过它与默认域，宿主因此拿不到也绑不上这个 id）。
    `DeleteL3` 两阶段：公共锁内删图，释放后遍历「默认域 + 注册表」逐域
    `lockAgent` 清锚（`detachGraphAnchors`），不嵌套双锁——代价是「删图后、
    清锚前」窗口内同名重导入（图 id = hash(Domain) 同 id）的锚点会被清成

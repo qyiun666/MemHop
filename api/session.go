@@ -48,7 +48,10 @@ func (s *Session) Update(sceneID, topicID string) error {
 	return s.Session.Update(sceneID, topicID)
 }
 
-// GetL0 returns the profile without the internal id_hash.
+// GetL0 returns the profile without the internal id_hash. A domain whose profile
+// was never written reads back as an empty, non-nil ProfileSlot — the answer to
+// "nothing stored yet" is not an error. A profile that exists but cannot be read
+// is reported as one (ErrIO / ErrDeserialization), never as an absent profile.
 func (s *Session) GetL0() (*ProfileSlot, error) {
 	slot, err := s.Session.GetL0()
 	if err != nil {

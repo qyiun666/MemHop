@@ -21,9 +21,9 @@ import (
 )
 
 const (
-	// defaultTimeoutSecs 是 Config.TimeoutSecs 未设置时的 HTTP 超时。
+	// defaultTimeoutSecs 是 LlmConfig.TimeoutSecs 未设置时的 HTTP 超时。
 	defaultTimeoutSecs = 120
-	// defaultMaxOutputTokens 是 Config.MaxOutputTokens 未设置时的输出上限。
+	// defaultMaxOutputTokens 是 LlmConfig.MaxOutputTokens 未设置时的输出上限。
 	defaultMaxOutputTokens = 8192
 )
 

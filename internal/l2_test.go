@@ -398,7 +398,7 @@ func TestUpdateSceneNameSurvivesLaterTurns(t *testing.T) {
 // retention window passes, a topic keeps the keyword track Dream folded out of it
 // and its transcript comes back **empty, not failed** — an expired turn is a legal
 // end state, and a host has to be able to tell that apart from a read that lost a
-// line (which stays a hard ErrIO, see TestContextTopicIndexDriftIsAnError).
+// line (which stays a hard ErrIO).
 func TestSceneContextAfterContentRetentionIsEmptyNotAnError(t *testing.T) {
 	srv := mockLLMServer(t, turnKeywords)
 	db := newSearchTestDB(t, srv.URL)

@@ -135,13 +135,12 @@ func (db *DB) lockAgent(agentID uint64) (*domain.Context, error) {
 	return ac, nil
 }
 
-// lockSession is the shared prologue of the L4 and L5 turn-keyed operations, and
-// the only place the root parses a turn key: take the domain lock, then parse the
-// topic id of the turn. On a parse failure the lock is released before returning,
-// so callers add `defer ac.Mu.Unlock()` only after the error check. It returns the
-// locked context and the parsed key. The parse is the write path's own
-// (content.ParseTopicID), so a reserved all-zero key is refused the same way on
-// both sides of the log.
+// lockSession is the shared prologue of the turn-keyed operations: take the domain
+// lock, then parse the turn's topic id. On a parse failure the lock is released
+// before returning, so callers add `defer ac.Mu.Unlock()` only after the error
+// check. It returns the locked context and the parsed key. The parse is the one
+// every turn-keyed entry uses (content.ParseTopicID), so a reserved all-zero key is
+// refused the same way wherever a host can hand one in.
 func (db *DB) lockSession(agentID uint64, sessionID string) (*domain.Context, uint64, error) {
 	ac, err := db.lockAgent(agentID)
 	if err != nil {
