@@ -153,38 +153,6 @@ func TestImportL3ReadsBackEveryField(t *testing.T) {
 	}
 }
 
-func TestImportL3SkipRestoresEdgesOfADeletedNode(t *testing.T) {
-	sess := openSurfaceDB(t)
-	_, gid := importGraph(t, sess, L3ImportOverwrite)
-
-	full, _ := sess.GetL3(gid)
-	repoID := idOfTitle(full, "repo")
-	if err := sess.DeleteL3Nodes(gid, []string{repoID}); err != nil {
-		t.Fatalf("DeleteL3Nodes: %v", err)
-	}
-	deleted, _ := sess.GetL3(gid)
-	if len(deleted.Nodes) != 2 || len(deleted.Edges) != 1 {
-		t.Fatalf("cascade left %d nodes / %d edges, want 2 / 1", len(deleted.Nodes), len(deleted.Edges))
-	}
-	// Skip-mode re-import of the whole batch: the node returns, and so do the
-	// edges other items declared onto it.
-	importGraph(t, sess, L3ImportSkip)
-	restored, _ := sess.GetL3(gid)
-	if len(restored.Nodes) != 3 {
-		t.Fatalf("want 3 nodes back, got %d", len(restored.Nodes))
-	}
-	if len(restored.Edges) != 2 {
-		t.Fatalf("Skip re-import must restore both edges, got %d", len(restored.Edges))
-	}
-	for _, e := range restored.Edges {
-		for _, id := range e.NodeIDs {
-			if !hasNode(restored, id) {
-				t.Fatalf("edge %s references a node that is not in the graph", e.IDHash)
-			}
-		}
-	}
-}
-
 func TestUpdateL3RenameSurvivesReimport(t *testing.T) {
 	sess := openSurfaceDB(t)
 	_, gid := importGraph(t, sess, L3ImportOverwrite)
@@ -234,9 +202,6 @@ func TestQueryL3NodesRefusesUnknownGraphAndBadIds(t *testing.T) {
 	}
 	if _, err := sess.QueryL3Nodes(L3NodeQuery{GraphID: gid}); err == nil {
 		t.Fatal("QueryL3Nodes on a deleted graph must error, not return empty")
-	}
-	if err := sess.DeleteL3Nodes(gid, []string{"0000000000000001"}); err == nil {
-		t.Fatal("DeleteL3Nodes on a deleted graph must error")
 	}
 }
 
@@ -440,24 +405,6 @@ func TestUpdateFailsLoudlyWhenTheLLMCannotExtract(t *testing.T) {
 // ---- small helpers ----
 
 func ptr[T any](v T) *T { return &v }
-
-func idOfTitle(g *L3Graph, title string) string {
-	for _, n := range g.Nodes {
-		if n.Title == title {
-			return n.IDHash
-		}
-	}
-	return ""
-}
-
-func hasNode(g *L3Graph, id string) bool {
-	for _, n := range g.Nodes {
-		if n.IDHash == id {
-			return true
-		}
-	}
-	return false
-}
 
 func scenesOf(t *testing.T, sess *Session) int {
 	t.Helper()

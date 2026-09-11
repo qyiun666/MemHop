@@ -5,7 +5,6 @@ package repo
 
 import (
 	"fmt"
-	"slices"
 	"time"
 
 	"github.com/qyiun666/MemHop/internal/common"
@@ -116,38 +115,6 @@ func DeleteGraphL3(engine *core.StorageEngine, agentID uint64, id uint64) bool {
 	targets = append(targets, id)
 	_, err := engine.DeleteRecordBatch(agentID, targets)
 	return err == nil
-}
-
-// DeleteNodesL3 removes the named nodes of one graph and every hyperedge that
-// touches them: an edge left pointing at a deleted node resolves to nothing.
-// Every id has to be a node of this graph, so a wrong id is reported instead of
-// quietly deleting nothing.
-func DeleteNodesL3(engine *core.StorageEngine, agentID uint64, graphID uint64, nodeIDs []uint64) error {
-	members := make(map[uint64]struct{}, len(nodeIDs))
-	for _, id := range nodeIDs {
-		members[id] = struct{}{}
-	}
-	inGraph := make(map[uint64]struct{})
-	for _, n := range ListNodeL3(engine, agentID, graphID) {
-		inGraph[n.IDHash] = struct{}{}
-	}
-	for _, id := range nodeIDs {
-		if _, ok := inGraph[id]; !ok {
-			return common.NewError(common.ErrNotFound, fmt.Sprintf("node %s is not a node of graph %s",
-				common.FormatHash(id), common.FormatHash(graphID)))
-		}
-	}
-	targets := slices.Clone(nodeIDs)
-	for _, e := range ListEdgeL3(engine, agentID, graphID) {
-		for _, node := range e.NodeIDs {
-			if _, hit := members[node]; hit {
-				targets = append(targets, e.IDHash)
-				break
-			}
-		}
-	}
-	_, err := engine.DeleteRecordBatch(agentID, targets)
-	return err
 }
 
 // UpdateGraphL3 partially updates a graph slot (currently Name only).

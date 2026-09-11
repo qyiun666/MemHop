@@ -110,8 +110,8 @@ func (db *DB) ImportL3(agentID uint64, items []L3ImportItem, mode L3ImportMode) 
 	}
 	// Relations for every item, including one whose node was skipped: edges
 	// are deduped by their sorted members plus kind, so re-declaring one is a
-	// no-op — while withholding it would silently drop the edges of a node an
-	// earlier DeleteL3Nodes had removed and this batch just brought back.
+	// no-op — while withholding it would silently drop the relations this batch
+	// declares onto a node that already existed.
 	for i := range items {
 		batch.ImportRelations(&items[i])
 	}
@@ -193,33 +193,4 @@ func (db *DB) detachGraphAnchors(graphHash uint64) error {
 		ac.Mu.Unlock()
 	}
 	return errors.Join(errs...)
-}
-
-// DeleteL3Nodes removes nodes from one graph and cascades the hyperedges that
-// touch them, so correcting a knowledge node does not mean rebuilding the graph
-// (and losing the edges bound to it). Every id must name a node of this graph;
-// an unknown or foreign id is refused and nothing is deleted.
-func (db *DB) DeleteL3Nodes(agentID uint64, graphID string, nodeIDs []string) error {
-	ac, err := db.lockSharedPool(agentID)
-	if err != nil {
-		return err
-	}
-	defer ac.Mu.Unlock()
-	if len(nodeIDs) == 0 {
-		return common.NewError(common.ErrInvalidQuery, "delete nodes: no node ids")
-	}
-	slot, err := repo.ReadSharedGraphL3(db.engine, graphID)
-	if err != nil {
-		return err
-	}
-	graphHash := slot.IDHash
-	targets := make([]uint64, 0, len(nodeIDs))
-	for _, raw := range nodeIDs {
-		id, err := common.ParseID(raw)
-		if err != nil {
-			return common.NewError(common.ErrInvalidQuery, "parse node id", err)
-		}
-		targets = append(targets, id)
-	}
-	return repo.DeleteNodesL3(db.engine, core.SharedPoolAgentID, graphHash, targets)
 }

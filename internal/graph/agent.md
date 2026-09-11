@@ -16,8 +16,8 @@
   `ErrNotFound`。
 
 - `ImportBatch.ImportNode` 只返回 error。**边对批内每个条目都声明**，含被
-  skip 的：边按「排序成员 + kind」去重所以幂等——只在节点新落库时建边会让
-  「删节点 → Skip 重导」永久丢掉该节点的入边。
+  skip 的：边按「排序成员 + kind」去重所以幂等——只在节点新落库时建边会丢掉
+  这一批声明到已存在节点上的那些关系。
 - `L3Relation.Titles` 是关系的另一侧全部目标：一条关系 = 一条 `{source} ∪ Titles` 超边，元数不限。成员集非法（空/自指/重复/不在本图/词表外 kind）由 `relationMembers` 拒绝并给出原因，`ImportRelations` 记进 `result.Errors` 后继续其余关系——**不建边，不降级成两两边**。
 - `graphFor` 走 `repo.EnsureGraphL3` 而非 `CreateGraphL3`：图 id = `hash(Domain)`，但槽里的 `Name` 是宿主标签（可能被 `UpdateL3` 改过），已存在就原样复用，宿主改过的名字在重导后存活。
 - `NewImportBatch` 播种 name→id 时**必须裁决同名**：`graphIDs[g.Name] = g.IDHash` 逐条覆盖 + `IndexByType` 是 map 迭代顺序，两张同名槽就让同一个 `Domain` 每次导入随机进一张（节点 id = `hash(graphID:title)`，于是同标题换图、重导幂等性失效）。规则在 `preferGraphID`：id 由该名字派生的那张图拥有它，全等平手取较小 id。

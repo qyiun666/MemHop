@@ -231,7 +231,7 @@ func registerKnowledgeWriteTools(s *mcp.Server, db *memhop.Session) {
 
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_knowledge_delete",
-		Description: "删除一个 L3 知识超图及其全部节点与边，并清掉命名该图的 L2 场景锚点（删完不会有场景还挂在已消失的项目域下）。只想改单个节点用 memhop_knowledge_nodes + 删除节点，别用整图删除。",
+		Description: "删除一个 L3 知识超图及其全部节点与边，并清掉命名该图的 L2 场景锚点（删完不会有场景还挂在已消失的项目域下）。影响范围是整张图：绑到图内任何节点的边一起走。没有更细粒度的删除口——内容错了的图重新导入覆盖。",
 		InputSchema: objSchema(map[string]any{
 			"id": strProp("知识图 ID（16 位 hex），必填"),
 		}, "id"),

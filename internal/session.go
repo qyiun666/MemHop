@@ -132,14 +132,6 @@ func (s *Session) DeleteL3(id string) error {
 	return s.db.DeleteL3(s.agentID, id)
 }
 
-// DeleteL3Nodes removes nodes from one graph and cascades the hyperedges that
-// touch them, so a wrong node can be corrected without rebuilding the graph.
-// Every id must name a node of this graph; an unknown or foreign id is refused
-// and nothing is deleted.
-func (s *Session) DeleteL3Nodes(graphID string, nodeIDs []string) error {
-	return s.db.DeleteL3Nodes(s.agentID, graphID, nodeIDs)
-}
-
 func (s *Session) QueryL3Nodes(q L3NodeQuery) ([]HypergraphNode, error) {
 	return s.db.QueryL3Nodes(s.agentID, q)
 }

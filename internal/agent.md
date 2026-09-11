@@ -185,8 +185,7 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    `ErrNotFound`（否则 `UpdateL3(节点 id)` 会把节点记录改写成图槽）；
    `CreateEdgeL3` 的 id 含 kind，导入按「排序成员 + kind」的语义键去重，
    故同一对节点可并存多种关系。`ImportL3` 结果带 `GraphIDs`
-   （图 id = `hash(Domain)`，没有别的公开调用能渲染它）；`DeleteL3Nodes`
-   做节点级删除并级联其超边。全部 L3 记录住保留公共域
+   （图 id = `hash(Domain)`，没有别的公开调用能渲染它）。全部 L3 记录住保留公共域
    `core.SharedPoolAgentID`（文件级公共池：`contextFor`/空闲回收/租户注册表
    三处豁免，`CreateAgent` 拒撞、`DeleteAgent` 拒删、`Session` 拒绑）。
    `DeleteL3` 两阶段：公共锁内删图，释放后遍历「默认域 + 注册表」逐域

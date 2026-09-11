@@ -346,85 +346,10 @@ func TestL3GraphWritesRejectNodeID(t *testing.T) {
 	}
 }
 
-// Correcting one knowledge node means removing it: the cascade has to take the
-// hyperedges that touch it with it, since an edge pointing at a deleted node
-// resolves to nothing, and leave the rest of the graph alone.
-func TestDeleteL3NodesCascadesEdges(t *testing.T) {
-	db := newL3TestDB(t)
-	items := []L3ImportItem{
-		{Title: "a", Domain: "p", Content: "a", Related: []L3Relation{
-			{Titles: []string{"b"}, Kind: GraphEdgeKind(EdgePartOf)},
-			{Titles: []string{"c"}, Kind: GraphEdgeKind(EdgePartOf)},
-		}},
-		{Title: "b", Domain: "p", Content: "b"},
-		{Title: "c", Domain: "p", Content: "c", Related: []L3Relation{{Titles: []string{"b"}, Kind: GraphEdgeKind(EdgeRelated)}}},
-	}
-	res, err := db.ImportL3(core.DefaultAgentID, items, L3ImportOverwrite)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(res.GraphIDs) != 1 {
-		t.Fatalf("graph ids: %+v", res)
-	}
-	graphID := res.GraphIDs[0]
-	graph := l3TestGraph(t, db)
-	if len(graph.Nodes) != 3 || len(graph.Edges) != 3 {
-		t.Fatalf("baseline: %d nodes / %d edges", len(graph.Nodes), len(graph.Edges))
-	}
-
-	var bID, cID uint64
-	for _, n := range graph.Nodes {
-		switch n.Title {
-		case "b":
-			bID = n.IDHash
-		case "c":
-			cID = n.IDHash
-		}
-	}
-	if err := db.DeleteL3Nodes(core.DefaultAgentID, graphID, []string{common.FormatHash(bID)}); err != nil {
-		t.Fatal(err)
-	}
-	graph = l3TestGraph(t, db)
-	titles := make([]string, 0, len(graph.Nodes))
-	for _, n := range graph.Nodes {
-		titles = append(titles, n.Title)
-	}
-	if !slices.Contains(titles, "a") || !slices.Contains(titles, "c") || slices.Contains(titles, "b") {
-		t.Fatalf("nodes after delete: %v", titles)
-	}
-	if len(graph.Edges) != 1 || graph.Edges[0].Kind != GraphEdgeKind(EdgePartOf) {
-		t.Fatalf("edges after delete: %+v", graph.Edges)
-	}
-	if slices.Contains(graph.Edges[0].NodeIDs, bID) {
-		t.Fatalf("an edge still points at the deleted node: %+v", graph.Edges[0])
-	}
-
-	// A node that is not in this graph — and one that is not a node at all —
-	// are both refusals, not silent no-ops.
-	if err := db.DeleteL3Nodes(core.DefaultAgentID, graphID, []string{common.FormatHash(cID)}); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.DeleteL3Nodes(core.DefaultAgentID, graphID, []string{common.FormatHash(cID)}); common.CodeOf(err) != common.ErrNotFound {
-		t.Fatalf("delete a node twice: %v", err)
-	}
-	other, err := db.ImportL3(core.DefaultAgentID, []L3ImportItem{{Title: "elsewhere", Domain: "q", Content: "x"}}, L3ImportOverwrite)
-	if err != nil {
-		t.Fatal(err)
-	}
-	otherGraph := l3TestGraphByName(t, db, "q")
-	if err := db.DeleteL3Nodes(core.DefaultAgentID, other.GraphIDs[0], []string{common.FormatHash(otherGraph.Nodes[0].IDHash)}); err != nil {
-		t.Fatalf("delete the other graph's node: %v", err)
-	}
-	if err := db.DeleteL3Nodes(core.DefaultAgentID, graphID, []string{graphID}); common.CodeOf(err) != common.ErrNotFound {
-		t.Fatalf("delete a graph id as a node: %v", err)
-	}
-}
-
 // TestImportL3NaryHyperedge verifies one relation naming several targets lands
-// as a single edge over the whole member set — the fact the storage layer was
-// shaped for (edge id hashes the member set, BFS connects every member, the
-// node cascade matches any member) and which the import surface used to
-// dissolve into pairs.
+// as a single edge over the whole member set — the fact the storage layer is
+// shaped for: the edge id hashes the member set, and a BFS from any one member
+// reaches every other over that single edge rather than over a fan of pairs.
 func TestImportL3NaryHyperedge(t *testing.T) {
 	db := newL3TestDB(t)
 	items := []L3ImportItem{
@@ -472,18 +397,6 @@ func TestImportL3NaryHyperedge(t *testing.T) {
 	}
 	if len(again.Edges) != 1 {
 		t.Fatalf("re-import duplicated the hyperedge: %d", len(again.Edges))
-	}
-
-	// Deleting one member cascades the whole hyperedge, not just one pair.
-	if err := db.DeleteL3Nodes(core.DefaultAgentID, res.GraphIDs[0], []string{common.FormatHash(nodeIDOf(again, "session.go"))}); err != nil {
-		t.Fatalf("delete member: %v", err)
-	}
-	after, err := db.GetL3(core.DefaultAgentID, res.GraphIDs[0])
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(after.Edges) != 0 {
-		t.Fatalf("removing a member must cascade the hyperedge, %d edges left", len(after.Edges))
 	}
 }
 

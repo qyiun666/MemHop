@@ -72,7 +72,7 @@ func TestSessionPublicSurface(t *testing.T) {
 		// L2 scene management and corrections
 		"UpdateScene", "MergeScenes", "DeleteScene", "DeleteTopic",
 		// L3 management and corrections
-		"UpdateL3", "DeleteL3", "DeleteL3Nodes",
+		"UpdateL3", "DeleteL3",
 	}
 	sort.Strings(want)
 

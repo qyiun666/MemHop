@@ -11,10 +11,10 @@
 // AppendArchive (the host-driven loop), SceneContext, ListScenes, GetL0,
 // UpdateL0, SearchL4, GetL3, ListL3, ImportL3, QueryL3Nodes, QueryL3Subgraph,
 // PlanCreate, PlanNodeAdd, PlanNodeUpdate, PlanState.
-// The assembly/admin face (7, plus all of
+// The assembly/admin face (6, plus all of
 // MultiAgentDB) is host code at session boundaries and management channels
 // only — never an LLM tool: UpdateScene, MergeScenes, DeleteTopic,
-// DeleteScene, UpdateL3, DeleteL3, DeleteL3Nodes.
+// DeleteScene, UpdateL3, DeleteL3.
 
 package api
 
@@ -354,16 +354,9 @@ func (s *Session) ImportL3(items []L3ImportItem, mode L3ImportMode) (*L3ImportRe
 // It also drops the L2 anchors that named the graph — a scene's L3ID is the only
 // inbound reference a graph has, and both anchor write paths require the graph to
 // exist, so no scene is left listing under a project domain nothing resolves to.
-// Reach for DeleteL3Nodes when only part of the graph is wrong — this call takes
-// the edges bound to every node in it, including the correct ones.
+// The blast radius is the whole graph: every edge bound to any node in it goes
+// too, including the ones pointing at nodes a host would have kept. There is no
+// narrower delete — a graph whose contents are wrong is re-imported.
 func (s *Session) DeleteL3(id string) error {
 	return s.Session.DeleteL3(id)
-}
-
-// DeleteL3Nodes removes specific nodes from one graph, cascading every hyperedge
-// that touches them, so correcting a knowledge node does not mean rebuilding the
-// graph. Every id must name a node of that graph; an unknown or foreign id is
-// refused and nothing is deleted.
-func (s *Session) DeleteL3Nodes(graphID string, nodeIDs []string) error {
-	return s.Session.DeleteL3Nodes(graphID, nodeIDs)
 }
