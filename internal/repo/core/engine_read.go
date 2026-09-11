@@ -6,6 +6,9 @@
 package core
 
 import (
+	"errors"
+	"io"
+
 	"github.com/qyiun666/MemHop/internal/common"
 )
 
@@ -21,6 +24,14 @@ func (e *StorageEngine) ReadRecord(agentID, idHash uint64) (uint8, []byte, error
 	}
 	rt, _, data, _, _, err := RecordData(e.mmap, offset)
 	if err != nil {
+		if errors.Is(err, io.EOF) {
+			// io.EOF is the frame scanner's "stop here", which means nothing to a
+			// caller that named one id: an entry pointing at the end of the log or
+			// at zero-filled space is the index disagreeing with the record area,
+			// and it has to carry a code — an error code 0 reads as success.
+			return 0, nil, common.NewError(common.ErrCorruption,
+				"the index names a record the record area does not hold", err)
+		}
 		return 0, nil, err
 	}
 	return rt, data, nil

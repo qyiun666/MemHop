@@ -40,6 +40,8 @@ README 的版本表与 git log。
     - **顺手净删**：`index` 里与 `core.IterAll` 同形的第二份扫描（自己 `json.Unmarshal`，绕过帧类型校验）、`domain` 两处永不成立的 `L2Meta == nil` 分支（同文件第三个函数就直接解引用）、`ensureRegistered` 里第二份永不触发的空名校验（唯一的调用方 `SubAgent` 先拒）、一个零调用的 L3 测试辅助函数；`scene.DetachGraph` 扫完一遍场景后又按 id 把每条命中的重读一次再改写，同锁内那次重读的失败分支永不成立——现在直接用扫描已解出的 slot 改写。
     - **文档四处不实/越界**：`cap` 的「不认识层，收到的都是渲染好的文本」与四个包的现状冲突（`profile.Samples` 自己扫 L1 并按本包常量裁剪，`engram`/`knowledge` 收的是 engine/节点原语），改写为「不认识编排，预算各归各包」；`domain` 两处复制根条目已有的镜像属主纪律、`turn` 一处替键的语义说话、`dream` 一处断言别包的写入集合，各按 D01 收回或上移（「内容只被话题寻址、话题里推不出场景」此前只写在 `turn` 里，现归根条目）；两个写入口的取舍与代价落为决策档案 `notes/implemented/architecture/2026-09-11-l4-content-two-write-entries.md`。
 
+21. **上抛的错误都带着自己的码**：`ReadRecord` 此前把帧解码器的裸 `io.EOF` 原样交出，而 `api.CodeOf` 对不是 `*common.Error` 的错误返回 0——0 正是「成功」那一档，一次拒绝于是穿着「没有结论」的外衣到达宿主；快照装进来的索引条目不校验偏移，一条 CRC 自洽而偏移高到记录区之外的条目就能让某个 id 指到日志以外（现在按 id 读把它译成 `ErrCorruption`，`TestReadRecordCodesAnIndexEntryTheLogDoesNotHold`）。`Dream` 的「一个场景都没巩固成」同样是裸 `errors.New`，现带 `ErrLLM`，且上下文已取消时改说取消——把一次取消报成模型失败，宿主会去查错东西。
+
 ## v1.6.3 — 2026-09-10 — L4 是一轮唯一的内容层，L5 只剩计划树，`Update` 只蒸馏
 
 一轮发生过什么，此前被劈在两层：L4 存两条对话原文，轨迹层存事件与计划节点。两层早就共用

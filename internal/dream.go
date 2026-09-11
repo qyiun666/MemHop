@@ -8,7 +8,6 @@ package internal
 
 import (
 	"context"
-	"errors"
 	"log/slog"
 	"time"
 
@@ -51,7 +50,13 @@ func (db *DB) RunDream(ctx context.Context, agentID uint64, sceneID uint64) (*Dr
 	start := time.Now()
 	succeeded, failures := dream.CompressScenes(ctx, ac, scenes, rep)
 	if len(succeeded) == 0 && failures > 0 {
-		err = errors.New("dream: LLM consolidation failed for all scenes")
+		// A cancelled pass fails every scene's call at once, and a host told "the
+		// model failed" would go check the model.
+		err := common.NewError(common.ErrLLM, "dream: LLM consolidation failed for all scenes")
+		if cerr := ctx.Err(); cerr != nil {
+			err = common.NewError(common.ErrLLM,
+				"dream: consolidation cancelled before any scene finished", cerr)
+		}
 		dream.AppendStage(rep, "l2_compress", start, err)
 		return rep, err
 	}
