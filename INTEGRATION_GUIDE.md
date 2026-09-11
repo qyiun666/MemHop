@@ -113,14 +113,14 @@ db, err := api.Open(
         MaxOutputTokens: 8192,
     },
     api.DefaultMemHopDefaults, // tuning knobs; copy it to change one open
-    &api.ProfileSlot{Name: "guide", Role: "assistant"}, // required for a new file
+    &api.ProfileInput{Name: "guide", Role: "assistant"}, // required for a new file
 )
 if err != nil { /* ErrConfig / ErrInvalidQuery / ErrInvalidMagic / ErrCorruption */ }
 defer db.Close() // checkpoint snapshot + release mmap/file lock
 
 // Domains come back as handles, never as ids.
 sess, err := db.Primary()                       // the domain the file was opened on
-worker, err := db.SubAgent(workerLLM, api.ProfileSlot{Name: "worker"}) // by name
+worker, err := db.SubAgent(workerLLM, api.ProfileInput{Name: "worker"}) // by name
 ```
 
 `api.Open` is the only entry point, and what it does depends on the file and on the
@@ -287,16 +287,18 @@ The 27 session methods split by audience:
 ### L0 profile
 
 ```go
-slot, err := db.GetL0()                       // *api.ProfileSlot
-err = db.UpdateL0(&api.ProfileSlot{Name: "..."})
+prof, err := db.GetL0()                       // *api.ProfileSlot — the full record
+err = db.UpdateL0(&api.ProfileInput{Name: "..."})
 ```
 
-`UpdateL0` writes the host-owned half — `Name`, `Role`, `Personality`,
-`Preferences` — and nothing else: `EmotionState` and `MBTI` are kept from the
-stored profile because only Dream evolves them, and `UpdatedAtMs` is stamped by
-the library. There is therefore no need to `GetL0` and fill values back; passing
-those three fields changes nothing. The distilled half refreshes automatically
-with Dream: there is no standalone distill entry point.
+`UpdateL0` takes a `ProfileInput`, which holds exactly the four fields a host
+owns — `Name`, `Role`, `Personality`, `Preferences`. The rest of the stored
+profile is not in that shape because it is not the host's to state: `EmotionState`
+and `MBTI` are evolved by Dream, `UpdatedAtMs` is stamped by the library, and
+`AgentType` is decided when the domain is created. A write inherits all four from
+the record, so there is no need to `GetL0` and fill values back, and no read-only
+field can be smuggled in — the compiler refuses. The distilled half refreshes
+automatically with Dream: there is no standalone distill entry point.
 
 ### L2 scenes
 
@@ -497,7 +499,7 @@ with) and every L5 entry rejects it — reads included.
 | Kind | Names | Use |
 |---|---|---|
 | config | **`LlmConfig`** / `MemHopDefaults` + `DefaultMemHopDefaults` | the endpoint and tuning arguments `Open` takes |
-| input aliases | `SearchQuery` / `ScenePatch` / `L3ImportItem` / `L3Relation` / `L3ImportMode` / `L3ImportResult` / `L3NodeQuery` / `L4Query` / `SceneContext` / `SceneMessage` / `TrajectorySessionSummary` / `DreamReport` / `DreamStage` / `CapabilityImport` / `CapabilityPackageDoc` / `CrystallizeOutput` / `CrystallizeCapability` / `ResourceRef` | inputs & id-free results (all string IDs are hex) |
+| input shapes | **`ProfileInput`** / `SearchQuery` / `ScenePatch` / `L3ImportItem` / `L3Relation` / `L3ImportMode` / `L3ImportResult` / `L3NodeQuery` / `L4Query` / `SceneContext` / `SceneMessage` / `TrajectorySessionSummary` / `DreamReport` / `DreamStage` / `CapabilityImport` / `CapabilityPackageDoc` / `CrystallizeOutput` / `CrystallizeCapability` / `ResourceRef` | inputs & id-free results (all string IDs are hex); `ProfileInput` is the only profile a host may write |
 | response DTOs | `ProfileSlot` / `SceneSlot` / `TopicSlot` / `SearchResult` / `HypergraphSlot` / `HypergraphNode` / `HypergraphEdge` / `HypergraphSource` / `L3Graph` / `L3Subgraph` / `ArchiveSlot` (write and read) | every ID field is a 16-hex string |
 | id surface | **`DefaultAgentID`** (the implicit domain) | the library issues every id — turn topics included; a host echoes them back and converts nothing |
 | enums | `GraphEdgeKind` / `CapabilityType` / `ContentType` / `PlanStatus` | enum aliases |
@@ -559,13 +561,13 @@ func main() {
         },
         api.DefaultMemHopDefaults,
         // Only consulted when the file is not there yet.
-        &api.ProfileSlot{Name: "guide-agent", Role: "assistant"},
+        &api.ProfileInput{Name: "guide-agent", Role: "assistant"},
     )
     if err != nil { log.Fatal(err) }
     defer lib.Close()
 
     // The file's primary domain. Sub-agent domains would come from
-    // lib.SubAgent(llm, api.ProfileSlot{Name: ...}) the same way.
+    // lib.SubAgent(llm, api.ProfileInput{Name: ...}) the same way.
     db, err := lib.Primary()
     if err != nil { log.Fatal(err) }
 

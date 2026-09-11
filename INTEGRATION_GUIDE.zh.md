@@ -103,14 +103,14 @@ db, err := api.Open(
         MaxOutputTokens: 8192,
     },
     api.DefaultMemHopDefaults, // 调参旋钮；要改就复制一份改
-    &api.ProfileSlot{Name: "guide", Role: "assistant"}, // 文件还不存在时必填
+    &api.ProfileInput{Name: "guide", Role: "assistant"}, // 文件还不存在时必填
 )
 if err != nil { /* 处理 ErrConfig / ErrInvalidQuery / ErrInvalidMagic / ErrCorruption */ }
 defer db.Close() // 写检查点快照 + 释放 mmap/文件锁
 
 // 域以句柄形式交回，不以 id 交回。
 sess, err := db.Primary()                                              // 文件被打开所依据的那个域
-worker, err := db.SubAgent(workerLLM, api.ProfileSlot{Name: "worker"}) // 按名字
+worker, err := db.SubAgent(workerLLM, api.ProfileInput{Name: "worker"}) // 按名字
 ```
 
 `api.Open` 是唯一入口，它做什么由「文件在不在」与「主域画像在不在」两件事决定：
@@ -254,11 +254,11 @@ rep, err := db.Dream(ctx, "")       // sceneID 传 "" = 遍历域内全部场景
 ### L0 画像
 
 ```go
-slot, err := db.GetL0()                       // *api.ProfileSlot
-err = db.UpdateL0(&api.ProfileSlot{Name: "..."})
+prof, err := db.GetL0()                       // *api.ProfileSlot —— 读回全量
+err = db.UpdateL0(&api.ProfileInput{Name: "..."})
 ```
 
-`UpdateL0` 只写宿主那一半——`Name`、`Role`、`Personality`、`Preferences`：`EmotionState` 与 `MBTI` 由库按画像现值保留（只有 Dream 会演化它们），`UpdatedAtMs` 由库戳写。因此不必先 `GetL0` 再回填，这三项传了也不生效。蒸馏那一半只由 Dream 维护，库不再提供单独的蒸馏入口。
+`UpdateL0` 收 `ProfileInput`，这个类型里就只有宿主那四项——`Name`、`Role`、`Personality`、`Preferences`。库自有的几项不是「传了不生效」，而是根本不在形状里，也就传不进来：`EmotionState` 与 `MBTI` 只由 Dream 演化，`UpdatedAtMs` 由库戳写，`AgentType` 在域创建时就已定。四项写入都由库从记录里继承，所以不必先 `GetL0` 再回填。蒸馏那一半只由 Dream 维护，库不再提供单独的蒸馏入口。
 
 ### L2 场景管理
 
@@ -449,13 +449,13 @@ func main() {
         },
         api.DefaultMemHopDefaults,
         // 只在文件还不存在时被采纳。
-        &api.ProfileSlot{Name: "guide-agent", Role: "assistant"},
+        &api.ProfileInput{Name: "guide-agent", Role: "assistant"},
     )
     if err != nil { log.Fatal(err) }
     defer lib.Close()
 
     // 文件的主域。子 agent 域同样由
-    // lib.SubAgent(llm, api.ProfileSlot{Name: ...}) 取得。
+    // lib.SubAgent(llm, api.ProfileInput{Name: ...}) 取得。
     db, err := lib.Primary()
     if err != nil { log.Fatal(err) }
 

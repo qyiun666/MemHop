@@ -44,11 +44,10 @@ func fromProfileSlot(s internal.ProfileSlot) ProfileSlot {
 	}
 }
 
-// toCoreProfileSlot maps the host-writable half of the profile. EmotionState,
-// MBTI and UpdatedAtMs are read-only echoes (Dream evolves the first two, the
-// library stamps the last), and AgentType is stamped once when the domain is
-// created, so none of the four is carried inbound.
-func toCoreProfileSlot(s *ProfileSlot) internal.ProfileSlot {
+// toCoreProfileSlot maps the host-writable half of the profile. Everything the
+// library owns is inherited from the stored record by the write itself, so an
+// input carries only what the host is allowed to state.
+func toCoreProfileSlot(s *ProfileInput) internal.ProfileSlot {
 	if s == nil {
 		return internal.ProfileSlot{}
 	}

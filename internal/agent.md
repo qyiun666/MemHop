@@ -204,9 +204,9 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    证据，宿主据此把「裁掉了」与「没说过」分开。
 8. **L0 画像字段所有权在库内强制**：`UpdateL0` 只写宿主四项
    （Name/Role/Personality/Preferences），`EmotionState`/`MBTI` 一律从库里
-   现值继承（只有它们的首次建立走蒸馏路径），`UpdatedAtMs` 由库戳写、不采信
-   调用方传值；api 侧的入站映射也不搬运这三项。`MergeDistill` 是反过来只写
-   蒸馏项。
+   现值继承（只有它们的首次建立走蒸馏路径），`UpdatedAtMs` 由库戳写。门面不再靠
+   入站映射丢弃那三项——宿主能传的 `api.ProfileInput` 就只有那四项，库自有的三项
+   不是「传了不采信」而是没有位置可传。`MergeDistill` 是反过来只写蒸馏项。
 9. **L3 的 id 与边身份**：`core.readJSON` 校验帧内记录类型，种类不符即
    `ErrNotFound`（否则 `UpdateL3(节点 id)` 会把节点记录改写成图槽）；
    `CreateEdgeL3` 的 id 含 kind，导入按「排序成员 + kind」的语义键去重，

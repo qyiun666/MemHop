@@ -20,7 +20,7 @@ import (
 // mustSub returns the sub-agent domain of one name, creating it the first time.
 func mustSub(t *testing.T, m *memhop.DB, llmURL, name string) *memhop.Session {
 	t.Helper()
-	sess, err := m.SubAgent(testLLM(llmURL), memhop.ProfileSlot{Name: name})
+	sess, err := m.SubAgent(testLLM(llmURL), memhop.ProfileInput{Name: name})
 	if err != nil {
 		t.Fatalf("SubAgent(%s): %v", name, err)
 	}
@@ -84,7 +84,7 @@ func TestInterfaceAgentDomainsAreIsolated(t *testing.T) {
 
 	// A profile belongs to one domain too, and each sub-agent domain is stamped
 	// as one: the identity is the library's, not the caller's.
-	if err := sa.UpdateL0(&memhop.ProfileSlot{Name: "Only alpha"}); err != nil {
+	if err := sa.UpdateL0(&memhop.ProfileInput{Name: "Only alpha"}); err != nil {
 		t.Fatalf("UpdateL0: %v", err)
 	}
 	alphaL0, err := sa.GetL0()

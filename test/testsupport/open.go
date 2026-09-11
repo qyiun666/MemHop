@@ -150,7 +150,7 @@ func open(tb testing.TB) *Handle {
 	}
 
 	m, err := memhop.Open(cfg.DBPath, cfg.LLM, cfg.Defaults,
-		&memhop.ProfileSlot{Name: "test-primary", Role: "integration fixture"})
+		&memhop.ProfileInput{Name: "test-primary", Role: "integration fixture"})
 	if err != nil {
 		tb.Fatalf("memhop.Open: %v", err)
 	}

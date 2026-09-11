@@ -67,7 +67,7 @@ func registerProfileTools(s *mcp.Server, db *memhop.Session) {
 			"preferences": mapProp("偏好键值对"),
 		}),
 	}, handle[profileUpdateArgs, updateResult](func(a profileUpdateArgs) (updateResult, error) {
-		return updateResult{OK: true}, db.UpdateL0(&memhop.ProfileSlot{
+		return updateResult{OK: true}, db.UpdateL0(&memhop.ProfileInput{
 			Name:        a.Name,
 			Role:        a.Role,
 			Personality: a.Personality,

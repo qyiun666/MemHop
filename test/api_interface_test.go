@@ -47,7 +47,7 @@ func openMockDB(t *testing.T, path, llmURL string, opts ...func(*memhop.MemHopDe
 		opt(&defaults)
 	}
 	m, err := memhop.Open(path, testLLM(llmURL), defaults,
-		&memhop.ProfileSlot{Name: "test-primary", Role: "offline fixture"})
+		&memhop.ProfileInput{Name: "test-primary", Role: "offline fixture"})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -238,7 +238,7 @@ func TestInterfaceOneDistillationPerTurn(t *testing.T) {
 
 func TestInterfaceL0(t *testing.T) {
 	db, _ := openTestDB(t)
-	slot := &memhop.ProfileSlot{
+	slot := &memhop.ProfileInput{
 		Name:        "测试画像",
 		Preferences: map[string]string{"language": "Go"},
 	}

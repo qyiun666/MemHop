@@ -11,13 +11,15 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
-	"github.com/qyiun666/MemHop/internal"
 	"github.com/qyiun666/MemHop/internal/common"
 )
 
@@ -53,8 +55,8 @@ func surfaceLLM(url string) LlmConfig {
 }
 
 // surfaceProfile is the primary profile a fresh file is opened with.
-func surfaceProfile() *ProfileSlot {
-	return &ProfileSlot{Name: "surface-primary", Role: "surface fixture"}
+func surfaceProfile() *ProfileInput {
+	return &ProfileInput{Name: "surface-primary", Role: "surface fixture"}
 }
 
 // openSurfaceSession opens a database in a fresh temp dir and binds a session to
@@ -66,7 +68,7 @@ func openSurfaceSession(t *testing.T, llmURL string) (*DB, *Session) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	sess, err := m.SubAgent(surfaceLLM(llmURL), ProfileSlot{Name: "surface"})
+	sess, err := m.SubAgent(surfaceLLM(llmURL), ProfileInput{Name: "surface"})
 	if err != nil {
 		m.Close()
 		t.Fatalf("SubAgent: %v", err)
@@ -127,7 +129,7 @@ func TestSurfaceL0Profile(t *testing.T) {
 	if err != nil || prof == nil {
 		t.Fatalf("GetL0 on fresh DB must return empty profile: %v", err)
 	}
-	if err := db.UpdateL0(&ProfileSlot{Name: "memhop", Role: "assistant"}); err != nil {
+	if err := db.UpdateL0(&ProfileInput{Name: "memhop", Role: "assistant"}); err != nil {
 		t.Fatalf("UpdateL0: %v", err)
 	}
 	got, err := db.GetL0()
@@ -142,39 +144,36 @@ func TestSurfaceL0Profile(t *testing.T) {
 	}
 }
 
-// The library-owned half of the profile is read-only on the host surface: a
-// write carrying emotion / MBTI values, a domain identity or its own timestamp
-// cannot smuggle them in, because Dream evolves the first two, the domain's
-// identity was stamped when it was created, and the library stamps the last.
+// The library-owned half of the profile is read-only on the host surface, and
+// the shape is what enforces it: ProfileInput — the argument to Open, SubAgent
+// and UpdateL0 — carries only the four host-owned fields, so an emotion, an MBTI
+// type, a domain identity or a timestamp cannot be sent at all. Everything
+// writable still comes back on the read shape. That a write inherits the
+// distilled half rather than zeroing it is the engine's own contract
+// (TestUpdateL0KeepsDistilledHalf), so it is not restated here.
 func TestSurfaceL0DistilledHalfIsReadOnly(t *testing.T) {
-	db := openSurfaceDB(t)
-	if err := db.UpdateL0(&ProfileSlot{
-		Name:         "host",
-		EmotionState: internal.EmotionScore{Valence: 0.9},
-		MBTI:         internal.MBTIScore{Type: "SMUGGLED"},
-		AgentType:    AgentTypePrimary,
-		UpdatedAtMs:  12345,
-	}); err != nil {
-		t.Fatalf("UpdateL0: %v", err)
+	writable := map[string]bool{"Name": true, "Role": true, "Personality": true, "Preferences": true}
+	if got := exportedFieldSet(reflect.TypeFor[ProfileInput]()); !maps.Equal(got, writable) {
+		t.Fatalf("ProfileInput carries %v, want the host-owned fields %v",
+			slices.Sorted(maps.Keys(got)), slices.Sorted(maps.Keys(writable)))
 	}
-	got, err := db.GetL0()
-	if err != nil {
-		t.Fatalf("GetL0: %v", err)
+	// Everything a host may write is also what it reads back, plus the four
+	// fields only the library writes.
+	for _, owned := range []string{"EmotionState", "MBTI", "AgentType", "UpdatedAtMs"} {
+		writable[owned] = true
 	}
-	if got.Name != "host" {
-		t.Fatalf("host field lost: %+v", got)
+	if got := exportedFieldSet(reflect.TypeFor[ProfileSlot]()); !maps.Equal(got, writable) {
+		t.Fatalf("ProfileSlot carries %v, want %v",
+			slices.Sorted(maps.Keys(got)), slices.Sorted(maps.Keys(writable)))
 	}
-	if got.EmotionState.Valence != 0 || got.MBTI.Type != "" {
-		t.Fatalf("caller-supplied distilled fields were written: %+v", got)
+}
+
+func exportedFieldSet(typ reflect.Type) map[string]bool {
+	out := make(map[string]bool, typ.NumField())
+	for i := 0; i < typ.NumField(); i++ {
+		out[typ.Field(i).Name] = true
 	}
-	// This handle is bound to a sub-agent domain, so the smuggled identity must
-	// not have taken: a host write cannot move a domain between the two.
-	if got.AgentType != AgentTypeSub {
-		t.Fatalf("caller-supplied agent type was written: %+v", got)
-	}
-	if got.UpdatedAtMs == 12345 || got.UpdatedAtMs == 0 {
-		t.Fatalf("UpdatedAtMs must be stamped by the library, got %d", got.UpdatedAtMs)
-	}
+	return out
 }
 
 // Closed-instance contract: after Close every domain operation is rejected

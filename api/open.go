@@ -37,11 +37,12 @@ type DB struct {
 // file may already have settled its primary; a new file always needs one, because
 // "whose memory is this" has no other answer.
 //
-// profile.AgentType is stamped rather than taken: the domain a file is opened on
-// is its primary, whatever the argument claims. Name is required and is trimmed.
+// The domain a file is opened on is its primary — AgentType is the library's to
+// decide, which is why it is not part of the argument. Name is required and is
+// trimmed.
 // llm is validated before the path is touched — the endpoint is the engine's only
 // external service and there is no fallback for a call it cannot make.
-func Open(path string, llm LlmConfig, defaults MemHopDefaults, profile *ProfileSlot) (*DB, error) {
+func Open(path string, llm LlmConfig, defaults MemHopDefaults, profile *ProfileInput) (*DB, error) {
 	var primary *internal.ProfileSlot
 	if profile != nil {
 		slot := toCoreProfileSlot(profile)
@@ -75,11 +76,11 @@ func (d *DB) Primary() (*Session, error) {
 // from the primary. Naming the same domain again replaces its endpoint: the one a
 // host hands over now is the one its turns use from here on.
 //
-// profile.AgentType is stamped rather than taken — a domain created here is a
-// sub-agent. The profile is written only if the domain has none yet, so a crash
-// between registration and the profile is finished off by the next call with the
-// same name rather than left as a domain with no identity.
-func (d *DB) SubAgent(llm LlmConfig, profile ProfileSlot) (*Session, error) {
+// A domain created here is a sub-agent — AgentType is not part of the argument.
+// The profile is written only if the domain has none yet, so a crash between
+// registration and the profile is finished off by the next call with the same
+// name rather than left as a domain with no identity.
+func (d *DB) SubAgent(llm LlmConfig, profile ProfileInput) (*Session, error) {
 	s, err := d.db.SubAgent(llm, toCoreProfileSlot(&profile))
 	if err != nil {
 		return nil, err

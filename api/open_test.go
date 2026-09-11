@@ -22,7 +22,7 @@ func TestOpenSettlesThePrimaryAndCreatesSubAgents(t *testing.T) {
 		t.Fatalf("the refused open left a file behind: %v", err)
 	}
 
-	db, err := Open(path, llm, DefaultMemHopDefaults, &ProfileSlot{Name: "Meow", Role: "assistant"})
+	db, err := Open(path, llm, DefaultMemHopDefaults, &ProfileInput{Name: "Meow", Role: "assistant"})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -39,9 +39,9 @@ func TestOpenSettlesThePrimaryAndCreatesSubAgents(t *testing.T) {
 		t.Fatalf("primary profile = %+v, want Meow stamped as the primary", got)
 	}
 
-	// The caller claims primary; the domain it gets is a sub-agent, because that
-	// is what creating one under a file means.
-	sub, err := db.SubAgent(llm, ProfileSlot{Name: "worker", Role: "helper", AgentType: AgentTypePrimary})
+	// Creating a domain under a file makes it a sub-agent; the argument carries no
+	// field that could claim otherwise.
+	sub, err := db.SubAgent(llm, ProfileInput{Name: "worker", Role: "helper"})
 	if err != nil {
 		t.Fatalf("SubAgent: %v", err)
 	}
@@ -55,7 +55,7 @@ func TestOpenSettlesThePrimaryAndCreatesSubAgents(t *testing.T) {
 
 	// Two domains, two memories: an edit in one is not visible in the other, and
 	// a host write cannot move a domain between the two identities.
-	if err := sub.UpdateL0(&ProfileSlot{Name: "worker", Role: "edited", AgentType: AgentTypePrimary}); err != nil {
+	if err := sub.UpdateL0(&ProfileInput{Name: "worker", Role: "edited"}); err != nil {
 		t.Fatalf("sub UpdateL0: %v", err)
 	}
 	if again, err := primary.GetL0(); err != nil || again.Role != "assistant" {
@@ -75,7 +75,7 @@ func TestOpenSettlesThePrimaryAndCreatesSubAgents(t *testing.T) {
 		t.Fatal("a closed database reports itself open")
 	}
 
-	reopened, err := Open(path, llm, DefaultMemHopDefaults, &ProfileSlot{Name: "Usurper"})
+	reopened, err := Open(path, llm, DefaultMemHopDefaults, &ProfileInput{Name: "Usurper"})
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
@@ -88,7 +88,7 @@ func TestOpenSettlesThePrimaryAndCreatesSubAgents(t *testing.T) {
 		t.Fatalf("reopen rewrote the primary: %+v %v", kept, err)
 	}
 	// The sub-agent domain is addressed by name, so a restart finds it again.
-	s2, err := reopened.SubAgent(llm, ProfileSlot{Name: "worker"})
+	s2, err := reopened.SubAgent(llm, ProfileInput{Name: "worker"})
 	if err != nil {
 		t.Fatalf("SubAgent after reopen: %v", err)
 	}

@@ -106,8 +106,14 @@ func TestE2EL0Profile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetL0: %v", err)
 	}
-	slot.Personality = "热爱户外运动的用户"
-	if err := db.UpdateL0(slot); err != nil {
+	// A write states only the host-owned half, so the read-modify-write carries
+	// over what it is keeping by name.
+	if err := db.UpdateL0(&memhop.ProfileInput{
+		Name:        slot.Name,
+		Role:        slot.Role,
+		Personality: "热爱户外运动的用户",
+		Preferences: slot.Preferences,
+	}); err != nil {
 		t.Fatalf("UpdateL0: %v", err)
 	}
 	got, err := db.GetL0()

@@ -50,8 +50,11 @@ type (
 
 // ---- response DTOs (ids are 16-char hex strings) ----
 
-// ProfileSlot is the public L0 profile singleton; the internal ID hash is
-// hidden because it is an implementation detail.
+// ProfileSlot is the L0 profile as the library hands it back: the host-owned
+// fields plus the ones only the library writes. The internal ID hash is hidden
+// because it is an implementation detail. Write a profile with a ProfileInput —
+// filling in one of the read-only fields here is accepted and ignored, which is
+// exactly why it is not the type a host passes in.
 type ProfileSlot struct {
 	Name         string                `json:"name"`
 	Role         string                `json:"role"`
@@ -65,6 +68,24 @@ type ProfileSlot struct {
 	// every host write, so editing a profile cannot move it between the two.
 	AgentType   uint8 `json:"agent_type"`
 	UpdatedAtMs int64 `json:"updated_at_ms"`
+}
+
+// ProfileInput is the profile as a host writes it — the argument to Open,
+// SubAgent and UpdateL0. It holds exactly the fields the host owns: a domain's
+// name, its role, its personality and its preferences.
+//
+// The library-owned fields are absent rather than ignored. On an inbound record
+// a blank EmotionState or a zero UpdatedAtMs cannot be told apart from "leave
+// what is there", so a shape that carries them would silently discard whatever
+// the domain already holds: Dream evolves EmotionState and MBTI, the library
+// stamps UpdatedAtMs on every write, and AgentType is decided by how the domain
+// came to exist (the file's own, or one created under it) rather than by a
+// caller's claim.
+type ProfileInput struct {
+	Name        string            `json:"name"`
+	Role        string            `json:"role"`
+	Personality string            `json:"personality"`
+	Preferences map[string]string `json:"preferences"`
 }
 
 // SceneNodeView is one L1 scene node as a host reads it. Every value is Dream's:

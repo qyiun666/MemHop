@@ -13,8 +13,8 @@ import "github.com/qyiun666/MemHop/internal"
 
 // AgentTypePrimary marks the domain a file is opened on, so a file holds exactly
 // one of them; AgentTypeSub marks a domain created under it. ProfileSlot.AgentType
-// reports which, and the library stamps it — a host write inherits the stored
-// value rather than taking the caller's.
+// reports which. The library stamps it when the domain comes to exist, and it is
+// not a field a host can send: ProfileInput has no place to put one.
 const (
 	AgentTypePrimary = internal.AgentTypePrimary
 	AgentTypeSub     = internal.AgentTypeSub

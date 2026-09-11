@@ -71,7 +71,7 @@ db, err := memhop.Open(
     memhop.DefaultMemHopDefaults,
     // 文件还不存在时必填：打开一个文件总得知道这是谁的记忆。已存在的文件
     // 保留它自己那份主域画像，这个入参不被采纳。
-    &memhop.ProfileSlot{Name: "my-agent", Role: "assistant"},
+    &memhop.ProfileInput{Name: "my-agent", Role: "assistant"},
 )
 if err != nil {
     log.Fatal(err)

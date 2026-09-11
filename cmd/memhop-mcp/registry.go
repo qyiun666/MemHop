@@ -30,7 +30,7 @@ const dbFileName = "memhop.meh"
 // its own sub-agent domain and no tool is bound to the primary, so this exists
 // only because opening a file that does not exist yet needs to know whose memory
 // it is. It is deliberately not configurable: there is nothing to configure.
-var primaryProfile = memhop.ProfileSlot{
+var primaryProfile = memhop.ProfileInput{
 	Name: "memhop-mcp",
 	Role: "primary domain of the shared MCP database file",
 }
@@ -48,7 +48,7 @@ type tenantRegistry struct {
 	logger   *slog.Logger
 	// open is a small injection seam for offline tests; production always
 	// uses memhop.Open.
-	open func(path string, llm memhop.LlmConfig, defaults memhop.MemHopDefaults, profile *memhop.ProfileSlot) (*memhop.DB, error)
+	open func(path string, llm memhop.LlmConfig, defaults memhop.MemHopDefaults, profile *memhop.ProfileInput) (*memhop.DB, error)
 }
 
 // newRegistry builds a tenant registry. allowed is the tenant whitelist;
@@ -92,7 +92,7 @@ func (r *tenantRegistry) get(tenant string) (*mcp.Server, error) {
 	}
 	// The tenant name is the domain's address, so a reconnecting tenant lands on
 	// the domain it already had rather than minting a second one.
-	session, err := r.db.SubAgent(r.llm, memhop.ProfileSlot{Name: tenant, Role: "MCP tenant"})
+	session, err := r.db.SubAgent(r.llm, memhop.ProfileInput{Name: tenant, Role: "MCP tenant"})
 	if err != nil {
 		return nil, err
 	}

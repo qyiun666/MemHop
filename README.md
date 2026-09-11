@@ -71,7 +71,7 @@ db, err := memhop.Open(
     memhop.DefaultMemHopDefaults,
     // Required for a file that is not there yet: opening one has to know whose
     // memory it is. An existing file keeps the primary it already has.
-    &memhop.ProfileSlot{Name: "my-agent", Role: "assistant"},
+    &memhop.ProfileInput{Name: "my-agent", Role: "assistant"},
 )
 if err != nil {
     log.Fatal(err)
