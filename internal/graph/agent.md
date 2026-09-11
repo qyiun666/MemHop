@@ -2,8 +2,9 @@
 
 ## 职责
 
-- 批量导入：`ImportBatch`（`NewImportBatch` 预载本域已有图槽 name→id；有槽读不回就
-  整批拒绝，且拒绝发生在任何写入之前），方法
+- 批量导入：`ImportBatch`（`NewImportBatch` 一次建好三张索引：本域图槽 name→id、
+  每图的节点标题集、每图的边键；三者任一条记录读不回就整批拒绝，且拒绝发生在任何写入
+  之前），方法
   `ImportNode`（图槽建/复用 + 按 Skip/Merge/Overwrite 处理同名节点）、
   `ImportRelations`（Related 解析建超边，未解析项记进 `result.Errors` 不中断批次）、
   `GraphIDs()`（本批把 domain 解析到的图）、`StampChanged()`（批末给「本批真写过
@@ -11,7 +12,9 @@
 - 查询步：`NodeFilter.Matches`、`ResolveSubgraphStart`、`SubgraphAdjacency`、
   `BfsWithinDepth`、`AllNodesVisited`。
 - 命名闸：`CheckName`——拒掉改到本域另一张图已占用的标签。
-- 本包不实现字段合并，只按 mode 选一个注入进来的策略函数；记录读写全经 `repo`。
+- 本包不实现字段合并，只按 mode 选一个注入进来的策略函数。单条记录的读写全经 `repo`；
+  **整池**的枚举走 `core` 的严格 typed 扫描——`repo` 那两份列举是按图过滤后的宽容版，
+  批次要的恰恰是「一条都不能漏」。
 
 ## 契约
 
@@ -36,9 +39,11 @@
   全等平手取较小 id）。`NewImportBatch` 播种是 map 迭代顺序，两张同名槽不加裁决就会让
   同一个 domain 每次导入随机进一张——节点 id 是 `hash(graphID:title)`，换图即换节点 id，
   重导幂等性随之失效。
-- 两处扫描都走严格那份（`core.CollectAllGraphSlotsStrict`）：读不回的槽**仍然占着它的
-  标签**，跳过它就是把「有人占着」答成「没人占」——导入那侧会铸出第二张同名图，两半节点集
-  从此各自独立；改名那侧会把名字改到别人占着的标签上。
+- 三张索引都走严格那份（`core.CollectAllGraphSlotsStrict` / `CollectAllStrict[Node]` /
+  `[Edge]`）：读不回的记录**仍然占着它的标签、它的标题、它的边**。跳过槽就是把「有人占着」
+  答成「没人占」，导入那侧会铸出第二张同名图、两半节点集从此各自独立，改名那侧会把名字改到
+  别人占着的标签上；跳过节点则是让 Merge 导入答「这个标题没有」，于是按位置式 id 原地覆写
+  那条正读不回的记录，报告里还算成新增了一条。
 - `graphFor` 用 `repo.EnsureGraphL3` 而不是 `CreateGraphL3`：已存在的槽原样复用，它的
   `Name` 可能已被改过，派生出的 id 不该把那个标签写回去。ensure 只收名字——图槽存的是标签
   与两把时钟，本包不向它声明任何来源。

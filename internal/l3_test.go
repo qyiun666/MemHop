@@ -652,6 +652,38 @@ func TestImportL3RefusesUnreadableGraphSlot(t *testing.T) {
 	}
 }
 
+// A node the pool cannot decode is not a title the graph is missing. The batch
+// loaded its per-graph title set from a listing that stepped over unreadable
+// records, so a Merge import answered "create it" — which lands on the same
+// positional id and rewrites the very record it could not read, while the report
+// counted that under CreatedIDs as something new. The membership index is built
+// once up front now, so the whole batch refuses and nothing is written.
+func TestImportL3RefusesUnreadableNode(t *testing.T) {
+	db := newL3TestDB(t)
+	graph := importOne(t, db, "alpha", "a1")
+	nodeID := repo.NodeIDL3(graph, "a1")
+	if _, err := db.engine.WriteRecord(core.SharedPoolAgentID, core.RecL3GraphNode, nodeID,
+		[]byte(`{"ti`)); err != nil {
+		t.Fatalf("damage the node: %v", err)
+	}
+
+	res, err := db.ImportL3(core.DefaultAgentID, []L3ImportItem{
+		{Title: "a2", Domain: "alpha", Content: "a2"},
+	}, L3ImportMerge)
+	if common.CodeOf(err) != common.ErrDeserialization {
+		t.Fatalf("import over an unreadable node: code=%d err=%v", common.CodeOf(err), err)
+	}
+	if res != nil {
+		t.Fatalf("a refused batch reports no result, got %+v", res)
+	}
+	if !strings.Contains(err.Error(), common.FormatHash(nodeID)) {
+		t.Fatalf("the refusal must name the record it could not read: %v", err)
+	}
+	if n := countRecords(db.engine, core.SharedPoolAgentID, core.RecL3GraphNode); n != 1 {
+		t.Fatalf("the graph holds %d node records after the refusal, want the one it refused to read", n)
+	}
+}
+
 // TestDeleteL3ClearsSceneAnchors keeps the anchor invariant whole in both
 // directions: writing an anchor is refused when the graph does not exist, so
 // deleting the graph has to drop the anchors that named it — otherwise

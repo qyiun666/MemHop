@@ -115,7 +115,7 @@ func (db *DB) ImportL3(agentID uint64, items []L3ImportItem, mode L3ImportMode) 
 	}
 	batch, err := graph.NewImportBatch(db.engine, core.SharedPoolAgentID, mode)
 	if err != nil {
-		return nil, common.NewError(common.CodeOf(err), "import: seed graph names", err)
+		return nil, common.NewError(common.CodeOf(err), "import: read the pool", err)
 	}
 	for i := range items {
 		if err := batch.ImportNode(&items[i]); err != nil {

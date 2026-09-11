@@ -19,9 +19,10 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
-// ImportBatch carries one import: its conflict mode and result plus the caches
-// that keep the batch a single pass over the stored graph set (domain → graph id,
-// graph → node titles, graph → edge keys). Callers hold the domain lock.
+// ImportBatch carries one import: its conflict mode and result plus the three
+// indexes built once up front — domain → graph id, graph → node titles,
+// graph → edge keys — so applying an item never re-reads the pool. Callers hold
+// the domain lock.
 type ImportBatch struct {
 	engine     *core.StorageEngine
 	agentID    uint64
@@ -62,7 +63,34 @@ func NewImportBatch(engine *core.StorageEngine, agentID uint64, mode core.L3Impo
 			b.graphIDs[g.Name] = g.IDHash
 		}
 	}
+	if err := b.loadContents(); err != nil {
+		return nil, err
+	}
 	return b, nil
+}
+
+// loadContents indexes every node title and edge key of the pool, keyed by graph.
+// One strict pass each: the batch needs the whole membership of any graph it is
+// asked about, and reading it record by record is what let an unreadable node look
+// like a title nobody held.
+func (b *ImportBatch) loadContents() error {
+	nodes, err := core.CollectAllStrict[core.HypergraphNode](b.engine, b.agentID, core.RecL3GraphNode)
+	if err != nil {
+		return err
+	}
+	for _, n := range nodes {
+		b.titles(n.GraphID)[n.Title] = struct{}{}
+	}
+	edges, err := core.CollectAllStrict[core.HypergraphEdge](b.engine, b.agentID, core.RecL3GraphEdge)
+	if err != nil {
+		return err
+	}
+	for _, e := range edges {
+		members := slices.Clone(e.NodeIDs)
+		slices.Sort(members)
+		b.edges(e.GraphID)[repo.EdgeKeyL3(members, e.Kind)] = struct{}{}
+	}
+	return nil
 }
 
 // preferGraphID arbitrates two slots that share one domain label. A file can
@@ -268,29 +296,23 @@ func (b *ImportBatch) graphFor(domain string) (uint64, error) {
 	return graphID, nil
 }
 
-// titles returns the graph's node-title set, loading it once per graph.
+// titles returns the set one graph holds, creating an empty one for a graph with
+// no nodes yet. The batch writes into what it returns, so a new title lands in the
+// index as well and a later item in the same batch sees it.
 func (b *ImportBatch) titles(graphID uint64) map[string]struct{} {
 	set, ok := b.nodeTitles[graphID]
 	if !ok {
 		set = make(map[string]struct{})
-		for _, n := range repo.ListNodeL3(b.engine, b.agentID, graphID) {
-			set[n.Title] = struct{}{}
-		}
 		b.nodeTitles[graphID] = set
 	}
 	return set
 }
 
-// edges returns the graph's edge keys, loading them once per graph.
+// edges returns the edge keys one graph holds, same shape as titles.
 func (b *ImportBatch) edges(graphID uint64) map[string]struct{} {
 	set, ok := b.edgeKeys[graphID]
 	if !ok {
 		set = make(map[string]struct{})
-		for _, e := range repo.ListEdgeL3(b.engine, b.agentID, graphID) {
-			members := slices.Clone(e.NodeIDs)
-			slices.Sort(members)
-			set[repo.EdgeKeyL3(members, e.Kind)] = struct{}{}
-		}
 		b.edgeKeys[graphID] = set
 	}
 	return set
