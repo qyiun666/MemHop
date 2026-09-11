@@ -10,21 +10,24 @@
 - `core/`：.meh 引擎——记录帧（26 字节：type/flags/length/agent_id/
   id_hash/crc32）、A/B 文件头、快照（0x03 分域，只存记录索引）、空间回收、
   `StorageEngine` 索引（`agent -> idHash -> offset` 两级分域）、Slot 数据模型。
-  `FormatVersion` 是 `0x0011`：Open 对任何其它版本（更旧**或**更新）都显式拒绝、
-  无迁移路径。上抬改的仍不是 26 字节帧布局而是记录含义与状态词表：计划节点由
-  `(topic_id, seq)` 寻址——`seq` 是该轮内库发号的序号、`parent_seq` 指向父步骤、
-  0 即根，节点记录上不再有路径字符串，事件记录的归因字段因此叫 `node_seq`；状态
-  词表只剩三态且 `in_progress` 占值 0（新建的节点零值即合法状态）。**值 3 起从此是
-  未定义存储值**：记录解码不看状态含义，是渲染成对外视图那一步
-  `plan.StatusToString` 把它报成 `ErrDeserialization` 而不是回落成某个叫得出名字的
-  状态，于是一次 `PlanState` 直接失败。一轮的树按步骤逐个建立，节点不再由一次声明
-  批量写出。再往前：一轮的内容同住 L4（`Kind`
-  区分原文与事件，id 由 `hash("content:"+topic+":"+seq)` 派生），L5 只剩计划节点、
-  走帧型 `RecL5PlanNode 0x0F`；自 0x000F 起 id 命名空间不再烘层号（场景节点
-  `scene-node:`、内容槽 `content:`、计划节点 `plan:`），归档的归属字段叫
-  `topic_id`，场景记录
-  只剩 `turn_seq` 一个计数器。旧文件的那些键与前缀按新规则都指不到东西（`plan:`
-  的后缀形状也变了：路径串换成了序号）。
+  `FormatVersion` 是 `0x0012`：Open 对任何其它版本（更旧**或**更新）都显式拒绝、
+  无迁移路径。上抬改的仍不是 26 字节帧布局而是记录含义：域身份落在 L0 画像的
+  `agent_type` 上（`AgentTypePrimary` = 0 是打开文件所用的那个隐式零号域，
+  `AgentTypeSub` = 1 是注册域），话题带一个只有宿主写的 `name`（`omitempty`，
+  无名话题不落这个键）。旧文件的画像没有 `agent_type`，解码后每个域都读作主
+  agent——不是某一处取值错，而是每个域同时错，且与「一个文件恰好一个主」这条
+  不变量直接冲突，所以这一版不能像缺省一个可选字段那样容错打开。
+  计划节点由 `(topic_id, seq)` 寻址——`seq` 是该轮内库发号的序号、`parent_seq`
+  指向父步骤、0 即根，节点记录上没有路径字符串，事件记录的归因字段因此叫
+  `node_seq`；状态词表只有三态且 `in_progress` 占值 0（新建的节点零值即合法
+  状态）。**值 3 起是未定义存储值**：记录解码不看状态含义，是渲染成对外视图
+  那一步 `plan.StatusToString` 把它报成 `ErrDeserialization` 而不是回落成某个
+  叫得出名字的状态，于是一次 `PlanState` 直接失败。一轮的树按步骤逐个建立。
+  一轮的内容同住 L4（`Kind` 区分原文与事件，id 由
+  `hash("content:"+topic+":"+seq)` 派生），L5 只剩计划节点、走帧型
+  `RecL5PlanNode 0x0F`；id 命名空间不烘层号（场景节点 `scene-node:`、内容槽
+  `content:`、计划节点 `plan:`），归档的归属字段叫 `topic_id`，场景记录只剩
+  `turn_seq` 一个计数器。
   **`SnapshotVersion` 与 `FormatVersion` 不是一回事**：快照版本不符只让 Open 丢掉
   那份快照、回退一次全量记录扫描重建索引并打一条 WARN，文件照开、记录一条不少，
   下一次 checkpoint 就写成当前布局。所以改快照布局的代价是「旧文件首次 Open 慢

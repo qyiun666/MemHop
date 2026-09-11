@@ -4,6 +4,7 @@
 package core
 
 import (
+	"bytes"
 	"encoding/json"
 	"slices"
 	"testing"
@@ -31,12 +32,16 @@ func TestProfileSlotRoundtrip(t *testing.T) {
 		EmotionState: EmotionScore{Valence: 0.8, Arousal: 0.4, Dominance: 0.6},
 		MBTI:         MBTIScore{IE: -0.5, NS: 0.2, TF: -0.3, JP: 0.1, Type: "INTJ"},
 		Preferences:  map[string]string{"language": "Rust", "style": "concise"},
+		AgentType:    AgentTypeSub,
 		UpdatedAtMs:  1700000000000,
 	}
 	var got ProfileSlot
 	jsonRoundtrip(t, p, &got)
 	if got.IDHash != p.IDHash || got.Name != p.Name || got.Personality != p.Personality {
 		t.Fatalf("mismatch: %+v", got)
+	}
+	if got.AgentType != AgentTypeSub {
+		t.Fatalf("agent_type mismatch: got %d, want %d", got.AgentType, AgentTypeSub)
 	}
 	if got.EmotionState != p.EmotionState || got.MBTI != p.MBTI {
 		t.Fatalf("distilled signals mismatch: %+v %+v", got.EmotionState, got.MBTI)
@@ -117,6 +122,15 @@ func TestTopicSlotRoundtripDepth1(t *testing.T) {
 	if got.ParentID != nil {
 		t.Fatalf("depth-1 should have nil parent_id")
 	}
+	// An unnamed topic is the common case, so it must not pay for the field on
+	// disk: the key stays out of the record entirely rather than storing "".
+	raw, err := json.Marshal(topic)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(raw, []byte(`"name"`)) {
+		t.Fatalf("an unnamed topic should carry no name key, got %s", raw)
+	}
 }
 
 func TestTopicSlotRoundtripDepth2(t *testing.T) {
@@ -131,10 +145,14 @@ func TestTopicSlotRoundtripDepth2(t *testing.T) {
 func TestTopicSlotRoundtripKeywords(t *testing.T) {
 	topic := makeTopic(333, 1)
 	topic.FusedKeywords = []string{"场景 🚀", "回复内容", "压缩 🔥"}
+	topic.Name = "决定把 L5 让给计划树的那一轮"
 	var got TopicSlot
 	jsonRoundtrip(t, topic, &got)
 	if !slices.Equal(got.FusedKeywords, topic.FusedKeywords) {
 		t.Fatalf("keyword roundtrip mismatch: %v", got.FusedKeywords)
+	}
+	if got.Name != topic.Name {
+		t.Fatalf("name roundtrip mismatch: %q", got.Name)
 	}
 }
 

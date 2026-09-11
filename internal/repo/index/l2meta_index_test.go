@@ -49,11 +49,13 @@ func TestL2MetaIndex(t *testing.T) {
 		parent := uint64(7)
 		want := core.TopicSlot{
 			ID: 42, SceneID: 100, ParentID: &parent, Depth: 2,
-			ChildrenIDs: []uint64{1, 2}, FusedKeywords: []string{"登录"},
+			ChildrenIDs: []uint64{1, 2}, Name: "决定把 L5 让给计划树的那一轮",
+			FusedKeywords: []string{"登录"},
 			UserTimestamp: 1000, AgentTimestamp: 1001,
 		}
 		got := L2MetaFromTopic(&want).ToTopicSlot()
 		if got.ID != want.ID || *got.ParentID != parent || got.Depth != want.Depth ||
+			got.Name != want.Name ||
 			!slices.Equal(got.FusedKeywords, want.FusedKeywords) ||
 			!slices.Equal(got.ChildrenIDs, want.ChildrenIDs) ||
 			got.UserTimestamp != want.UserTimestamp || got.AgentTimestamp != want.AgentTimestamp {

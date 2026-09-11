@@ -12,15 +12,16 @@ import (
 )
 
 // L2Meta is the in-memory cache of one topic record: exactly the fields
-// ToTopicSlot needs to rebuild the slot without reading the record. Derived
-// display fields (title, turn count, vector offset) retired with the
-// retrieval subsystem that read them.
+// ToTopicSlot needs to rebuild the slot without reading the record. Every field
+// mirrors the record one for one — a value the engine would have to compute
+// belongs in the reader that computes it, not here.
 type L2Meta struct {
 	IDHash         uint64
 	Depth          uint8
 	SceneID        uint64
 	ParentID       *uint64
 	ChildrenIDs    []uint64
+	Name           string
 	FusedKeywords  []string
 	UserTimestamp  int64
 	AgentTimestamp int64
@@ -50,6 +51,7 @@ func L2MetaFromTopic(t *core.TopicSlot) *L2Meta {
 		SceneID:        t.SceneID,
 		ParentID:       t.ParentID,
 		ChildrenIDs:    t.ChildrenIDs,
+		Name:           t.Name,
 		FusedKeywords:  t.FusedKeywords,
 		UserTimestamp:  t.UserTimestamp,
 		AgentTimestamp: t.AgentTimestamp,
@@ -137,6 +139,7 @@ func (m *L2Meta) ToTopicSlot() core.TopicSlot {
 		ParentID:       m.ParentID,
 		ChildrenIDs:    m.ChildrenIDs,
 		Depth:          m.Depth,
+		Name:           m.Name,
 		FusedKeywords:  m.FusedKeywords,
 		UserTimestamp:  m.UserTimestamp,
 		AgentTimestamp: m.AgentTimestamp,

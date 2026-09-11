@@ -14,7 +14,9 @@ import (
 // ProfileSlot is the L0 profile singleton of one agent domain. Ownership:
 // Name/Role/Preferences are host-authored and never touched by Dream;
 // Personality is seeded by the host and evolved by Dream distillation;
-// EmotionState/MBTI are distilled signals.
+// EmotionState/MBTI are distilled signals; AgentType is stamped once when the
+// domain is created. The last three are library-owned: a host write inherits
+// the stored value rather than taking the caller's.
 type ProfileSlot struct {
 	IDHash       uint64            `json:"id_hash"`
 	Name         string            `json:"name"`
@@ -23,8 +25,19 @@ type ProfileSlot struct {
 	EmotionState EmotionScore      `json:"emotion_state"`
 	MBTI         MBTIScore         `json:"mbti"`
 	Preferences  map[string]string `json:"preferences"`
+	AgentType    uint8             `json:"agent_type"`
 	UpdatedAtMs  int64             `json:"updated_at_ms"`
 }
+
+// Which kind of agent a domain holds. The primary is the implicit zero domain
+// the file is opened on, so a file has exactly one of them and its identity
+// needs no scan to find; every registered domain is a sub agent. Zero being the
+// primary is what lets a freshly created domain start out correctly stamped
+// before its creator says otherwise.
+const (
+	AgentTypePrimary uint8 = 0
+	AgentTypeSub     uint8 = 1
+)
 
 // SceneNode is an L1 hypergraph node linking multiple L2 topics.
 type SceneNode struct {
@@ -93,6 +106,13 @@ type TopicSlot struct {
 	ParentID    *uint64  `json:"parent_id,omitempty"`
 	ChildrenIDs []uint64 `json:"children_ids"`
 	Depth       uint8    `json:"depth"`
+
+	// Name is the host's own label for this topic. The host is its only writer:
+	// the engine derives nothing into it, so consolidating or merging rewrites
+	// the record around the name and never over it. Empty is a state a reader
+	// can tell apart from a name — it says nobody has named this topic yet —
+	// and omitempty keeps that state off the disk entirely.
+	Name string `json:"name,omitempty"`
 
 	FusedKeywords []string `json:"fused_keywords"`
 

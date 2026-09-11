@@ -80,9 +80,16 @@ const (
 // reader never consults, so every one of them arrives with seq 0 — not an address
 // anything can be found under — and its status bytes carry the retired numbering,
 // where 0 meant pending and 2 meant done, so a finished step reads as an
-// in-progress one. Files with 0x0010 (or older) are rejected at Open — there is no
-// migration path.
-const FormatVersion uint16 = 0x0011
+// in-progress one. 0x0012 put a domain's identity on its L0 profile
+// (agent_type: the primary agent the file is opened on, or a sub agent) and gave
+// a topic a name its host writes. A 0x0011 file's profiles carry no agent_type,
+// so every domain in it decodes as the primary — not one wrong value somewhere
+// but the same wrong value in every domain at once, against a rule that a file
+// has exactly one of them. Nothing reading the file could tell that apart from a
+// file that genuinely means it, which is why this one cannot be tolerated the way
+// a missing optional field can. Files with 0x0011 (or older) are rejected at Open
+// — there is no migration path.
+const FormatVersion uint16 = 0x0012
 
 var (
 	Magic     = [4]byte{'M', 'E', 'H', '2'}
