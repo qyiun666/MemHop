@@ -135,7 +135,8 @@ internal/{domain,scene,turn,dream,graph,plan,content}
 
 - **错误判定纪律**：区分「记录不存在」与「读不动」。`ErrNotFound` 只代表
   前者；IO / 关闭 / 反序列化失败一律原样上抛，不得改写成 `ErrNotFound`，
-  也不得当成"不存在"后继续写（`content.Read`、`profile.MergeDistill` 都按这条判定，
+  也不得当成"不存在"后继续写（`repo.GetProfileL0` 带出记录自身的错误码，`content.Read`、
+  `profile.MergeDistill`、`UpdateL0` 的继承判断都靠这条分界落地；
   误判会让一次读不动被报成「这条记录没有」，或画像被空值覆盖）。
 
 ## 读写路径契约

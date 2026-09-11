@@ -6,6 +6,7 @@ package internal
 import (
 	"testing"
 
+	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
@@ -51,5 +52,36 @@ func TestUpdateL0KeepsDistilledHalf(t *testing.T) {
 	}
 	if got.UpdatedAtMs == 7 || got.UpdatedAtMs < first.UpdatedAtMs {
 		t.Fatalf("UpdatedAtMs must be stamped by the library, got %d", got.UpdatedAtMs)
+	}
+}
+
+// A profile that cannot be decoded is not a profile that was never written.
+// UpdateL0 inherits the distilled half from the stored record, so reading an
+// unreadable payload as "absent" would let a host edit claim the whole slot and
+// drop emotion, MBTI and the domain's agent type — the one write this layer must
+// refuse rather than guess through.
+func TestUnreadableProfileIsNotAbsentProfile(t *testing.T) {
+	db := newTestDB(t, newTestEngine(t))
+	if err := db.UpdateL0(core.DefaultAgentID, &core.ProfileSlot{
+		Name: "keeper", Personality: "steady",
+	}); err != nil {
+		t.Fatalf("seed profile: %v", err)
+	}
+	const corrupt = `{"name":`
+	if _, err := db.engine.WriteRecord(core.DefaultAgentID, core.RecL0Profile,
+		common.HashID("profile"), []byte(corrupt)); err != nil {
+		t.Fatalf("replace the payload with an undecodable one: %v", err)
+	}
+
+	if _, err := db.GetL0(core.DefaultAgentID); common.CodeOf(err) != common.ErrDeserialization {
+		t.Fatalf("GetL0 on an undecodable profile: want ErrDeserialization, got %v", err)
+	}
+	if err := db.UpdateL0(core.DefaultAgentID, &core.ProfileSlot{Name: "intruder"}); common.CodeOf(err) != common.ErrDeserialization {
+		t.Fatalf("UpdateL0 must abort instead of rewriting a record it could not read, got %v", err)
+	}
+	// The refused write left the unreadable record where it was: a following read
+	// still fails the same way, rather than finding the edit that was refused.
+	if _, err := db.GetL0(core.DefaultAgentID); common.CodeOf(err) != common.ErrDeserialization {
+		t.Fatalf("an aborted UpdateL0 must leave no trace, got %v", err)
 	}
 }
