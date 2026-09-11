@@ -115,9 +115,9 @@ func (db *DB) RenameTopic(agentID uint64, topicID, name string) (core.TopicSlot,
 		return core.TopicSlot{}, err
 	}
 	defer ac.Mu.Unlock()
-	parsed, err := common.ParseID(topicID)
+	parsed, err := content.ParseTopicID(topicID)
 	if err != nil {
-		return core.TopicSlot{}, common.NewError(common.ErrInvalidQuery, "parse topic id", err)
+		return core.TopicSlot{}, err
 	}
 	slot, err := repo.RenameTopicL2(db.engine, agentID, parsed, name)
 	if err != nil {
@@ -250,9 +250,9 @@ func (db *DB) DeleteTopic(agentID uint64, topicID string) error {
 		return err
 	}
 	defer ac.Mu.Unlock()
-	parsedID, err := common.ParseID(topicID)
+	parsedID, err := content.ParseTopicID(topicID)
 	if err != nil {
-		return common.NewError(common.ErrInvalidQuery, "parse topic id", err)
+		return err
 	}
 	topics := repo.TopicClosureL2(db.engine, agentID, parsedID)
 	if len(topics) == 0 {

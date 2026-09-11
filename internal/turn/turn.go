@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 // Package turn holds the small methods that settle one finished turn into the
-// topic opened for it: resolving the two ids the settle names, the gate on which
-// topic may be settled, and the profile read that precedes it.
+// topic opened for it: the gate on which topic may be settled, and the profile
+// read that precedes it. The ids are already resolved by the time this package is
+// reached.
 
 package turn
 
@@ -12,25 +13,6 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
-
-// Targets resolves the scene a turn settles into plus the topic id minted for it.
-// Both are ids this library issues and callers hand back, so nothing here
-// interprets them: an unparsable id or the reserved zero topic is refused before
-// any record is read.
-func Targets(sceneID, topicID string) (uint64, uint64, error) {
-	parsedScene, err := common.ParseID(sceneID)
-	if err != nil {
-		return 0, 0, common.NewError(common.ErrInvalidQuery, "parse scene id", err)
-	}
-	parsedTopic, err := common.ParseID(topicID)
-	if err != nil {
-		return 0, 0, common.NewError(common.ErrInvalidQuery, "parse topic id", err)
-	}
-	if parsedTopic == 0 {
-		return 0, 0, common.NewError(common.ErrInvalidQuery, "Update requires the topic id Search issued for this turn")
-	}
-	return parsedScene, parsedTopic, nil
-}
 
 // SettleTarget validates the topic a turn may settle into: the id has to be one
 // this scene opened — the turn topic minted for a turn count the scene has

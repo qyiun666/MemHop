@@ -34,15 +34,14 @@ import (
 // call: the retention window reclaimed what was said, so there is nothing to
 // distill and inventing an empty keyword track would read back as the real one.
 func (db *DB) Update(agentID uint64, sceneID, topicID string) error {
-	ac, err := db.lockAgent(agentID)
+	ac, parsedTopic, err := db.lockSession(agentID, topicID)
 	if err != nil {
 		return err
 	}
 	defer ac.Mu.Unlock()
-
-	parsedScene, parsedTopic, err := turn.Targets(sceneID, topicID)
+	parsedScene, err := common.ParseID(sceneID)
 	if err != nil {
-		return err
+		return common.NewError(common.ErrInvalidQuery, "parse scene id", err)
 	}
 	// A turn must land in a scene the host already opened with Search; an
 	// unknown id is rejected before any write so nothing settles in a scene

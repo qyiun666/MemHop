@@ -230,6 +230,21 @@ func TestDeleteSceneNotFound(t *testing.T) {
 	}
 }
 
+// Every entry that takes a topic key parses it the same way, so the reserved
+// all-zero one is refused by the two that neither write nor read a record either:
+// naming a topic no read can ever serve is not a lookup that misses, it is an id
+// the library never issues.
+func TestTopicKeyEntryPointsRejectReservedZero(t *testing.T) {
+	db := newTestDB(t, newTestEngine(t))
+	const zero = "0000000000000000"
+	if _, err := db.RenameTopic(core.DefaultAgentID, zero, "名字"); common.CodeOf(err) != common.ErrInvalidQuery {
+		t.Fatalf("RenameTopic on the zero key: want ErrInvalidQuery, got %v", err)
+	}
+	if err := db.DeleteTopic(core.DefaultAgentID, zero); common.CodeOf(err) != common.ErrInvalidQuery {
+		t.Fatalf("DeleteTopic on the zero key: want ErrInvalidQuery, got %v", err)
+	}
+}
+
 // TestDeleteTopicPrunesParentChild deleting a child removes it from the
 // surviving parent's ChildrenIDs.
 func TestDeleteTopicPrunesParentChild(t *testing.T) {

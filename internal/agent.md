@@ -31,11 +31,11 @@ internal/{domain,scene,turn,dream,graph,plan,content}
 |---|---|
 | `domain` | 域状态容器 `Context`（Mu/L2Meta/L4/Plans/DreamInFlight/OpCtx，持 Engine/LLM/Defaults 注入）+ PlanCache + L2Meta 缓存维护（SyncL2Meta/RemoveTopicsFromIndices/RetargetL2Meta）；`L4` 是「话题 → 它名下的内容槽位（原文 + 事件）」的镜像 |
 | `scene` | L2 场景读写面：ResolveForRead/Create/FreshID/OpenTurn/SurfaceTopics/ContextTopic/PruneParentChild/DeleteTopics |
-| `turn` | 轮次归属：Targets（解析 Update 的两个 hex 入参）、SettleTarget（可沉淀的轮次范围）、ReadProfile（Search 的 L0 读面）；本包不碰内容 |
+| `turn` | 轮次归属：SettleTarget（可沉淀的轮次范围）、ReadProfile（Search 的 L0 读面）；进来的 hex 键已在根上解析完，本包不碰内容 |
 | `dream` | 巩固阶段：SceneSet、PruneContentStage(`l4_prune`) 与 PrunePlanStage(`l5_prune`)（共用 `ContentRetention` 窗口、各读自己的时间戳）、CompressScenes(+组回滚)、StructureStages、L1 各阶段、DistillL0Stage；调参常量随阶段在此 |
 | `graph` | L3 导入/查询：`ImportBatch`（一次批次的 mode + result + 三张缓存，方法 ImportNode/ImportRelations/GraphIDs）、NodeFilter.Matches/ResolveSubgraphStart/SubgraphAdjacency/BfsWithinDepth/AllNodesVisited |
 | `plan` | L5 计划树机制（一棵树归属于打开它的轮次；L5 只剩节点记录）：PlanStatus 面（单张词表、双向都查它）、NodeSpec/Step 两个入参形状、CreateNode/UpdateNode/UpdateNodeSummaryLocked、BuildTree/Forest/ToNodeView/RollupTree |
-| `content` | 话题内容与键：ParseTopicID（键的解析与拒零，读写两侧共用）、ValidateAppend（两种 Kind 各自的写入契约）、Append（写一条内容的唯一实现，必要时跨 Kind 分配 Seq）、Read（按 Kind 读回）、RenderForDistill（把一个话题的原文渲染成提炼读的转录）、MaxEventPayload/MaxUtterancePayload |
+| `content` | 话题内容与键：ParseTopicID（轮次键的解析与拒零，读写两侧共用）、ValidateAppend（两种 Kind 各自的写入契约）、Append（宿主侧写一条内容的唯一入口，必要时跨 Kind 分配 Seq）、Read（按 Kind 读回）、RenderForDistill（把一个话题的原文渲染成提炼读的转录）、MaxEventPayload/MaxUtterancePayload |
 
 ## agentContext（domain.Context）域级锁纪律
 
@@ -44,7 +44,8 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    方法；引擎自带的锁在内层，顺序不可颠倒。同 agent 串行、跨 agent 并行。
    `contextFor` 对非默认域校验注册表：未注册的 agentID 直接
    `ErrAgentNotFound`。
-   L4/L5 的轮次键写读面统一走 `db.lockSession(agentID, turnID)`（lockAgent +
+   轮次键的写读面（`AppendArchive`、计划族、`Update` 的结算）统一走
+   `db.lockSession(agentID, turnID)`（lockAgent +
    `content.ParseTopicID`，解析失败先解锁）——根上只有这一处解析轮次键：一轮的
    内容（L4 的原文与事件，`SearchL4{TopicID, Kind}` 按 Kind 取）与它开出的
    计划树（L5 节点，`PlanState(topic)` 给树）共用同一个键。`SearchL4` 不在这一族里：
