@@ -29,5 +29,6 @@ const (
 	ErrCorruption      = internal.ErrCorruption
 	ErrSerialization   = internal.ErrSerialization
 	ErrDeserialization = internal.ErrDeserialization
+	ErrCancelled       = internal.ErrCancelled
 	ErrLLM             = internal.ErrLLM
 )

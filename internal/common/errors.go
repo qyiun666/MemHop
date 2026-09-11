@@ -30,6 +30,7 @@ const (
 	ErrCorruption      Code = 5005 // 5005 data corruption: inconsistent file/snapshot/record structure (engine/reclaim/snapshot/record/compact)
 	ErrSerialization   Code = 5006 // 5006 serialization failure: marshal and index snapshot encoding errors (record layer, db.go snapshot)
 	ErrDeserialization Code = 5007 // 5007 deserialization failure: unmarshal and hypergraph/record parse errors (record layer, graph reads)
+	ErrCancelled       Code = 5008 // 5008 operation cancelled: the caller's context ended before the work finished (dream checkpoints, llm retry wait)
 
 	ErrLLM Code = 9002 // 9002 llm error: external model call/response parse failure (llm/ files)
 	// 9001 (encoder error) was retired with the embedding-service dependency

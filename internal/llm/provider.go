@@ -89,12 +89,20 @@ func (p *Provider) Chat(ctx context.Context, system, user string, maxTokens int)
 		if attempt > 0 {
 			select {
 			case <-ctx.Done():
-				return "", ctx.Err()
+				return "", common.NewError(common.ErrCancelled,
+					"llm call abandoned before its retry", ctx.Err())
 			case <-time.After(delays[attempt-1]):
 			}
 		}
 		resp, err := p.client.CreateChatCompletion(ctx, req)
 		if err != nil {
+			if cerr := ctx.Err(); cerr != nil {
+				// The caller's context is gone, so whatever the HTTP stack reported
+				// is that cancellation travelling through it — not an endpoint that
+				// refused. The configured HTTP timeout belongs to the client's own
+				// context, so a deadline set by LlmConfig still classifies below.
+				return "", common.NewError(common.ErrCancelled, "llm call cancelled", cerr)
+			}
 			status, msg := httpError(err)
 			if status > 0 {
 				lastErr = common.NewError(common.ErrLLM, fmt.Sprintf("llm api: %d - %s", status, msg))
@@ -109,7 +117,9 @@ func (p *Provider) Chat(ctx context.Context, system, user string, maxTokens int)
 			return "", common.NewError(common.ErrLLM, "llm response has no choices")
 		}
 		if resp.Choices[0].FinishReason == openai.FinishReasonLength {
-			return "", fmt.Errorf("llm response truncated at max_tokens=%d: %w", maxTokens, common.ErrTruncated)
+			return "", common.NewError(common.ErrLLM,
+				fmt.Sprintf("llm response hit the output ceiling at max_tokens=%d", maxTokens),
+				common.ErrTruncated)
 		}
 		return resp.Choices[0].Message.Content, nil
 	}

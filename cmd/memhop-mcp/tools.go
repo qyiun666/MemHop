@@ -39,14 +39,16 @@ func handle[In, Out any](fn func(In) (Out, error)) mcp.ToolHandler {
 // the call failed. Only Dream needs it: the report lists what the pipeline
 // already did (the two retention prunes, the stage that failed), so dropping it
 // would leave a host unable to tell "cleaned up, then consolidation failed"
-// from "nothing happened at all".
-func handlePartial[In, Out any](fn func(In) (Out, error)) mcp.ToolHandler {
-	return func(_ context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+// from "nothing happened at all". It also gets the request context: Dream holds
+// the domain lock through LLM round trips, and a client that has gone should
+// stop that work rather than let it run to the end of the pipeline.
+func handlePartial[In, Out any](fn func(context.Context, In) (Out, error)) mcp.ToolHandler {
+	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		in, err := decodeArgs[In](req)
 		if err != nil {
 			return errResult(err), nil
 		}
-		out, err := fn(in)
+		out, err := fn(ctx, in)
 		if err != nil {
 			return errResultWith(out, err), nil
 		}

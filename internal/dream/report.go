@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
@@ -31,9 +32,14 @@ func AppendStage(rep *core.DreamReport, name string, start time.Time, err error)
 	rep.Stages = append(rep.Stages, core.DreamStage{Name: name, Status: stageStatus(err), DurationMs: time.Since(start).Milliseconds()})
 }
 
+// StageCancelled reports one pipeline checkpoint's cancellation. The returned
+// error carries ErrCancelled, because an error code 0 is the code of a pass that
+// finished: a stopped pass that reports no code is indistinguishable from one
+// that succeeded.
 func StageCancelled(ctx context.Context, stage string) error {
 	if err := ctx.Err(); err != nil {
-		return fmt.Errorf("dream: cancelled after %s stage: %w", stage, err)
+		return common.NewError(common.ErrCancelled,
+			fmt.Sprintf("dream: cancelled after %s stage", stage), err)
 	}
 	return nil
 }

@@ -69,6 +69,7 @@ const (
 	ErrCorruption      = common.ErrCorruption
 	ErrSerialization   = common.ErrSerialization
 	ErrDeserialization = common.ErrDeserialization
+	ErrCancelled       = common.ErrCancelled
 	ErrLLM             = common.ErrLLM
 )
 

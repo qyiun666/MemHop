@@ -54,7 +54,7 @@ func (db *DB) RunDream(ctx context.Context, agentID uint64, sceneID uint64) (*Dr
 		// model failed" would go check the model.
 		err := common.NewError(common.ErrLLM, "dream: LLM consolidation failed for all scenes")
 		if cerr := ctx.Err(); cerr != nil {
-			err = common.NewError(common.ErrLLM,
+			err = common.NewError(common.ErrCancelled,
 				"dream: consolidation cancelled before any scene finished", cerr)
 		}
 		dream.AppendStage(rep, "l2_compress", start, err)

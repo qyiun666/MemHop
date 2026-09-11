@@ -401,7 +401,7 @@ id——宿主把自己拿到的 hex 字符串原样回传，不自己拼。也�
 if api.CodeOf(err) == api.ErrNotFound { ... }
 ```
 
-错误码：`ErrConfig`、`ErrInvalidQuery`、`ErrNotFound`、`ErrAgentNotFound`（agentID 未注册或已删除）、`ErrIO`、`ErrClosed`、`ErrInvalidMagic`、`ErrCRCMismatch`、`ErrCorruption`、`ErrSerialization`、`ErrDeserialization`、`ErrLLM`。编号永不复用：`1002` 与 `9001` 已退役、不再重新发放。
+错误码：`ErrConfig`、`ErrInvalidQuery`、`ErrNotFound`、`ErrAgentNotFound`（agentID 未注册或已删除）、`ErrIO`、`ErrClosed`、`ErrInvalidMagic`、`ErrCRCMismatch`、`ErrCorruption`、`ErrSerialization`、`ErrDeserialization`、`ErrCancelled`（调用方自己的上下文先结束——被取消的 `Dream`、退避中途被放弃的 LLM 调用）、`ErrLLM`。编号永不复用：`1002` 与 `9001` 已退役、不再重新发放。
 
 ---
 

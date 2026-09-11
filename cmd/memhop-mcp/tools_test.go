@@ -131,15 +131,22 @@ func TestHandlePropagatesError(t *testing.T) {
 
 // A failed Dream still hands back the report of what it did before the stage
 // that failed, so the tool must not drop it: content[0] stays the error text and
-// the result JSON rides along behind it.
+// the result JSON rides along behind it. The request context has to reach the
+// handler on the way, since a Dream that outlived its client would otherwise hold
+// the domain lock through the rest of the pipeline.
 func TestHandlePartialKeepsResultAlongsideError(t *testing.T) {
-	h := handlePartial[dreamArgs, dreamResult](func(dreamArgs) (dreamResult, error) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	h := handlePartial[dreamArgs, dreamResult](func(ctx context.Context, _ dreamArgs) (dreamResult, error) {
+		if ctx.Err() == nil {
+			t.Error("the cancelled request context never reached the handler")
+		}
 		return dreamResult{
 			Consolidated: true,
 			Report:       &memhop.DreamReport{L2TopicsCompressed: 7},
 		}, errors.New("dream: LLM consolidation failed for all scenes")
 	})
-	res, err := h(context.Background(), &mcp.CallToolRequest{
+	res, err := h(ctx, &mcp.CallToolRequest{
 		Params: &mcp.CallToolParamsRaw{Arguments: json.RawMessage(`{"scene_id":""}`)},
 	})
 	if err != nil {

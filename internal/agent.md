@@ -167,7 +167,10 @@ internal/{domain,scene,turn,dream,graph,plan,content}
   收口：帧解码器的 `io.EOF` 只对逐帧扫描有意义（「扫到这里为止」），按 id 读时
   它说的是索引点名了一条记录区里并不存在的记录，于是翻译成 `ErrCorruption`；
   Dream 的「一个场景都没巩固成」带 `ErrLLM`，而上下文已经取消时如实说取消——
-  把一次取消报成模型失败，宿主就会去查错东西。
+  把一次取消报成模型失败，宿主就会去查错东西。**取消有自己的一档
+  `ErrCancelled`（5008）**：Dream 的每个检查点、LLM 传输里被调用方撤掉的等待
+  （请求在途与退避等待两条都算）都报它，cause 留着 `ctx.Err()`，
+  `errors.Is(err, context.Canceled)` 照旧成立。
 
 ## 读写路径契约
 

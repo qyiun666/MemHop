@@ -86,8 +86,8 @@ func registerDreamTool(s *mcp.Server, db *memhop.Session) {
 		InputSchema: objSchema(map[string]any{
 			"scene_id": strProp("场景 ID（16 位 hex），可选；留空即全域巩固"),
 		}),
-	}, handlePartial[dreamArgs, dreamResult](func(a dreamArgs) (dreamResult, error) {
-		rep, err := db.Dream(context.Background(), a.SceneID)
+	}, handlePartial[dreamArgs, dreamResult](func(ctx context.Context, a dreamArgs) (dreamResult, error) {
+		rep, err := db.Dream(ctx, a.SceneID)
 		out := dreamResult{}
 		if rep != nil {
 			out.Consolidated = rep.ConsolidatedScenes > 0

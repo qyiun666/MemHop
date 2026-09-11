@@ -518,7 +518,9 @@ if api.CodeOf(err) == api.ErrNotFound { ... }
 
 Codes: `ErrConfig`, `ErrInvalidQuery`, `ErrNotFound`,
 `ErrIO`, `ErrClosed`, `ErrInvalidMagic`, `ErrCRCMismatch`, `ErrCorruption`,
-`ErrSerialization`, `ErrDeserialization`, `ErrLLM`, `ErrAgentNotFound` (agentID not registered or deleted).
+`ErrSerialization`, `ErrDeserialization`, `ErrCancelled` (the caller's own context
+ended before the work did — a cancelled `Dream`, an LLM call abandoned mid-retry),
+`ErrLLM`, `ErrAgentNotFound` (agentID not registered or deleted).
 Numbers are never reused: `1002` and `9001` are retired and will not be reissued.
 
 ---
