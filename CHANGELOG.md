@@ -26,6 +26,7 @@ README 的版本表与 git log。
     - **图槽的 `updated_at` 改为内容变化钟**：一次导入对真写过内容的每张图各推进一次（一图一次写，不是每条记录一次），只被读到而没被写过的图不动，skip 模式重导不再让图看起来刚变过。
 16. **文档与实现对齐**：`PlanTree.DoneCount/TotalCount` 的说明此前两处都写「数根」，实现 `CountForest` 是沿每棵树递归汇总（口径以 `TestPlanStateForestMultipleRoots` 为准）；L5 族那份「统一前言」文档写的是全仓零调用的函数、"内容只有一个写入口"被巩固摘要的写入打破——两处都按现状改写。
 17. **对消费方 breaking**：入口、句柄类型、方法集与磁盘格式版本同时变，加上第 15 项的三个 JSON 键消失、`ProfileInput` 换型与 `UpdateL0` 开始拒空白名（此前会存下无名画像），宿主 meowagent 需在其自身的跟版轮次里适配。
+18. **审查轮补的读面三处**：L3 的三份列举此前直接交出哈希表扫描的顺序，同一个调用两次可以给出两个顺序，`QueryL3Nodes` 的 `Limit` 因此落在任意子集上——现在节点、边、图槽都按 id 升序，`Limit` 是这条确定顺序的前 N 个（`TestL3ReadsAreOrderStable`）；`QueryL3Subgraph` 此前把「BFS 走到却读不动」的节点静默跳过、交回一张小一号的图，而那个节点是某条边点名的成员，现在如实上报读失败（`TestQueryL3SubgraphReportsUnreadableNode`）；`SearchL4` 的话题过滤只做 hex 解析、不拒保留的全零键，一个没拿到轮次键的查询会收到空清单、与「这一轮真没内容」分不清，现在与写侧同口径拒绝（`TestSearchL4RefusesReservedZeroTopic`）。
 
 ## v1.6.2 — 2026-09-07 — 计划事件不再受词表约束（`EventType` 归宿主）
 

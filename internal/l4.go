@@ -44,9 +44,9 @@ func (db *DB) SearchL4(agentID uint64, q L4Query) ([]core.ArchiveSlot, error) {
 		rq.IDs = ids
 	}
 	if q.TopicID != nil {
-		topicHash, err := common.ParseID(*q.TopicID)
+		topicHash, err := content.ParseTopicID(*q.TopicID)
 		if err != nil {
-			return nil, common.NewError(common.ErrInvalidQuery, "parse topic id", err)
+			return nil, err
 		}
 		rq.TopicID = &topicHash
 		if q.NodeSeq != 0 {

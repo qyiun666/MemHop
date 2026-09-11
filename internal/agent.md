@@ -83,10 +83,11 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    漏摘 `Plans` 与漏摘 `L4` 的代价不对称：后者让该话题每次读都报 `ErrIO`
    直到重启重建索引，前者留下一条陈旧的 `LastActiveAt` 让死树长期豁免清扫。
 6. **L5 键全零保留**：`0` 是每条记录未赋键时的值，故 `0000000000000000` 不是
-   合法的 L5 键。读写两侧一律经 `content.ParseTopicID` 拒它
-   （`AppendArchive`/`PlanCreate`/`PlanNodeAdd`/`PlanNodeUpdate`/`PlanState`）
-   ——只在写侧拒，
-   全零键下就会攒出永远读不出的记录。
+   合法的 L5 键。读写两侧一律经 `content.ParseTopicID` 拒它——写侧
+   `AppendArchive`/`PlanCreate`/`PlanNodeAdd`/`PlanNodeUpdate`/`PlanState`，读与改侧
+   `SearchL4` 的话题过滤、`RenameTopic`、`DeleteTopic`。两侧都要拒，各有一半代价：
+   写侧放过它，全零键下就会攒出永远读不出的记录；读侧放过它，一个根本没拿到键的
+   查询会收到空清单，与一轮真的没内容分不清。
 7. **计划清理有界**：dream 的 `l5_prune` 只豁免「持非 done 节点 **且** 窗口内
    仍有节点活动」的计划，其中活动只看节点自己的 `UpdatedAt`；宿主中断或放弃而
    静默超 `ContentRetention` 的计划照常清理。豁免保住的是**整棵活树**（含早已

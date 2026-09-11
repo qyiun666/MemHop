@@ -4,7 +4,9 @@
 package repo
 
 import (
+	"cmp"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/qyiun666/MemHop/internal/common"
@@ -50,6 +52,10 @@ func EdgeKeyL3(nodeIDs []uint64, kind core.GraphEdgeKind) string {
 	return fmt.Sprintf("%v:%d", nodeIDs, kind)
 }
 
+// ListEdgeL3 lists one graph's edges sorted by id. The order is part of the
+// contract: the record index under the collect is a hash map, so an unsorted
+// listing would answer the same call twice in two different orders and let a
+// caller's cap fall on an arbitrary subset.
 func ListEdgeL3(engine *core.StorageEngine, agentID uint64, graphID uint64) []core.HypergraphEdge {
 	var out []core.HypergraphEdge
 	for _, edge := range core.CollectAllHypergraphEdges(engine, agentID) {
@@ -57,6 +63,9 @@ func ListEdgeL3(engine *core.StorageEngine, agentID uint64, graphID uint64) []co
 			out = append(out, edge)
 		}
 	}
+	slices.SortFunc(out, func(a, b core.HypergraphEdge) int {
+		return cmp.Compare(a.IDHash, b.IDHash)
+	})
 	return out
 }
 
@@ -161,6 +170,8 @@ func NodeIDL3(graphID uint64, title string) uint64 {
 	return common.HashID(fmt.Sprintf("%s:%s", common.FormatHash(graphID), title))
 }
 
+// ListNodeL3 lists one graph's nodes sorted by id, for the same reason
+// `ListEdgeL3` is sorted — the index under the collect is a hash map.
 func ListNodeL3(engine *core.StorageEngine, agentID uint64, graphID uint64) []core.HypergraphNode {
 	var out []core.HypergraphNode
 	for _, node := range core.CollectAllHypergraphNodes(engine, agentID) {
@@ -168,6 +179,9 @@ func ListNodeL3(engine *core.StorageEngine, agentID uint64, graphID uint64) []co
 			out = append(out, node)
 		}
 	}
+	slices.SortFunc(out, func(a, b core.HypergraphNode) int {
+		return cmp.Compare(a.IDHash, b.IDHash)
+	})
 	return out
 }
 

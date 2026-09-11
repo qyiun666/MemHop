@@ -130,7 +130,9 @@ func (s *Session) RenameTopic(topicID, name string) (TopicSlot, error) {
 	return fromTopicSlot(slot), nil
 }
 
-// GetL3 returns an L3 graph with hex IDs.
+// GetL3 returns an L3 graph with hex IDs. Its nodes and edges are sorted by id,
+// and that order is the same on every call: the scan under the shared pool is a
+// hash map, so without the sort one host would see one graph in two orders.
 func (s *Session) GetL3(id string) (*L3Graph, error) {
 	g, err := s.Session.GetL3(id)
 	if err != nil {
@@ -139,7 +141,7 @@ func (s *Session) GetL3(id string) (*L3Graph, error) {
 	return fromL3Graph(g), nil
 }
 
-// ListL3 returns all hypergraph slots with hex IDs.
+// ListL3 returns all hypergraph slots with hex IDs, sorted by graph id.
 func (s *Session) ListL3() ([]HypergraphSlot, error) {
 	graphs, err := s.Session.ListL3()
 	if err != nil {
@@ -165,7 +167,8 @@ func (s *Session) UpdateL3(id string, name *string) (*L3Graph, error) {
 	return fromL3Graph(g), nil
 }
 
-// QueryL3Nodes returns nodes with hex IDs.
+// QueryL3Nodes returns nodes with hex IDs, sorted by node id; Limit keeps the
+// first N of that order, so a capped query is the same subset every time.
 func (s *Session) QueryL3Nodes(q L3NodeQuery) ([]HypergraphNode, error) {
 	nodes, err := s.Session.QueryL3Nodes(q)
 	if err != nil {
@@ -178,7 +181,9 @@ func (s *Session) QueryL3Nodes(q L3NodeQuery) ([]HypergraphNode, error) {
 	return out, nil
 }
 
-// QueryL3Subgraph returns a subgraph with hex IDs.
+// QueryL3Subgraph returns a subgraph with hex IDs, its nodes and edges sorted
+// by id. A node the walk reaches but cannot be read is an error rather than a
+// smaller answer: that node is one an edge named.
 func (s *Session) QueryL3Subgraph(graphID, startNodeID string, maxDepth int, edgeKinds []GraphEdgeKind) (*L3Subgraph, error) {
 	sub, err := s.Session.QueryL3Subgraph(graphID, startNodeID, maxDepth, edgeKinds)
 	if err != nil {
@@ -189,7 +194,9 @@ func (s *Session) QueryL3Subgraph(graphID, startNodeID string, maxDepth int, edg
 
 // SearchL4 returns content records with hex IDs, ordered by Seq. L4 holds a
 // turn's dialogue originals and its operation events alike, so Kind is a condition
-// like any other: leaving it unset selects both.
+// like any other: leaving it unset selects both. TopicID is the key Search issued
+// for one turn, parsed as it is everywhere else — the reserved all-zero key is
+// refused, not answered with an empty list.
 func (s *Session) SearchL4(q L4Query) ([]ArchiveSlot, error) {
 	archives, err := s.Session.SearchL4(q)
 	if err != nil {

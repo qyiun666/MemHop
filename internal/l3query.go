@@ -9,6 +9,8 @@
 package internal
 
 import (
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/qyiun666/MemHop/internal/common"
@@ -19,9 +21,10 @@ import (
 
 // QueryL3Nodes reads one graph's nodes through every condition the query
 // names; the conditions AND together, and an unset condition does not filter.
-// Naming only the graph therefore lists its nodes. Results keep graph order
-// and Limit caps them. A malformed node id or a graph that does not exist is
-// an error — an empty result means the graph exists and nothing matched.
+// Naming only the graph therefore lists its nodes. Results are sorted by id and
+// Limit keeps the first N of that order, so a capped query is the same subset
+// every time. A malformed node id or a graph that does not exist is an error —
+// an empty result means the graph exists and nothing matched.
 func (db *DB) QueryL3Nodes(agentID uint64, q L3NodeQuery) ([]core.HypergraphNode, error) {
 	ac, err := db.lockSharedPool(agentID)
 	if err != nil {
@@ -70,7 +73,8 @@ func nodeFilter(q L3NodeQuery) (graph.NodeFilter, error) {
 }
 
 // QueryL3Subgraph BFS from startNodeID up to maxDepth; edgeKinds restricts
-// reachable edges (maxDepth<=0 means 1).
+// reachable edges (maxDepth<=0 means 1). Nodes come back sorted by id, and so do
+// edges, because the listings under both are assembled from a hash-map scan.
 func (db *DB) QueryL3Subgraph(agentID uint64, graphID, startNodeID string, maxDepth int, edgeKinds []core.GraphEdgeKind) (*L3Subgraph, error) {
 	ac, err := db.lockSharedPool(agentID)
 	if err != nil {
@@ -93,10 +97,16 @@ func (db *DB) QueryL3Subgraph(agentID uint64, graphID, startNodeID string, maxDe
 
 	// Subgraph extraction: visited nodes plus edges with both ends visited.
 	nodes := make([]core.HypergraphNode, 0, len(visited))
-	for h := range visited {
-		if n, err := core.ReadHypergraphNode(db.engine, core.SharedPoolAgentID, h); err == nil {
-			nodes = append(nodes, *n)
+	for _, h := range slices.Sorted(maps.Keys(visited)) {
+		// A visited id is one an edge named, and an edge is only written over
+		// nodes the import that created it had in hand — so a node the pool
+		// reaches but cannot read is the pool disagreeing with itself, not a
+		// hole to step over.
+		n, err := core.ReadHypergraphNode(db.engine, core.SharedPoolAgentID, h)
+		if err != nil {
+			return nil, err
 		}
+		nodes = append(nodes, *n)
 	}
 	subEdges := make([]core.HypergraphEdge, 0, len(edges))
 	for _, e := range edges {

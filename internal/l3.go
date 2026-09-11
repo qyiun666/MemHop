@@ -10,8 +10,10 @@
 package internal
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/graph"
@@ -54,6 +56,9 @@ func (db *DB) graphView(slot *core.HypergraphSlot) *L3Graph {
 	return &L3Graph{Slot: *slot, Nodes: nodes, Edges: edges}
 }
 
+// ListL3 lists every graph of the file-wide pool, sorted by id: the scan under
+// it is a hash map, so without a sort one host would see the same graphs in a
+// different order on each call.
 func (db *DB) ListL3(agentID uint64) ([]core.HypergraphSlot, error) {
 	ac, err := db.lockSharedPool(agentID)
 	if err != nil {
@@ -61,6 +66,9 @@ func (db *DB) ListL3(agentID uint64) ([]core.HypergraphSlot, error) {
 	}
 	defer ac.Mu.Unlock()
 	all := core.CollectAllGraphSlots(db.engine, core.SharedPoolAgentID)
+	slices.SortFunc(all, func(a, b core.HypergraphSlot) int {
+		return cmp.Compare(a.IDHash, b.IDHash)
+	})
 	if all == nil {
 		return []core.HypergraphSlot{}, nil
 	}

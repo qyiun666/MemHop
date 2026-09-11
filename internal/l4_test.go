@@ -51,6 +51,18 @@ func TestSearchL4ByID(t *testing.T) {
 	}
 }
 
+// The all-zero key is the unset value of every record's owning id, so no turn
+// ever settled content under it. Naming it as a filter is a host saying it holds
+// no key at all — it has to be refused like every other entry that takes a turn
+// key, not answered as an empty list that reads like a turn with nothing in it.
+func TestSearchL4RefusesReservedZeroTopic(t *testing.T) {
+	db := newTestDB(t, newTestEngine(t))
+	zero := "0000000000000000"
+	if _, err := db.SearchL4(core.DefaultAgentID, L4Query{TopicID: &zero}); common.CodeOf(err) != common.ErrInvalidQuery {
+		t.Fatalf("want ErrInvalidQuery for the reserved topic key, got %v", err)
+	}
+}
+
 // TestSearchL4TopicOnly pins the read a host needs after a turn: naming only
 // the topic (or only the content type) must resolve that turn's originals
 // instead of falling through to an empty result.

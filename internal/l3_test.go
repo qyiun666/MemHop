@@ -681,3 +681,122 @@ func TestDeleteL3ClearsSceneAnchors(t *testing.T) {
 		t.Fatalf("sibling graph damaged: nodes=%d err=%v", len(g.Nodes), err)
 	}
 }
+
+// Every L3 read is assembled from a hash-map scan of the shared pool, so without
+// a sort one host would see the same graph in a different order on each call —
+// and a capped node query would fall on an arbitrary subset of it.
+func TestL3ReadsAreOrderStable(t *testing.T) {
+	db := newL3TestDB(t)
+	items := make([]L3ImportItem, 0, 6)
+	for i := range 6 {
+		items = append(items, L3ImportItem{Title: fmt.Sprintf("n%d", i), Domain: "order"})
+	}
+	items[0].Related = []L3Relation{{Titles: []string{"n1", "n2"}}}
+	items[1].Related = []L3Relation{{Titles: []string{"n3"}}}
+	items[2].Related = []L3Relation{{Titles: []string{"n4"}, Kind: core.EdgePartOf}}
+	res, err := db.ImportL3(core.DefaultAgentID, items, L3ImportSkip)
+	if err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	if len(res.Errors) > 0 {
+		t.Fatalf("import errors: %v", res.Errors)
+	}
+	graphID := res.GraphIDs[0]
+
+	listNodeIDs := func(limit int) []uint64 {
+		got, err := db.QueryL3Nodes(core.DefaultAgentID, L3NodeQuery{GraphID: graphID, Limit: limit})
+		if err != nil {
+			t.Fatalf("QueryL3Nodes: %v", err)
+		}
+		ids := make([]uint64, 0, len(got))
+		for _, n := range got {
+			ids = append(ids, n.IDHash)
+		}
+		return ids
+	}
+	full := listNodeIDs(0)
+	if len(full) != 6 {
+		t.Fatalf("want 6 nodes, got %d", len(full))
+	}
+	if !slices.IsSorted(full) {
+		t.Errorf("QueryL3Nodes is not sorted by id: %v", full)
+	}
+	for i := 0; i < 4; i++ {
+		if again := listNodeIDs(0); !slices.Equal(full, again) {
+			t.Fatalf("repeat %d answered in a different order: %v vs %v", i, full, again)
+		}
+	}
+	if capped := listNodeIDs(3); !slices.Equal(capped, full[:3]) {
+		t.Errorf("Limit=3 is not the first 3 of the sorted listing: %v vs %v", capped, full[:3])
+	}
+
+	graph, err := db.GetL3(core.DefaultAgentID, graphID)
+	if err != nil {
+		t.Fatalf("GetL3: %v", err)
+	}
+	nodeIDs := make([]uint64, 0, len(graph.Nodes))
+	for _, n := range graph.Nodes {
+		nodeIDs = append(nodeIDs, n.IDHash)
+	}
+	if !slices.IsSorted(nodeIDs) {
+		t.Errorf("GetL3 nodes are not sorted by id: %v", nodeIDs)
+	}
+	edgeIDs := make([]uint64, 0, len(graph.Edges))
+	for _, e := range graph.Edges {
+		edgeIDs = append(edgeIDs, e.IDHash)
+	}
+	if len(edgeIDs) == 0 || !slices.IsSorted(edgeIDs) {
+		t.Errorf("GetL3 edges are not sorted by id: %v", edgeIDs)
+	}
+
+	for _, domain := range []string{"alpha", "beta"} {
+		if _, err := db.ImportL3(core.DefaultAgentID, []L3ImportItem{
+			{Title: "seed", Domain: domain},
+		}, L3ImportSkip); err != nil {
+			t.Fatalf("import %s: %v", domain, err)
+		}
+	}
+	slots, err := db.ListL3(core.DefaultAgentID)
+	if err != nil {
+		t.Fatalf("ListL3: %v", err)
+	}
+	if len(slots) != 3 {
+		t.Fatalf("want 3 graphs, got %d", len(slots))
+	}
+	for i := 1; i < len(slots); i++ {
+		if slots[i-1].IDHash >= slots[i].IDHash {
+			t.Fatalf("ListL3 is not sorted by id: %v", slots)
+		}
+	}
+}
+
+// The node listing tolerates a record that will not decode; the subgraph read
+// cannot, because its node set comes from the members the edges name — a member
+// it reaches but cannot read is the pool disagreeing with itself, and answering
+// with a smaller graph would hide that.
+func TestQueryL3SubgraphReportsUnreadableNode(t *testing.T) {
+	db := newL3TestDB(t)
+	res, err := db.ImportL3(core.DefaultAgentID, []L3ImportItem{
+		{Title: "a", Domain: "g", Related: []L3Relation{{Titles: []string{"b"}}}},
+		{Title: "b", Domain: "g"},
+	}, L3ImportSkip)
+	if err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	graphHash, err := common.ParseID(res.GraphIDs[0])
+	if err != nil {
+		t.Fatalf("graph id: %v", err)
+	}
+	const corruptTitle = "b"
+	corruptID := repo.NodeIDL3(graphHash, corruptTitle)
+	if _, err := db.engine.WriteRecord(core.SharedPoolAgentID, core.RecL3GraphNode,
+		corruptID, []byte(`{"id":`)); err != nil {
+		t.Fatalf("replace node %s with an undecodable payload: %v", corruptTitle, err)
+	}
+
+	_, err = db.QueryL3Subgraph(core.DefaultAgentID, res.GraphIDs[0],
+		common.FormatHash(repo.NodeIDL3(graphHash, "a")), 1, nil)
+	if common.CodeOf(err) != common.ErrDeserialization {
+		t.Fatalf("want ErrDeserialization for an unreadable member, got %v", err)
+	}
+}
