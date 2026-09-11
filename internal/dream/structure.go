@@ -19,8 +19,7 @@ import (
 )
 
 // Internal tuning of the consolidation stages: the L1 decay parameters and the
-// scene-similarity floor of hyperedge construction. Hosts configure only the
-// business knobs in config.MemHopDefaults.
+// scene-similarity floor of hyperedge construction.
 const (
 	// L1 decay.
 	lambdaNode              float32 = 0.01
@@ -73,9 +72,8 @@ func StructureStages(ctx context.Context, ac *domain.Context, agentID uint64, re
 	return dErr
 }
 
-// l1Stages runs the L1 portion of the pipeline: scene nodes synced
-// from the current L2 structure (L1 is written only during Dream; stale
-// nodes removed below), co-occurrence hyperedges (keyword-overlap Jaccard
+// l1Stages runs the L1 portion of the pipeline: scene nodes synced from the
+// current L2 structure, co-occurrence hyperedges (keyword-overlap Jaccard
 // >= l1EdgeMinSimilarity; fresh edges decayed like every other edge),
 // stale-node rebuild and finally time decay.
 func l1Stages(ctx context.Context, ac *domain.Context, agentID uint64, newL2Meta *index.L2MetaIndex, decayParams *engram.DecayParams, rep *core.DreamReport) error {

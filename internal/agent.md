@@ -92,6 +92,9 @@ internal/{domain,scene,turn,dream,graph,plan,content}
 
 - 只经 `internal/repo`（及 `repo/core` 导出的 Slot 读写）访问数据；
   **禁止**直接操作帧、文件头、快照结构。
+- **L1 只有一个写者**：L1 节点与边的全部写入都发生在 Dream 的 `StructureStages`
+  （`repo.SyncL1NodesFromL2` 同步节点，`cap/engram` 建边/重建/衰减）；`Search`/
+  `Update` 与各写 API 这些热路径不写 L1，所以 L1 与 L2 之间允许差一个 Dream 周期。
 - `StorageEngine` 句柄由装配层 `config.go` 唯一持有：注入 `DB.engine`，并经
   `domain.NewContext` 注入每个域；业务代码不得自行打开/关闭引擎。
   **唯一入口是 `OpenDB(path, llm, defaults, primary)`**：先用 `openEngine` 做三态
