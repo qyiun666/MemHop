@@ -4,6 +4,17 @@
 > process. Applies to **v1.6.3**. Module path `github.com/qyiun666/MemHop` — you
 > only ever import the `api` package.
 
+> ⚠️ **Partly updated for the surface rebuild.** §4, §5 and §11 show the current
+> entry point (`api.Open` → `api.DB`, domains as handles from `Primary` /
+> `SubAgent`; agent ids never cross the boundary). Two sections still describe
+> methods and types that are **gone**: §8's *Capabilities* and *Turn events and
+> crystallization* subsections, and the exported-type list in §9. `OpenMulti`,
+> `MultiAgentDB`, `CreateAgent`, `Session(hexID)`, `ListAgents`, `DefaultAgentID`,
+> `MemHopConfig`, `Crystallize`, `ListTrajectorySessions` and `DeleteL3Nodes` no
+> longer exist; the L2 surface gained `RenameTopic` and the L1 surface gained
+> `ListL1`. For the authoritative current surface use
+> [`go doc github.com/qyiun666/MemHop/api.Session`](https://pkg.go.dev/github.com/qyiun666/MemHop/api) and the API table in the README.
+
 ---
 
 ## 1. Integration shape
@@ -58,18 +69,11 @@ re-exported from `api` as type aliases (see §9). No other import required.
 
 ---
 
-## 4. Build the config (`MemHopConfig`)
+## 4. Build the arguments (`LlmConfig`, `MemHopDefaults`)
 
-`api.MemHopConfig` is the single assembly point. **Bold = required** (enforced by
-`Validate()`).
-
-### Top-level fields
-
-| Field | Type | Meaning |
-|---|---|---|
-| **DBPath** | string | `.meh` path. Created on first open. |
-| **LLM** | LlmConfig | see below. |
-| Defaults | MemHopDefaults | Engine tuning; recommended `*api.DefaultMemHopDefaults` with selective overrides. |
+`Open` takes the endpoint, the tuning knobs and the primary profile as separate
+arguments, so there is no config object to assemble. **Bold = required** (the
+endpoint is checked before the path is touched).
 
 ### `LlmConfig` (build it by literal)
 
@@ -99,31 +103,54 @@ should not need to tune them; if you think you do, open an issue.
 ## 5. Open / Close
 
 ```go
-cfg := &api.MemHopConfig{
-    DBPath: "/data/agent.meh",
-    LLM: api.LlmConfig{
+db, err := api.Open(
+    "/data/agent.meh",     // path
+    api.LlmConfig{         // endpoint: required, validated before the path is touched
         APIURL:          os.Getenv("LLM_URL"),
         APIKey:          os.Getenv("LLM_KEY"),
         Model:           os.Getenv("LLM_MODEL"),
         TimeoutSecs:     60,
         MaxOutputTokens: 8192,
     },
-    Defaults: *api.DefaultMemHopDefaults,
-}
+    api.DefaultMemHopDefaults, // tuning knobs; copy it to change one open
+    &api.ProfileSlot{Name: "guide", Role: "assistant"}, // required for a new file
+)
+if err != nil { /* ErrConfig / ErrInvalidQuery / ErrInvalidMagic / ErrCorruption */ }
+defer db.Close() // checkpoint snapshot + release mmap/file lock
 
-dbm, err := api.OpenMulti(cfg)
-if err != nil { /* ErrConfig / ErrInvalidMagic / ErrCorruption */ }
-defer dbm.Close() // checkpoint snapshot + release mmap/file lock
-
-// Multi-agent is the only mode: bind a session to a stable hex agent id.
-agentID, err := dbm.CreateAgent("guide")
-if err != nil { /* ... */ }
-db, err := dbm.Session(agentID)
+// Domains come back as handles, never as ids.
+sess, err := db.Primary()                       // the domain the file was opened on
+worker, err := db.SubAgent(workerLLM, api.ProfileSlot{Name: "worker"}) // by name
 ```
 
-- `api.OpenMulti(cfg)` is the only entry point. The engine stores no capability records: capability cards live in the host's own directory (e.g. `plug/<package>/capability.json` next to the `.meh` file) — the host scans that directory and assembles its tool surface itself; nothing is injected at Open.
+`api.Open` is the only entry point, and what it does depends on the file and on the
+primary domain's profile:
+
+| file | profile for the primary | argument | result |
+|---|---|---|---|
+| there | there | anything | **succeeds, the argument is ignored** — the file's own profile is the source of truth |
+| there | none | nothing | `ErrConfig` |
+| there | none | given | validated, then written → succeeds |
+| absent | — | nothing | `ErrConfig`, **and no file is left behind** |
+| absent | — | given | validated, then the file is created and seeded → succeeds |
+
+- The primary is the implicit zero domain, so a file holds exactly one and nothing has
+  to be scanned to find it. `Primary()` returns its handle; a host never sees an agent
+  id at all.
+- `SubAgent(llm, profile)` creates the domain named `profile.Name` the first time and
+  returns the same one every time after — the name is the domain's address, frozen at
+  creation. `llm` is that domain's own endpoint, so a sub-agent can run on a different
+  model. The profile is written only if the domain has none yet, which also finishes
+  off a domain left half-created by a crash. `AgentType` is stamped, not taken: a
+  domain created this way is a sub-agent.
+- Both refusals happen before anything touches the filesystem, so a refused `Open`
+  leaves no file behind for the next attempt to trip over.
 - Explicit flush: `db.Checkpoint()`.
-- Space reclamation: `db.CompactTo(newPath)` writes a defragmented copy of the whole file (live records only, its own rebuilt index) and never touches the open one — `newPath` must not exist yet. Deletes are tombstones, so a domain that dropped scenes or graphs only gives bytes back here; the swap (Close → rename → Open) stays yours, which is why this call is Go-side and not an MCP tool.
+- Space reclamation: `db.CompactTo(newPath)` writes a defragmented copy of the whole
+  file (live records only, its own rebuilt index) and never touches the open one —
+  `newPath` must not exist yet. Deletes are tombstones, so a domain that dropped
+  scenes or graphs only gives bytes back here; the swap (Close → rename → Open) stays
+  yours, which is why this call is Go-side and not an MCP tool.
 
 ---
 
@@ -469,7 +496,7 @@ with) and every L5 entry rejects it — reads included.
 
 | Kind | Names | Use |
 |---|---|---|
-| config | `MemHopConfig` / **`LlmConfig`** / `MemHopDefaults` + `DefaultMemHopDefaults` | the whole assembly surface |
+| config | **`LlmConfig`** / `MemHopDefaults` + `DefaultMemHopDefaults` | the endpoint and tuning arguments `Open` takes |
 | input aliases | `SearchQuery` / `ScenePatch` / `L3ImportItem` / `L3Relation` / `L3ImportMode` / `L3ImportResult` / `L3NodeQuery` / `L4Query` / `SceneContext` / `SceneMessage` / `TrajectorySessionSummary` / `DreamReport` / `DreamStage` / `CapabilityImport` / `CapabilityPackageDoc` / `CrystallizeOutput` / `CrystallizeCapability` / `ResourceRef` | inputs & id-free results (all string IDs are hex) |
 | response DTOs | `ProfileSlot` / `SceneSlot` / `TopicSlot` / `SearchResult` / `HypergraphSlot` / `HypergraphNode` / `HypergraphEdge` / `HypergraphSource` / `L3Graph` / `L3Subgraph` / `ArchiveSlot` (write and read) | every ID field is a 16-hex string |
 | id surface | **`DefaultAgentID`** (the implicit domain) | the library issues every id — turn topics included; a host echoes them back and converts nothing |
@@ -523,22 +550,23 @@ import (
 )
 
 func main() {
-    dbm, err := api.OpenMulti(&api.MemHopConfig{
-        DBPath: os.Getenv("MEH_PATH"), // /data/agent.meh
-        LLM: api.LlmConfig{
+    lib, err := api.Open(
+        os.Getenv("MEH_PATH"), // /data/agent.meh
+        api.LlmConfig{
             APIURL: os.Getenv("LLM_URL"),
             APIKey: os.Getenv("LLM_KEY"),
             Model:  os.Getenv("LLM_MODEL"),
         },
-        Defaults: *api.DefaultMemHopDefaults,
-    })
+        api.DefaultMemHopDefaults,
+        // Only consulted when the file is not there yet.
+        &api.ProfileSlot{Name: "guide-agent", Role: "assistant"},
+    )
     if err != nil { log.Fatal(err) }
-    defer dbm.Close()
+    defer lib.Close()
 
-    // Multi-agent is the only mode: bind every call to one agent domain.
-    agentID, err := dbm.CreateAgent("guide-agent")
-    if err != nil { log.Fatal(err) }
-    db, err := dbm.Session(agentID)
+    // The file's primary domain. Sub-agent domains would come from
+    // lib.SubAgent(llm, api.ProfileSlot{Name: ...}) the same way.
+    db, err := lib.Primary()
     if err != nil { log.Fatal(err) }
 
     // One host session = one scene. The first read asks for a scene with an
@@ -642,6 +670,6 @@ func main() {
    ever reissues an id already given out.
 9. **`SceneDreamTopicThreshold` defaults to 24**: a partial `MemHopDefaults`
     literal leaves it 0, which **disables** automatic consolidation — assign
-    `*api.DefaultMemHopDefaults` first, then override. Context size stays
+    `api.DefaultMemHopDefaults` first, then override. Context size stays
     bounded only because Dream compresses each scene to ≤20 topics, so
     switching it off lets the injected context grow without limit.

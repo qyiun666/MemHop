@@ -3,6 +3,15 @@
 > 面向直接以 **Go module 内嵌**方式集成 MemHop 的宿主程序（不经 MCP server）。
 > 适用版本：**v1.6.3**。模块路径 `github.com/qyiun666/MemHop`，只允许 import `api` 包。
 
+> ⚠️ **本轮公开面重做后只改完了一部分。** §4 / §5 / §11 已换成当前入口
+> （`api.Open` → `api.DB`，域句柄由 `Primary` / `SubAgent` 取，agent id 不越边界）。
+> 仍有两处描述着**已不存在**的方法与类型：§8 的「能力」与「轮内事件 + 结晶」两个
+> 子节、§9 的导出类型清单。`OpenMulti`、`MultiAgentDB`、`CreateAgent`、
+> `Session(hexID)`、`ListAgents`、`DefaultAgentID`、`MemHopConfig`、`Crystallize`、
+> `ListTrajectorySessions`、`DeleteL3Nodes` 都已不存在；L2 面新增 `RenameTopic`，
+> L1 面新增 `ListL1`。当前面的权威来源是
+> `go doc github.com/qyiun666/MemHop/api.Session` 与 README 的 API 速览表。
+
 ---
 
 ## 1. 集成形态
@@ -54,17 +63,10 @@ import "github.com/qyiun666/MemHop/api"
 
 ---
 
-## 4. 构造配置 `MemHopConfig`
+## 4. 构造入参 `LlmConfig` / `MemHopDefaults`
 
-`api.MemHopConfig` 是唯一的组装入口。**加粗 = 必填**（`Validate()` 强制）。
-
-### 顶层字段
-
-| 字段 | 类型 | 内容 / 要求 |
-|---|---|---|
-| **DBPath** | string | `.meh` 文件路径，不存在自动创建 |
-| **LLM** | LlmConfig | 见下 |
-| Defaults | MemHopDefaults | 引擎调优参数，推荐 `*api.DefaultMemHopDefaults` 后按需覆盖 |
+`Open` 把端点、调参旋钮与主域画像作为三个独立入参收下，没有整份配置对象可组装。
+**加粗 = 必填**（端点在碰文件系统之前就校验）。
 
 ### `LlmConfig`（可字面量构造）
 
@@ -91,24 +93,44 @@ import "github.com/qyiun666/MemHop/api"
 ## 5. 打开 / 关闭数据库
 
 ```go
-cfg := &api.MemHopConfig{
-    DBPath: "/data/agent.meh",
-    LLM: api.LlmConfig{
+db, err := api.Open(
+    "/data/agent.meh",     // 路径
+    api.LlmConfig{         // LLM 端点：必填，在碰文件系统之前就校验
         APIURL:          os.Getenv("LLM_URL"),
         APIKey:          os.Getenv("LLM_KEY"),
         Model:           os.Getenv("LLM_MODEL"),
         TimeoutSecs:     60,
         MaxOutputTokens: 8192,
     },
-    Defaults: *api.DefaultMemHopDefaults,
-}
+    api.DefaultMemHopDefaults, // 调参旋钮；要改就复制一份改
+    &api.ProfileSlot{Name: "guide", Role: "assistant"}, // 文件还不存在时必填
+)
+if err != nil { /* 处理 ErrConfig / ErrInvalidQuery / ErrInvalidMagic / ErrCorruption */ }
+defer db.Close() // 写检查点快照 + 释放 mmap/文件锁
 
-dbm, err := api.OpenMulti(cfg)
-if err != nil { /* 处理 ErrConfig / ErrInvalidMagic / ErrCorruption */ }
-defer dbm.Close() // 写检查点快照 + 释放 mmap/文件锁
+// 域以句柄形式交回，不以 id 交回。
+sess, err := db.Primary()                                              // 文件被打开所依据的那个域
+worker, err := db.SubAgent(workerLLM, api.ProfileSlot{Name: "worker"}) // 按名字
 ```
 
-- `api.OpenMulti(cfg)`：唯一入口。引擎**不存储任何能力记录**：能力卡住在宿主自有的能力目录（如 `.meh` 同目录的 `plug/<包>/capability.json`）——宿主自扫该目录、自装配工具面；Open 时不注入任何东西。
+`api.Open` 是唯一入口，它做什么由「文件在不在」与「主域画像在不在」两件事决定：
+
+| 文件 | 主域画像 | 传入的画像 | 结果 |
+|---|---|---|---|
+| 在 | 在 | 任意 | **成功，入参不被采纳**——文件自己那份是事实源 |
+| 在 | 不在 | 没传 | `ErrConfig` |
+| 在 | 不在 | 传了 | 校验后写入 → 成功 |
+| 不在 | — | 没传 | `ErrConfig`，**且不留下任何文件** |
+| 不在 | — | 传了 | 校验后建文件并播种 → 成功 |
+
+- 主域是隐式的零号域，所以一个文件恰好有一个、也不需要扫描去找。`Primary()` 返回它的
+  句柄；**宿主从头到尾看不到任何 agent id**。
+- `SubAgent(llm, profile)` 第一次调用建出名为 `profile.Name` 的域，之后每次返回同一个
+  ——名字就是域的地址，创建时冻结。`llm` 是该域自己的端点，所以子 agent 可以跑在另一个
+  模型上。画像只在域还没有画像时才写，这同时把「崩在两次写之间」的半截域补完。
+  `AgentType` 由库盖章而不采信入参：这样建出来的域就是子 agent。
+- 两条拒绝都发生在碰文件系统之前，所以被拒的 `Open` 不在宿主的路径上留文件让下一次尝试
+  走错分支。
 - 中途主动落盘：`db.Checkpoint()`。
 - 空间回收：`db.CompactTo(newPath)` 写出一份只含存活记录、自带重建索引的整理副本，**绝不碰正打开的文件**——`newPath` 必须还不存在。删除都是打墓碑，删过场景/图的域只在这里把字节还回来；换文件（Close → rename → Open）仍由宿主决定，这也是它留在 Go 侧、不做成 MCP 工具的原因（入参就是一个输出路径）。
 
@@ -379,7 +401,7 @@ sessions, err := db.ListTrajectorySessions()
 
 | 类别 | 名称 | 用途 |
 |---|---|---|
-| 配置 | `MemHopConfig` / **`LlmConfig`** / `MemHopDefaults` + `DefaultMemHopDefaults` | 全部装配面 |
+| 配置 | **`LlmConfig`** / `MemHopDefaults` + `DefaultMemHopDefaults` | `Open` 吃的端点与调参入参 |
 | 输入别名 | `SearchQuery` / `ScenePatch` /
 / `ArchiveSlot`（写读两用） | 所有 ID 字段均为 16 位 hex 字符串 |
 | ID 面 | **`DefaultAgentID`**（隐式域） | ID 一律由库发号（含轮次话题 id），宿主只回传，不做任何进制转换 |
@@ -418,22 +440,23 @@ import (
 )
 
 func main() {
-    dbm, err := api.OpenMulti(&api.MemHopConfig{
-        DBPath: os.Getenv("MEH_PATH"), // /data/agent.meh
-        LLM: api.LlmConfig{
+    lib, err := api.Open(
+        os.Getenv("MEH_PATH"), // /data/agent.meh
+        api.LlmConfig{
             APIURL: os.Getenv("LLM_URL"),
             APIKey: os.Getenv("LLM_KEY"),
             Model:  os.Getenv("LLM_MODEL"),
         },
-        Defaults: *api.DefaultMemHopDefaults,
-    })
+        api.DefaultMemHopDefaults,
+        // 只在文件还不存在时被采纳。
+        &api.ProfileSlot{Name: "guide-agent", Role: "assistant"},
+    )
     if err != nil { log.Fatal(err) }
-    defer dbm.Close()
+    defer lib.Close()
 
-    // Multi-agent is the only mode: bind every call to one agent domain.
-    agentID, err := dbm.CreateAgent("guide-agent")
-    if err != nil { log.Fatal(err) }
-    db, err := dbm.Session(agentID)
+    // 文件的主域。子 agent 域同样由
+    // lib.SubAgent(llm, api.ProfileSlot{Name: ...}) 取得。
+    db, err := lib.Primary()
     if err != nil { log.Fatal(err) }
 
     // 一个宿主会话 = 一个场景。首次进入用空 SceneID 让库建场景。
@@ -489,4 +512,4 @@ func main() {
 6. **单文件多 agent 域**：所有租户驻留同一个 `.meh` 文件（`OpenMulti` → `CreateAgent(name)` → `Session(hexID)`），除文件级 L3 公共池外按域完全隔离；旧库（`FormatVersion < 0x0011`）既打不开也不迁移。
 7. **内容与计划自动过期**：Dream 清掉 7 天前的话题内容与 7 天前的计划节点（仍在途的树豁免）；显式纠正走 `DeleteTopic` / `DeleteScene`。过了窗的话题只剩关键词轨，`Messages` 读回来是空的或 `Seq` 上有洞——那是合法的终局，不是读取失败。一切都按轮次话题 id 绑定，所以 `Update` 前后都能追加（id 在 `Search` 时已在手），但绝不要自造轮键。
 8. **场景 id 由宿主保管，话题 id 由库保管**：`Update` 只接受已存在场景（先 `Search` 得到 `Scene.SceneID`）+ 该次读铸出的话题 id——没开轮就沉淀不了。库不会为一次沉淀自动建场景，也不会在 Dream 里合并场景——合并只走显式 `MergeScenes`，而它会把被并场景连记录删掉，宿主手里的旧 id 随即失效。每次 `Search` 恰好开启一个轮次：读两次只沉淀一次，就是跳掉一个轮次号，空洞不产生成本，且已给出的 id 永不重复。
-9. **`SceneDreamTopicThreshold` 默认 24**：用部分字面量构造 `MemHopDefaults` 时该字段为 0，会**禁用**自动巩固——先赋 `*api.DefaultMemHopDefaults` 再覆盖。上下文规模由 Dream 保证有界（压缩后每场景 ≤20），禁用自动巩固就等于让注入无界增长。
+9. **`SceneDreamTopicThreshold` 默认 24**：用部分字面量构造 `MemHopDefaults` 时该字段为 0，会**禁用**自动巩固——先赋 `api.DefaultMemHopDefaults` 再覆盖。上下文规模由 Dream 保证有界（压缩后每场景 ≤20），禁用自动巩固就等于让注入无界增长。

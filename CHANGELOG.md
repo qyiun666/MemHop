@@ -3,6 +3,19 @@
 MemHop 遵循语义化版本。本文件记录每个版本的核心改动；完整历史见
 README 的版本表与 git log。
 
+## v1.6.4 — 2026-09-11 — 公开面重做：入口换成 Open，域以句柄交回
+
+1. **入口换成 `Open(path, llm, defaults, profile)` → `*api.DB`**，成败由「文件在不在 + 主域画像在不在」决定：文件与画像都在则成功（入参不被采纳）；文件在而画像不在，带了才成功、没带报错；文件不在，带了才建库、没带报错**且不留下任何文件**。两条拒绝都排在碰文件系统之前。`OpenMulti`、`MultiAgentDB`、`MemHopConfig` 一并删除。
+2. **域以句柄交回，agent id 不再越门面**：`Primary()` 拿文件被打开所依据的那个域，`SubAgent(llm, profile)` 按 `profile.Name` 幂等建/取一个子域并挂上它自己的 LLM 端点。`CreateAgent`/`ListAgents`/`Session(hexID)`/`DefaultAgentID` 删除——宿主不再持有也不再回传任何域 id，名字是它唯一的把手。
+3. **L0 画像新增 `AgentType`**（0=主 agent / 1=子 agent）：建域时由库盖章，宿主写画像时由库继承现值，所以改画像动不了域身份。
+4. **L1 开只读面**：新增 `ListL1() → []SceneNodeView`，返回本域全部场景节点、顺序稳定、id 为 hex。节点与共现边仍只由 Dream 建立与衰减，**没有 L1 写接口**；`EdgeIDs` 没有独立的读取口，两个节点共享同一个 id 即意味着 Dream 判定它们相关。
+5. **L2 新增 `RenameTopic(topicID, name)`**：话题名归宿主，引擎不派生，所以巩固与合并重写记录时不会覆盖它；空名被拒（空是「还没命名」而不是一个名字），未知话题报 `ErrNotFound`。新名字在 `Search` 与 `SceneContext` 上立刻可见。
+6. **整体退役**：能力面（`Crystallize`、`ParseCapabilityPackage`/`ValidateCapabilityCard`、`internal/cap/capability` 整包）、`ListTrajectorySessions`（读事件轨走 `SearchL4{TopicID, Kind:event}`）、`DeleteL3Nodes`（L3 删除只剩整图一个粒度）、`DeleteAgent` 与它背后的整域删除链。公开面 27 + 8 → **26 + 6**。
+7. **磁盘格式 `0x0011` → `0x0012`**：`0x0011` 及更早的文件在 `Open` 时被显式拒绝、不迁移。理由是硬的——旧文件的画像没有 `agent_type`，解码后每个域都读作主 agent，而新语义要求「一个文件恰好一个主」，容错打开会无声地违反这条不变量。
+8. **MCP 仍是 24 个工具**：删 `memhop_crystallize` 与 `memhop_trajectory_sessions`，新增 `memhop_l1_nodes` 与 `memhop_topic_rename`。多租户改为：进程启动时 `Open` 落定主域，每个 `/mcp/<tenant>` 首次访问经 `SubAgent(name=tenant)` 建/取自己的子域——租户名就是域的地址，重连回到同一个域。共享库在启动时打开，配置不可用则进程拒绝启动，而不是等第一个请求报 500。
+9. **`DefaultMemHopDefaults` 从指针改为值**：宿主要调参就复制一份改，不再能经由一个导出的全局改到所有调用方读到的默认值。
+10. **对消费方 breaking**：入口、句柄类型、方法集与磁盘格式版本同时变，宿主 meowagent 需在其自身的跟版轮次里适配。
+
 ## v1.6.2 — 2026-09-07 — 计划事件不再受词表约束（`EventType` 归宿主）
 
 `internal/plan` 的 `ValidateEvent` 包装与它背后的 10 词 `planEventTypes` 名单一并删除：计划绑定事件的 `EventType` 与裸轮次事件同口径——任意非空宿主命名即接受，原样存回。理由是这条约束不挣自己的饭钱：引擎从不按 `EventType` 分支，全仓非测试引用只有 `ReadTrajectory` 的字段回显与结晶 prompt 里的一行格式化，所以名单唯一的行为就是拒写；代价全落在宿主侧——自己的事件名被拒后轨迹静默少一条，而库并没有因此保住任何结构（写入路径自己决定记录形状并清零全部节点字段，宿主伪装不了树视图）。
