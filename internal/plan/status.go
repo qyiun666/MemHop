@@ -1,13 +1,11 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// Package plan holds the L5 plan-tree small methods: the status surface, the
-// Step a host restates, the node create/update steps, and the forest build with
-// its rollup. A plan is keyed by the turn that opened it, so the key itself is
-// parsed by content.ParseTopicID, and a step inside it is addressed by a
-// per-topic ordinal. The big methods (PlanCreate, PlanNodeAdd, PlanNodeUpdate,
-// PlanState) stay in the composition root with the domain lock; a turn's events
-// are L4 content, written by the content package rather than here.
+// Package plan holds the L5 plan-tree small methods: the status surface, the two
+// input shapes a write step takes, the create/update steps themselves, and the
+// forest build with its rollup. A plan is keyed by one topic and a step inside it
+// is addressed by a per-topic ordinal; this package writes plan node records and
+// nothing else.
 
 package plan
 
@@ -37,7 +35,7 @@ var statusNames = map[uint8]PlanStatus{
 	core.StatusFailed:     PlanFailed,
 }
 
-// StatusToU8 resolves a host-supplied status, refusing anything the table does
+// StatusToU8 resolves a caller-supplied status, refusing anything the table does
 // not name.
 func StatusToU8(s PlanStatus) (uint8, error) {
 	for u, name := range statusNames {

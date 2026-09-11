@@ -1,10 +1,9 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// Package graph holds the L3 knowledge-graph small methods: batch-import steps
-// and node/subgraph query steps. Each assembles repo/core record features; the
-// composition root keeps the big methods (ImportL3, QueryL3Nodes,
-// QueryL3Subgraph) that lock the domain and compose them.
+// Package graph holds the L3 knowledge-graph small methods: the batch-import
+// steps and the node/subgraph query steps, each assembling repo/core record
+// features.
 
 package graph
 
@@ -19,10 +18,9 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
-// ImportBatch carries one ImportL3 call: its conflict mode and result plus the
-// caches that keep the batch a single pass over the stored graph set (domain →
-// graph id, graph → node titles, graph → edge keys). The composition root
-// creates it under the domain lock and reads the result back afterwards.
+// ImportBatch carries one import: its conflict mode and result plus the caches
+// that keep the batch a single pass over the stored graph set (domain → graph id,
+// graph → node titles, graph → edge keys). Callers hold the domain lock.
 type ImportBatch struct {
 	engine     *core.StorageEngine
 	agentID    uint64
@@ -56,10 +54,10 @@ func NewImportBatch(engine *core.StorageEngine, agentID uint64, mode core.L3Impo
 }
 
 // preferGraphID arbitrates two slots that share one domain label. A file can
-// carry that collision (a rename done before the label check existed), and the
-// record scan visits slots in map order — so without a rule here, importing the
-// label would write into a different graph on each run. The graph whose id
-// derives from the label owns it; a tie falls to the smaller id.
+// carry that collision, and the record scan visits slots in map order — so
+// without a rule here, importing the label would write into a different graph on
+// each run. The graph whose id derives from the label owns it; a tie falls to the
+// smaller id.
 func preferGraphID(name string, cur, next uint64) bool {
 	derived := common.HashID(name)
 	if (next == derived) != (cur == derived) {
@@ -70,7 +68,7 @@ func preferGraphID(name string, cur, next uint64) bool {
 
 // CheckName refuses a rename onto a label another graph of this domain already
 // carries. The label is how a domain addresses a graph, so two slots under one
-// label would make ImportL3 resolve that domain ambiguously.
+// label would make that domain resolve ambiguously.
 func CheckName(engine *core.StorageEngine, agentID uint64, id uint64, name string) error {
 	for _, g := range core.CollectAllGraphSlots(engine, agentID) {
 		if g.IDHash != id && g.Name == name {
@@ -84,10 +82,10 @@ func CheckName(engine *core.StorageEngine, agentID uint64, id uint64, name strin
 // Result is the report the batch has accumulated so far.
 func (b *ImportBatch) Result() *core.L3ImportResult { return b.result }
 
-// GraphIDs lists, in hex and sorted, every graph this batch wrote into. A host
-// gets the ids back because a graph id is hash(Domain) and nothing else on the
-// public surface derives that hash — without it an imported graph can only be
-// found again by listing the domain and matching names.
+// GraphIDs lists, in hex and sorted, every graph this batch wrote into. A graph
+// id derives from its domain label, and this is the only place a batch reports
+// which graphs it touched — without it a graph written here could only be found
+// again by listing the domain and matching names.
 func (b *ImportBatch) GraphIDs() []string {
 	out := make([]string, 0, len(b.touched))
 	for id := range b.touched {
@@ -205,8 +203,9 @@ func (b *ImportBatch) relationMembers(graphID uint64, source string, rel core.L3
 }
 
 // graphFor returns the graph of a domain, creating its slot only when the
-// domain has none. An existing slot is reused as stored: its Name is the host's
-// label and may have been set by UpdateL3, which the derived id must not undo.
+// domain has none. An existing slot is reused as stored: its Name is a label that
+// may have been changed since the id was derived, and reusing the id must not
+// undo that label.
 func (b *ImportBatch) graphFor(domain string) (uint64, error) {
 	graphID, ok := b.graphIDs[domain]
 	if !ok {
@@ -249,7 +248,7 @@ func (b *ImportBatch) edges(graphID uint64) map[string]struct{} {
 }
 
 // mutateNode applies one knowledge field-merge policy to the stored node of an
-// import item (record access and membership stay in the repo).
+// import item.
 func (b *ImportBatch) mutateNode(graphID uint64, item core.L3ImportItem,
 	merge func(*core.HypergraphNode, string, string, []string, string, int64)) error {
 	now := time.Now().UnixMilli()

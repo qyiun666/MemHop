@@ -48,9 +48,9 @@ func CreateNode(ac *domain.Context, agentID uint64, spec NodeSpec) (uint32, erro
 // updating a step never erases its title or a summary already folded into it. A
 // terminal status records FinishedAt exactly once, and a step restated back to
 // in progress loses it: a completion time left on a step that is running again
-// would read as a finished one. Updating a node never touches the L4 content
-// track — a step's events are separate records, so restating one cannot add,
-// reorder or overwrite what a turn recorded.
+// would read as a finished one. Updating a node writes one node record and
+// nothing else — restating a step cannot add, reorder or overwrite any other
+// record.
 // Callers hold ac.Mu.
 func UpdateNode(ac *domain.Context, agentID uint64, step Step) error {
 	u8, err := StatusToU8(step.Status)
@@ -85,8 +85,8 @@ func UpdateNode(ac *domain.Context, agentID uint64, step Step) error {
 }
 
 // UpdateNodeSummaryLocked sets a plan node's Summary without touching its
-// Status — a node's Status changes only where the host says so, never because a
-// fold ran. Callers hold ac.Mu.
+// Status — a node's Status changes only where a caller writes it, never because
+// a fold ran. Callers hold ac.Mu.
 func UpdateNodeSummaryLocked(ac *domain.Context, agentID, nodeID uint64, summary string) error {
 	node, err := core.ReadPlanNode(ac.Engine, agentID, nodeID)
 	if err != nil {

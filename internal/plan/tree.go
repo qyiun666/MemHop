@@ -70,9 +70,8 @@ func BuildTree(ac *domain.Context, topicID uint64) (*PlanTree, error) {
 }
 
 // aggregate returns the nodes of one turn's plan from the domain's plan cache
-// (nil when no node lives under that topic). Event counts are not here: a
-// turn's events are L4 content, and a tree reports its steps, not what
-// happened during them.
+// (nil when no node lives under that topic). The aggregate carries nodes only:
+// what happened during a step is not a property of the node.
 func aggregate(ac *domain.Context, topicID uint64) []core.PlanNode {
 	agg := ac.Plans.Aggregate(topicID)
 	if agg == nil {
@@ -165,7 +164,7 @@ func countTree(v PlanNodeView) (done, total int) {
 
 // RollupTree walks one turn's plan forest bottom-up: a node's Summary becomes
 // the concatenation of its children's summaries. It NEVER changes a node's
-// Status — a parent becomes Done only when the host declares it so (Model A).
+// Status — a parent's Done is never inferred from its children's.
 // Callers hold ac.Mu.
 func RollupTree(ac *domain.Context, agentID, topicID uint64) error {
 	for _, root := range Forest(aggregate(ac, topicID)) {
@@ -177,9 +176,9 @@ func RollupTree(ac *domain.Context, agentID, topicID uint64) error {
 }
 
 // rollupNode recurses children first, then backfills this node's Summary from
-// its children's. Three things must hold for a fold: the node itself is Done
-// (Model A — an unfinished parent has no conclusion to carry), its own Summary
-// is empty (a host-written or previously folded one is never clobbered), and
+// its children's. Three things must hold for a fold: the node itself is Done (an
+// unfinished parent has no conclusion to carry), its own Summary is empty (one
+// already written, by a caller or an earlier fold, is never clobbered), and
 // every direct child has reached a final state. That last one is why a partial
 // fold is worse than none: "did three things; two of them" is a summary that
 // reads exactly like a complete one, and nothing on the parent says the third
