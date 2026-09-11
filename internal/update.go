@@ -64,7 +64,7 @@ func (db *DB) Update(agentID uint64, sceneID, topicID string) error {
 	// Extract on the domain's cancellable context: a Close racing an
 	// in-flight Update cancels the LLM call instead of waiting a full
 	// round-trip behind the lifecycle barrier.
-	keywords, err := llmops.ExtractKeywords(ac.OpCtx, db.llm, content.RenderForDistill(utterances))
+	keywords, err := llmops.ExtractKeywords(ac.OpCtx, ac.LLM, content.RenderForDistill(utterances))
 	if err != nil {
 		return common.NewError(common.ErrLLM, "distill turn", err)
 	}

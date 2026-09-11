@@ -42,7 +42,7 @@ func Open(cfg *MemHopConfig) (*DB, error) {
 	db := &DB{
 		engine: engine,
 		config: cfg,
-		llm:    llm.New(cfg),
+		llm:    llm.New(cfg.LLM),
 		// baseCtx bounds every per-agent opCtx; Close cancels it so
 		// in-flight Dreams exit at the next stage boundary.
 		baseCtx:    ctx,

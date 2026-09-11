@@ -35,7 +35,7 @@ func TestExtractKeywordsFormatRetry(t *testing.T) {
 		"这段对话温馨地展现了通过分享童年书籍和家庭时刻",
 		`{"keywords":["童年书籍","家庭时刻","分享"]}`,
 	)
-	p := llm.New(&MemHopConfig{LLM: LlmConfig{APIURL: srv.URL, APIKey: "test", Model: "mock"}})
+	p := llm.New(LlmConfig{APIURL: srv.URL, APIKey: "test", Model: "mock"})
 	kw, err := llmops.ExtractKeywords(context.Background(), p, "我们聊了童年读过的书和家里的温馨时刻")
 	if err != nil {
 		t.Fatalf("ExtractKeywords: %v", err)
@@ -51,7 +51,7 @@ func TestExtractKeywordsFormatRetry(t *testing.T) {
 // model had produced it.
 func TestExtractKeywordsUnparseableIsError(t *testing.T) {
 	srv := mockLLMServerSeq(t, "摘要", "摘要", "摘要", "还是摘要")
-	p := llm.New(&MemHopConfig{LLM: LlmConfig{APIURL: srv.URL, APIKey: "test", Model: "mock"}})
+	p := llm.New(LlmConfig{APIURL: srv.URL, APIKey: "test", Model: "mock"})
 	kw, err := llmops.ExtractKeywords(context.Background(), p, "我们讨论了 Python 的性能优化和数据库索引")
 	assertLLMErr(t, err)
 	if len(kw) != 0 {
@@ -63,7 +63,7 @@ func TestExtractKeywordsUnparseableIsError(t *testing.T) {
 // caller after the retry rather than degrading.
 func TestExtractKeywordsEmptyResponsesAreError(t *testing.T) {
 	srv := mockLLMServerSeq(t, "", "", "", "")
-	p := llm.New(&MemHopConfig{LLM: LlmConfig{APIURL: srv.URL, APIKey: "test", Model: "mock"}})
+	p := llm.New(LlmConfig{APIURL: srv.URL, APIKey: "test", Model: "mock"})
 	_, err := llmops.ExtractKeywords(context.Background(), p, "今天天气不错我们去爬山")
 	assertLLMErr(t, err)
 }
@@ -71,7 +71,7 @@ func TestExtractKeywordsEmptyResponsesAreError(t *testing.T) {
 // TestExtractKeywordsBlankText verifies blank input returns empty keywords
 // without any LLM call.
 func TestExtractKeywordsBlankText(t *testing.T) {
-	p := llm.New(&MemHopConfig{LLM: LlmConfig{APIURL: "http://127.0.0.1:1", APIKey: "test", Model: "mock"}})
+	p := llm.New(LlmConfig{APIURL: "http://127.0.0.1:1", APIKey: "test", Model: "mock"})
 	kw, err := llmops.ExtractKeywords(context.Background(), p, "   ")
 	if err != nil {
 		t.Fatalf("ExtractKeywords: %v", err)
@@ -94,7 +94,7 @@ func TestExtractKeywordsChunkedMerge(t *testing.T) {
 		`{"keywords":["日出"]}`,
 		`{"keywords":["好天气"]}`,
 	)
-	p := llm.New(&MemHopConfig{LLM: LlmConfig{APIURL: srv.URL, APIKey: "test", Model: "mock"}})
+	p := llm.New(LlmConfig{APIURL: srv.URL, APIKey: "test", Model: "mock"})
 	kw, err := llmops.ExtractKeywords(context.Background(), p, longText())
 	if err != nil {
 		t.Fatalf("ExtractKeywords: %v", err)
@@ -121,7 +121,7 @@ func TestExtractKeywordsChunkFailureIsError(t *testing.T) {
 		"仍然不是 JSON",
 		"格式约束重试也不是 JSON",
 	)
-	p := llm.New(&MemHopConfig{LLM: LlmConfig{APIURL: srv.URL, APIKey: "test", Model: "mock"}})
+	p := llm.New(LlmConfig{APIURL: srv.URL, APIKey: "test", Model: "mock"})
 	_, err := llmops.ExtractKeywords(context.Background(), p, longText())
 	assertLLMErr(t, err)
 }
@@ -129,7 +129,7 @@ func TestExtractKeywordsChunkFailureIsError(t *testing.T) {
 // TestExtractKeywordsTransportFailureIsError verifies a transport failure
 // surfaces as itself rather than as a format failure.
 func TestExtractKeywordsTransportFailureIsError(t *testing.T) {
-	p := llm.New(&MemHopConfig{LLM: LlmConfig{APIURL: "http://127.0.0.1:1/v1", APIKey: "test", Model: "mock"}})
+	p := llm.New(LlmConfig{APIURL: "http://127.0.0.1:1/v1", APIKey: "test", Model: "mock"})
 	_, err := llmops.ExtractKeywords(context.Background(), p, "随便聊点什么")
 	if err == nil {
 		t.Fatal("want an error from an unreachable endpoint, got nil")

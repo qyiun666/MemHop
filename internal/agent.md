@@ -109,8 +109,11 @@ internal/{domain,scene,turn,dream,graph,plan,content}
   格式化或域绑定代码。多 agent 是唯一模式：`NewSession(agentID)` 是唯一
   会话构造器。`exports.go` 是给 api 门面的恒等再导出接缝；`api` 包禁止
   直接 import `repo/core` 或 `common`。
-- LLM 客户端是 DB 级共享（`db.llm`，`internal/llm.New(cfg)`），由 `Open`
-  在装配时构造并注入每个域上下文（`ac.LLM`）；任何域不自己建客户端。
+- LLM 客户端由 `Open` 在装配时用 `internal/llm.New(cfg.LLM)` 构造（`db.llm`），
+  经 `domain.NewContext` 注入每个域上下文的 `ac.LLM`；任何域不自己建客户端。
+  **所有 LLM 调用点一律读 `ac.LLM`，不读 `db.llm`**——库级那一个只是注入的默认
+  值，绕过注入位的调用点在「每个域同一个端点」时看不出问题，只在某个域带自己的
+  端点时才显形，而且显形成同一个域的两类调用打到两个端点。
 
 - **错误判定纪律**：区分「记录不存在」与「读不动」。`ErrNotFound` 只代表
   前者；IO / 关闭 / 反序列化失败一律原样上抛，不得改写成 `ErrNotFound`，

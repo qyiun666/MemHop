@@ -52,7 +52,7 @@ func TestExtractKeywordsLongInputRealLLM(t *testing.T) {
 	if err := testsupport.LoadLLMConfig(cfg); err != nil {
 		t.Skipf("LLM not configured: %v", err)
 	}
-	p := llm.New(cfg)
+	p := llm.New(cfg.LLM)
 	// Session 2 is 4322 chars (> keywordChunkRunes → chunked path).
 	longText := longSessionText(t, 2)
 	// Session 0 is 1560 chars (single-pass path with format retry).
@@ -132,7 +132,7 @@ func TestExtractKeywordsLongInput(t *testing.T) {
 	if err := testsupport.LoadLLMConfig(cfg); err != nil {
 		t.Skipf("LLM not configured: %v", err)
 	}
-	p := llm.New(cfg)
+	p := llm.New(cfg.LLM)
 	kw, err := llmops.ExtractKeywords(context.Background(), p, "User: "+longSessionText(t, 2)+"\nAssistant: 收到")
 	if err != nil {
 		t.Fatalf("ExtractKeywords: %v", err)

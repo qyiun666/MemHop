@@ -26,7 +26,7 @@ func newSharedL3DB(t *testing.T, llmURL string) (*DB, string) {
 		t.Fatal(err)
 	}
 	db := newTestDB(t, engine)
-	db.llm = llm.New(&MemHopConfig{LLM: LlmConfig{APIURL: llmURL, APIKey: "test", Model: "mock"}})
+	db.llm = llm.New(LlmConfig{APIURL: llmURL, APIKey: "test", Model: "mock"})
 	t.Cleanup(func() { _ = db.Close() })
 	return db, path
 }

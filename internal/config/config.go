@@ -30,6 +30,17 @@ type LlmConfig struct {
 	MaxOutputTokens int    `json:"max_output_tokens"`
 }
 
+// Validate reports whether one LLM endpoint is fully specified. The engine's
+// only external service is this endpoint and there is no fallback for a call it
+// cannot make, so a half-filled one is refused at the boundary rather than
+// surfacing as a transport error mid-turn.
+func (c LlmConfig) Validate() error {
+	if c.APIURL == "" || c.APIKey == "" || c.Model == "" {
+		return common.NewError(common.ErrConfig, "LLM.APIURL, LLM.APIKey and LLM.Model are required")
+	}
+	return nil
+}
+
 func (c *MemHopConfig) Validate() error {
 	if c == nil {
 		return common.NewError(common.ErrConfig, "config is required")
@@ -37,8 +48,5 @@ func (c *MemHopConfig) Validate() error {
 	if c.DBPath == "" {
 		return common.NewError(common.ErrConfig, "DBPath is required")
 	}
-	if c.LLM.APIURL == "" || c.LLM.APIKey == "" || c.LLM.Model == "" {
-		return common.NewError(common.ErrConfig, "LLM.APIURL, LLM.APIKey and LLM.Model are required")
-	}
-	return nil
+	return c.LLM.Validate()
 }

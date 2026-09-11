@@ -35,22 +35,22 @@ type Provider struct {
 	maxOutputTokens int
 }
 
-// New 从配置创建 Provider。
-func New(cfg *config.MemHopConfig) *Provider {
-	timeoutSecs := cfg.LLM.TimeoutSecs
+// New 从一份 LLM 配置创建 Provider。
+func New(llm config.LlmConfig) *Provider {
+	timeoutSecs := llm.TimeoutSecs
 	if timeoutSecs <= 0 {
 		timeoutSecs = defaultTimeoutSecs
 	}
-	maxTokens := cfg.LLM.MaxOutputTokens
+	maxTokens := llm.MaxOutputTokens
 	if maxTokens <= 0 {
 		maxTokens = defaultMaxOutputTokens
 	}
-	oc := openai.DefaultConfig(cfg.LLM.APIKey)
-	oc.BaseURL = normalizeBaseURL(cfg.LLM.APIURL)
+	oc := openai.DefaultConfig(llm.APIKey)
+	oc.BaseURL = normalizeBaseURL(llm.APIURL)
 	oc.HTTPClient = &http.Client{Timeout: time.Duration(timeoutSecs) * time.Second}
 	return &Provider{
 		client:          openai.NewClientWithConfig(oc),
-		model:           cfg.LLM.Model,
+		model:           llm.Model,
 		maxOutputTokens: maxTokens,
 	}
 }
