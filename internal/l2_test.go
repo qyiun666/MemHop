@@ -440,7 +440,7 @@ func TestUpdateSceneNameSurvivesLaterTurns(t *testing.T) {
 // end state, and a host has to be able to tell that apart from a read that lost a
 // line (which stays a hard ErrIO).
 func TestSceneContextAfterContentRetentionIsEmptyNotAnError(t *testing.T) {
-	srv := mockLLMServer(t, turnKeywords)
+	srv := contractLLMServer(t)
 	db := newSearchTestDB(t, srv.URL)
 	sceneID, topicID := openTurn(t, db)
 

@@ -28,8 +28,8 @@ func TestCancelledDreamReconcilesTheReadPath(t *testing.T) {
 		// the first group has already landed and been reported, which is the state
 		// the checkpoint order has to get right. Whether the second group finishes
 		// first is not what this test claims.
-		groups = `{"l2_groups":[{"scene_id":7,"node_hashes":[11,12],"merged_summary":"两轮并成一事"},` +
-			`{"scene_id":7,"node_hashes":[13,14],"merged_summary":"另两轮并成一事"}],"l2_compression_needed":true}`
+		groups = `{"l2_groups":[{"node_hashes":[11,12],"merged_summary":"两轮并成一事"},` +
+			`{"node_hashes":[13,14],"merged_summary":"另两轮并成一事"}]}`
 		keywords = `{"keywords":["登录","刷新"]}`
 	)
 

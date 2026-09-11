@@ -35,8 +35,9 @@ type EmotionScore = core.EmotionScore
 
 type MBTIScore = core.MBTIScore
 
-// NodeEmotion is one per-node emotion row of the distill reply; the hex id is
-// validated before it reaches the caller.
+// NodeEmotion is one per-node emotion row of the distill reply. Only rows naming a
+// node this pass actually sampled survive parsing: an id is the caller's address for
+// a backfill, and one it never offered has nothing to backfill into.
 type NodeEmotion struct {
 	IDHex   string  `json:"id_hex"`
 	Valence float64 `json:"valence"`
@@ -82,15 +83,21 @@ func Distill(ctx context.Context, chat Chat, samples []L1Sample) (*DistillOutput
 	if len(samples) == 0 {
 		return nil, common.NewError(common.ErrLLM, "distill: no samples")
 	}
+	// The ids this prompt offered, so a row naming one it invented is dropped
+	// rather than handed downstream as a node to backfill.
+	known := make(map[uint64]struct{}, len(samples))
+	for _, s := range samples {
+		known[s.IDHash] = struct{}{}
+	}
 	user := buildDistillPrompt(samples)
 	budget := minTokens(chat.MaxOutputTokens(), distillMaxTokens)
 	// Two-budget attempt first: reasoning tokens can exhaust the 2048
 	// first-pass budget, cutting the JSON mid-stream.
-	response, err := chat.ChatWithRetry(ctx, systemDistill, user, budget, ConsolidationMaxTokens)
+	response, err := chat.ChatWithRetry(ctx, systemDistill, user, budget, escalationCeiling(chat))
 	if err != nil {
 		return nil, err
 	}
-	out, perr := parseDistillResponse(response)
+	out, perr := parseDistillResponse(response, known)
 	if perr == nil {
 		return out, nil
 	}
@@ -99,7 +106,7 @@ func Distill(ctx context.Context, chat Chat, samples []L1Sample) (*DistillOutput
 	if rerr != nil {
 		return nil, perr
 	}
-	if out, perr = parseDistillResponse(retry); perr != nil {
+	if out, perr = parseDistillResponse(retry, known); perr != nil {
 		return nil, perr
 	}
 	return out, nil
@@ -116,11 +123,14 @@ func buildDistillPrompt(samples []L1Sample) string {
 	return b.String()
 }
 
-func parseDistillResponse(response string) (*DistillOutput, error) {
+// parseDistillResponse reads one reply against the contract. known is the id set
+// this pass put in front of the model: a row naming anything else is dropped,
+// because the only nodes the caller can backfill are the ones it sampled.
+func parseDistillResponse(response string, known map[uint64]struct{}) (*DistillOutput, error) {
 	cleaned := stripCodeBlocks(response)
 	var raw struct {
-		Emotion EmotionScore `json:"emotion"`
-		MBTI    struct {
+		Emotion *EmotionScore `json:"emotion"`
+		MBTI    *struct {
 			IE float64 `json:"i_e"`
 			NS float64 `json:"n_s"`
 			TF float64 `json:"t_f"`
@@ -131,6 +141,12 @@ func parseDistillResponse(response string) (*DistillOutput, error) {
 	}
 	if err := json.Unmarshal([]byte(cleaned), &raw); err != nil {
 		return nil, common.NewError(common.ErrLLM, "distill response parse failed", err)
+	}
+	// Valid JSON that answers none of the contract is not a thin answer, it is no
+	// answer: merging the zeros it decodes to would erase the distilled emotion and
+	// hand back a personality type derived from four silent dimensions.
+	if raw.Emotion == nil || raw.MBTI == nil {
+		return nil, common.NewError(common.ErrLLM, "distill response carries no emotion or mbti block")
 	}
 	personality := strings.TrimSpace(raw.Personality)
 	if r := []rune(personality); len(r) > distillPersonalityMaxRunes {
@@ -154,8 +170,12 @@ func parseDistillResponse(response string) (*DistillOutput, error) {
 	// Type re-derived from the four dimensions (never trusted from the LLM).
 	out.MBTI.Type = deriveMBTIType(out.MBTI)
 	for _, n := range raw.PerNode {
-		if _, err := common.ParseID(n.IDHex); err != nil {
+		id, err := common.ParseID(n.IDHex)
+		if err != nil {
 			continue // skip rows with unparsable ids
+		}
+		if _, ok := known[id]; !ok {
+			continue // skip a node this pass never sampled
 		}
 		out.PerNode = append(out.PerNode, NodeEmotion{
 			IDHex: n.IDHex, Valence: clampUnit(n.Valence), Arousal: clampUnit(n.Arousal),

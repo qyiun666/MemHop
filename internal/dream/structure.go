@@ -150,7 +150,7 @@ func l1Stages(ctx context.Context, ac *domain.Context, agentID uint64, newL2Meta
 // DistillL0Stage runs Dream's L0 distillation (LLM emotion/MBTI, backfilled
 // into L1) and reports whether it ran. Callers hold ac.Mu.
 func DistillL0Stage(ctx context.Context, ac *domain.Context, agentID uint64) (bool, error) {
-	samples, _ := profile.Samples(ac.Engine, agentID)
+	samples := profile.Samples(ac.Engine, agentID)
 	if len(samples) == 0 {
 		return false, nil
 	}

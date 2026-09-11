@@ -19,54 +19,59 @@ import (
 )
 
 type L2Group struct {
-	SceneID       uint64   `json:"scene_id"`
 	NodeHashes    []uint64 `json:"node_hashes"`
 	MergedSummary string   `json:"merged_summary"`
 }
 
 type ConsolidationOutput struct {
-	L2Groups            []L2Group `json:"l2_groups"`
-	L2CompressionNeeded bool      `json:"l2_compression_needed"`
+	L2Groups []L2Group `json:"l2_groups"`
 }
 
-const SystemConsolidate = `You analyze L2 chat memory topics, identify which adjacent topics belong to the same conversation thread, and reconstruct their keywords into natural text that reads like the original conversation.
+// systemConsolidate states the contract for one pass. The topic count it aims at
+// is the caller's configured compression floor, not a constant of this package:
+// a number here that the engine does not run by would have the model merge to a
+// target the next pass then refuses to consider reached.
+func systemConsolidate(floor int) string {
+	return fmt.Sprintf(`You analyze L2 chat memory topics, identify which adjacent topics belong to the same conversation thread, and reconstruct their keywords into natural text that reads like the original conversation.
 
 Rules:
 1. Scan from the most recent topic backwards — group adjacent topics that share the same conversation thread (same subject, causal chain, topic continuation, or semantic overlap)
-2. Do NOT merge topics that are clearly about different subjects, even if they occur in the same scene
-3. Compression target: the total number of remaining topics after merging must be 20 or fewer. If the input has more than 20 topics, you MUST merge enough groups to bring the count down to 20 or below
+2. Do NOT merge topics that are clearly about different subjects, even if they occur in the same scene. This rule outranks rule 3: an unrelated pair fused into one thread is a false memory, while an unmerged pair costs nothing but a later pass
+3. Compression target: bring the number of remaining topics down toward %d or below, by as many groups as rule 2 actually allows — merge no further than that
 4. For each merged group, reconstruct the multi-turn keywords into a single coherent natural-language text — write it as if you are rewriting what was originally said, not summarizing. The keywords are a fact checklist: every keyword or phrase from every topic in the group MUST appear in the reconstructed text, either verbatim or as the exact fact it stands for. Never drop, merge away, or generalize a fact (e.g. "yesterday" must stay "yesterday", not become "recently")
 5. No length limit on the reconstructed text — it must be as long as needed to faithfully preserve ALL details: names, numbers, dates, times (including relative references such as "yesterday", "last week", "next month" — keep them exactly as said), locations, cause-effect chains, emotional tone, attitudes, preferences, and specific facts
 6. Preserve the emotional tone and attitude present in the keywords — if the original tone was frustrated, excited, curious, etc., the reconstructed text should reflect that
 7. Preserve original language; keep mixed-language terms as-is; preserve numbers and proper nouns exactly
-8. Echo scene_id and node_hashes EXACTLY as given in the input
-9. When no compression is needed (no adjacent topics share a thread, or total topics already <= 20), output l2_groups as an empty array
+8. Echo node_hashes EXACTLY as given in the input
+9. When no compression is possible (no adjacent topics share a thread, or the total is already %d or fewer), output l2_groups as an empty array
 
 Output ONLY valid JSON in this exact shape (no markdown, no code fences):
 {
   "l2_groups": [
     {
-      "scene_id": <number>,
       "node_hashes": [<number>, ...],
       "merged_summary": "<natural-language reconstruction of the original conversation from the keywords>"
     }
-  ],
-  "l2_compression_needed": <bool>
+  ]
 }
-Every merged group MUST include non-empty merged_summary.`
+Every merged group MUST include non-empty merged_summary.`, floor, floor)
+}
 
 // Consolidate decides whether a batch of L2 topics share a topic and
-// returns compression groups preserving all details.
-func Consolidate(ctx context.Context, chat Chat, topics []core.TopicSlot) (*ConsolidationOutput, error) {
+// returns compression groups preserving all details. floor is the caller's
+// configured topic count a pass compresses towards — the target the prompt states.
+func Consolidate(ctx context.Context, chat Chat, topics []core.TopicSlot, floor int) (*ConsolidationOutput, error) {
 	if len(topics) == 0 {
-		return &ConsolidationOutput{L2Groups: []L2Group{}, L2CompressionNeeded: false}, nil
+		return &ConsolidationOutput{L2Groups: []L2Group{}}, nil
 	}
+	system := systemConsolidate(floor)
 	user := BuildConsolidatePrompt(topics)
 	// Two-budget attempt: the first pass uses the configured ceiling; when
 	// the response is truncated (finish_reason=length, common with reasoning
-	// models), retry once with the full consolidation budget so merged
-	// summaries are never cut mid-JSON.
-	response, err := chat.ChatWithRetry(ctx, SystemConsolidate, user, minTokens(chat.MaxOutputTokens(), ConsolidationMaxTokens), ConsolidationMaxTokens)
+	// models), retry once at the endpoint's own ceiling so merged summaries are
+	// never cut mid-JSON.
+	primary := minTokens(chat.MaxOutputTokens(), ConsolidationMaxTokens)
+	response, err := chat.ChatWithRetry(ctx, system, user, primary, escalationCeiling(chat))
 	if err != nil {
 		return nil, err
 	}
@@ -76,7 +81,7 @@ func Consolidate(ctx context.Context, chat Chat, topics []core.TopicSlot) (*Cons
 	}
 	// One format-constrained retry before failing the call; ExtractKeywords
 	// applies the same self-healing pattern.
-	retry, rerr := chat.Chat(ctx, SystemConsolidate, user+consolidateFormatRetry, ConsolidationMaxTokens)
+	retry, rerr := chat.Chat(ctx, system, user+consolidateFormatRetry, primary)
 	if rerr != nil {
 		return nil, perr
 	}
@@ -120,30 +125,23 @@ func BuildConsolidatePrompt(topics []core.TopicSlot) string {
 	return b.String()
 }
 
-// parseConsolidateResponse parses the LLM reply; scene_id/node_hashes
-// accept JSON numbers or quoted strings.
+// parseConsolidateResponse parses the LLM reply; node_hashes accept JSON
+// numbers or quoted strings. A group whose members do not parse is not a group
+// the engine could apply, and the caller counts what it could not apply apart
+// from what it chose not to.
 func parseConsolidateResponse(response string) (*ConsolidationOutput, error) {
 	cleaned := stripCodeBlocks(response)
 	var raw struct {
 		L2Groups []struct {
-			SceneID       json.RawMessage   `json:"scene_id"`
 			NodeHashes    []json.RawMessage `json:"node_hashes"`
 			MergedSummary string            `json:"merged_summary"`
 		} `json:"l2_groups"`
-		L2CompressionNeeded bool `json:"l2_compression_needed"`
 	}
 	if err := json.Unmarshal([]byte(cleaned), &raw); err != nil {
 		return nil, common.NewError(common.ErrLLM, "consolidate response parse failed", err)
 	}
-	out := &ConsolidationOutput{
-		L2Groups:            make([]L2Group, 0, len(raw.L2Groups)),
-		L2CompressionNeeded: raw.L2CompressionNeeded,
-	}
+	out := &ConsolidationOutput{L2Groups: make([]L2Group, 0, len(raw.L2Groups))}
 	for _, g := range raw.L2Groups {
-		sceneID, err := parseUint64Flex(g.SceneID)
-		if err != nil {
-			return nil, common.NewError(common.ErrLLM, "consolidate scene_id parse failed", err)
-		}
 		hashes := make([]uint64, 0, len(g.NodeHashes))
 		for _, h := range g.NodeHashes {
 			v, err := parseUint64Flex(h)
@@ -152,10 +150,7 @@ func parseConsolidateResponse(response string) (*ConsolidationOutput, error) {
 			}
 			hashes = append(hashes, v)
 		}
-		out.L2Groups = append(out.L2Groups, L2Group{
-			SceneID: sceneID, NodeHashes: hashes,
-			MergedSummary: g.MergedSummary,
-		})
+		out.L2Groups = append(out.L2Groups, L2Group{NodeHashes: hashes, MergedSummary: g.MergedSummary})
 	}
 	return out, nil
 }

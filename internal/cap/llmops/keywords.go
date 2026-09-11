@@ -1,7 +1,7 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// llm_keywords.go: semantic keyword extraction — the write-path preprocessing
+// keywords.go: semantic keyword extraction — the write-path preprocessing
 // call point (one finished turn in, one keyword track out).
 
 package llmops
@@ -84,10 +84,14 @@ func ExtractKeywords(ctx context.Context, chat Chat, text string) ([]string, err
 // weaker one, which is backwards: the longer the text, the more readily a
 // model drifts into a natural-language summary.
 func extractOne(ctx context.Context, chat Chat, user string) ([]string, error) {
+	// The ladder tops out at the consolidation ceiling, and no rung may exceed
+	// what the endpoint was configured to accept: an over-large max_tokens is a
+	// refused request, not a shorter answer.
+	widest := minTokens(chat.MaxOutputTokens(), ConsolidationMaxTokens)
 	budgets := []int{
 		minTokens(chat.MaxOutputTokens(), keywordExtractionMaxTokens),
 		minTokens(chat.MaxOutputTokens(), keywordRetryMaxTokens),
-		ConsolidationMaxTokens,
+		widest,
 	}
 	for _, maxTokens := range budgets {
 		response, err := chat.Chat(ctx, systemKeywords, user, maxTokens)
@@ -101,7 +105,7 @@ func extractOne(ctx context.Context, chat Chat, user string) ([]string, error) {
 			return dedupeKeywords(keywords), nil
 		}
 	}
-	response, err := chat.Chat(ctx, systemKeywords, user+keywordFormatRetry, ConsolidationMaxTokens)
+	response, err := chat.Chat(ctx, systemKeywords, user+keywordFormatRetry, widest)
 	if err != nil {
 		if errors.Is(err, common.ErrTruncated) {
 			return nil, errKeywordFormat

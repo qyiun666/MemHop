@@ -47,7 +47,7 @@ func CompressScenes(ctx context.Context, ac *domain.Context, scenes []uint64, re
 			if len(topics) < ac.Defaults.DreamCompressMinTopics {
 				return
 			}
-			out, err := llmops.Consolidate(ctx, ac.LLM, topics)
+			out, err := llmops.Consolidate(ctx, ac.LLM, topics, ac.Defaults.DreamCompressMinTopics)
 			if err != nil {
 				countFailure()
 				return
@@ -92,6 +92,10 @@ func applyGroups(ctx context.Context, ac *domain.Context, sceneID uint64, topics
 	var rejected int
 	for _, g := range out.L2Groups {
 		if len(g.NodeHashes) < 2 {
+			// A one-name group is a proposal this engine cannot apply: fusing buys a
+			// parent over children, and there is nothing to put under it. It counts as
+			// proposed-but-not-applied, not as nothing to consolidate.
+			rejected++
 			continue
 		}
 		if sharesMember(g.NodeHashes, claimed) {

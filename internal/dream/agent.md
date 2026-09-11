@@ -5,7 +5,7 @@
 - `SceneSet`：一次流水线的目标场景集——指定一个（存在性是答案的一部分），或全域。
 - 两个保留窗阶段：`PruneContentStage`（报 `l4_prune`）与 `PrunePlanStage`（报
   `l5_prune`），共用 `ContentRetention` 这一个 7 天窗口，但各读自己的时间戳。
-- `CompressScenes`：每场景一 goroutine，取回融合组并逐组应用。一组的摘要是父话题
+- `CompressScenes`：每场景一 goroutine，取回融合组并逐组应用；问模型时把 `Defaults.DreamCompressMinTopics` 一并交出去——prompt 里那个目标条数就是本包用来决定「要不要压缩」的同一个数。一组的摘要是父话题
   名下 `Seq=SeqUser`、`Kind=KindUtterance`、`Role=RoleDream` 的一条 L4 内容，
   `RoleDream` 只由本包戳写；空摘要在组落下第一条记录之前就被拒，其后任一步失败才经
   `discardFusedGroup` 回滚整组：只照本组自己写过的 id 定点撤销（话题上没有引用清单可
@@ -49,7 +49,7 @@
   退出）：在途豁免按整棵树算，而读不回的那一个偏偏可能就是唯一没做完的节点。
 - `applyGroups` 分报 applied/rejected，rejected 计入 `failures`——「没什么可压缩」
   和「组没法应用」是两件事；空 `merged_summary` 属于后者，它会让子话题沉到一个
-  什么都带不动的父节点下面。组按提出顺序应用，点名已落地成员的组计入 rejected：
+  什么都带不动的父节点下面；只点名一个成员的退化组同属后者（没有子可沉），它不静默跳过。组按提出顺序应用，点名已落地成员的组计入 rejected：
   一组应用过即把那些成员记为本场景已下沉，同一轮不会被沉两次。父 id 由组的时间界
   派生，所以成员互斥的两个组仍可能算出同一个父 id——这种组同样计入 rejected，且拒在
   本组写任何记录之前。

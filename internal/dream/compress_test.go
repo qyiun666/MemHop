@@ -59,8 +59,8 @@ func TestApplyGroupsRejectsOverlappingGroups(t *testing.T) {
 	firstParent := core.ComputeTopicID(sceneID, 1000, 2001)
 	secondParent := core.ComputeTopicID(sceneID, 1001, 2002)
 	out := &llmops.ConsolidationOutput{L2Groups: []llmops.L2Group{
-		{SceneID: sceneID, NodeHashes: []uint64{11, 12}, MergedSummary: "两轮把登录链路讲完"},
-		{SceneID: sceneID, NodeHashes: []uint64{12, 13}, MergedSummary: "两轮都在追同一个 token 问题"},
+		{NodeHashes: []uint64{11, 12}, MergedSummary: "两轮把登录链路讲完"},
+		{NodeHashes: []uint64{12, 13}, MergedSummary: "两轮都在追同一个 token 问题"},
 	}}
 
 	applied, rejected := applyGroups(context.Background(), ac, sceneID, topics, out)
@@ -128,8 +128,8 @@ func TestApplyGroupsRefusesCollidingParentID(t *testing.T) {
 	ac := domain.NewContext(core.DefaultAgentID, context.Background(), engine, anyKeywords{}, &config.MemHopDefaults{})
 
 	out := &llmops.ConsolidationOutput{L2Groups: []llmops.L2Group{
-		{SceneID: sceneID, NodeHashes: []uint64{21, 22}, MergedSummary: "第一组：登录链路"},
-		{SceneID: sceneID, NodeHashes: []uint64{23, 24}, MergedSummary: "第二组：完全不同的话题，但时间界一模一样"},
+		{NodeHashes: []uint64{21, 22}, MergedSummary: "第一组：登录链路"},
+		{NodeHashes: []uint64{23, 24}, MergedSummary: "第二组：完全不同的话题，但时间界一模一样"},
 	}}
 	applied, rejected := applyGroups(context.Background(), ac, sceneID, topics, out)
 	if applied != 1 || rejected != 1 {
@@ -193,7 +193,7 @@ func TestApplyGroupsRollsBackTheGroupWhenASinkRefuses(t *testing.T) {
 	ac := domain.NewContext(core.DefaultAgentID, context.Background(), engine, anyKeywords{}, &config.MemHopDefaults{})
 
 	out := &llmops.ConsolidationOutput{L2Groups: []llmops.L2Group{
-		{SceneID: sceneID, NodeHashes: []uint64{31, 32}, MergedSummary: "两轮把登录链路讲完"},
+		{NodeHashes: []uint64{31, 32}, MergedSummary: "两轮把登录链路讲完"},
 	}}
 	applied, rejected := applyGroups(context.Background(), ac, sceneID, topics, out)
 	if applied != 0 || rejected != 1 {
@@ -239,7 +239,7 @@ func TestApplyGroupsRefusesAGroupItCannotSeeWhole(t *testing.T) {
 	ac := domain.NewContext(core.DefaultAgentID, context.Background(), engine, anyKeywords{}, &config.MemHopDefaults{})
 
 	out := &llmops.ConsolidationOutput{L2Groups: []llmops.L2Group{
-		{SceneID: sceneID, NodeHashes: []uint64{41, 42}, MergedSummary: "两轮的内容，其中一轮引擎看不见"},
+		{NodeHashes: []uint64{41, 42}, MergedSummary: "两轮的内容，其中一轮引擎看不见"},
 	}}
 	applied, rejected := applyGroups(context.Background(), ac, sceneID, []core.TopicSlot{seen}, out)
 	if applied != 0 || rejected != 1 {
@@ -255,5 +255,42 @@ func TestApplyGroupsRefusesAGroupItCannotSeeWhole(t *testing.T) {
 	}
 	if member.Depth != 1 || member.ParentID != nil {
 		t.Fatalf("a refused group sinks nothing: depth=%d parent=%v", member.Depth, member.ParentID)
+	}
+}
+
+// A one-name group is a proposal this engine cannot apply — a fused parent exists to
+// stand over children — and it is a different fact from "nothing left to
+// consolidate". Skipping it without a word makes the report read as a scene nobody
+// asked to merge, which is exactly the case this pass must not be confused with.
+func TestApplyGroupsCountsADegenerateGroupAsProposedButUnapplied(t *testing.T) {
+	engine, err := core.Create(filepath.Join(t.TempDir(), "test.meh"))
+	if err != nil {
+		t.Fatalf("create engine: %v", err)
+	}
+	t.Cleanup(func() { _ = engine.Close() })
+
+	const sceneID = uint64(7)
+	alone := core.TopicSlot{
+		ID: 51, SceneID: sceneID, Depth: 1, FusedKeywords: []string{"原文"},
+		UserTimestamp: 1000, AgentTimestamp: 2001,
+	}
+	if err := core.WriteTopicSlot(engine, core.DefaultAgentID, 51, &alone); err != nil {
+		t.Fatalf("write topic: %v", err)
+	}
+	ac := domain.NewContext(core.DefaultAgentID, context.Background(), engine, anyKeywords{}, &config.MemHopDefaults{})
+
+	out := &llmops.ConsolidationOutput{L2Groups: []llmops.L2Group{
+		{NodeHashes: []uint64{51}, MergedSummary: "一轮自己算一组"},
+	}}
+	applied, rejected := applyGroups(context.Background(), ac, sceneID, []core.TopicSlot{alone}, out)
+	if applied != 0 || rejected != 1 {
+		t.Fatalf("a degenerate group is proposed-but-unapplied, got applied=%d rejected=%d", applied, rejected)
+	}
+	member, err := core.ReadTopicSlot(engine, core.DefaultAgentID, 51)
+	if err != nil {
+		t.Fatalf("read the member: %v", err)
+	}
+	if member.Depth != 1 || member.ParentID != nil {
+		t.Fatalf("a degenerate group sinks nothing: depth=%d parent=%v", member.Depth, member.ParentID)
 	}
 }

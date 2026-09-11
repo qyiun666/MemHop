@@ -4,41 +4,42 @@
 package llmops
 
 import (
+	"context"
 	"strings"
 	"testing"
 
 	"github.com/qyiun666/MemHop/internal/common"
+	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
-// A reply is JSON the model may wrap in a fence, and the two id fields come back
-// as numbers or as quoted strings depending on the model — both shapes have to
-// parse, since a group that fails to parse is a merge the scene never gets.
+// A reply is JSON the model may wrap in a fence, and node ids come back as numbers
+// or as quoted strings depending on the model — both shapes have to parse, since
+// a group that fails to parse is a merge the scene never gets.
 func TestParseConsolidateResponseAcceptsBothIDShapes(t *testing.T) {
 	out, err := parseConsolidateResponse("```json\n" +
-		`{"l2_groups":[{"scene_id":"7","node_hashes":[11,"22"],"merged_summary":"合并"}],` +
-		`"l2_compression_needed":true}` + "\n```")
+		`{"l2_groups":[{"node_hashes":[11,"22"],"merged_summary":"合并"}]}` + "\n```")
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if !out.L2CompressionNeeded || len(out.L2Groups) != 1 {
+	if len(out.L2Groups) != 1 {
 		t.Fatalf("output = %+v", out)
 	}
 	g := out.L2Groups[0]
-	if g.SceneID != 7 || len(g.NodeHashes) != 2 || g.NodeHashes[0] != 11 || g.NodeHashes[1] != 22 {
-		t.Fatalf("group = %+v, want scene 7 holding nodes 11 and 22", g)
+	if len(g.NodeHashes) != 2 || g.NodeHashes[0] != 11 || g.NodeHashes[1] != 22 {
+		t.Fatalf("group = %+v, want nodes 11 and 22", g)
 	}
 	if g.MergedSummary != "合并" {
 		t.Fatalf("summary = %q", g.MergedSummary)
 	}
 }
 
-// An id that cannot be parsed is an error rather than a dropped group, and a
-// reply that is not JSON at all is an error rather than an empty merge list:
-// either one silently thinned would read exactly like a model that merged less.
+// A member id that cannot be parsed is an error rather than a dropped group, and a
+// reply that is not JSON at all is an error rather than an empty merge list: either
+// one silently thinned would read exactly like a model that merged less.
 func TestParseConsolidateResponseRefusesWhatItCannotUse(t *testing.T) {
 	for _, reply := range []string{
-		`{"l2_groups":[{"scene_id":"not-a-number","node_hashes":[1]}]}`,
-		`{"l2_groups":[{"scene_id":7,"node_hashes":["nope"]}]}`,
+		`{"l2_groups":[{"node_hashes":["nope"]}]}`,
+		`{"l2_groups":[{"node_hashes":[1,"still-not-a-number"]}]}`,
 		`{"l2_groups":`,
 		`I merged everything, sorry about the JSON`,
 	} {
@@ -48,14 +49,29 @@ func TestParseConsolidateResponseRefusesWhatItCannotUse(t *testing.T) {
 	}
 }
 
+// The topic count the prompt aims at is the caller's configured floor, stated
+// twice: a constant here would tell the model to merge to a number the engine
+// never runs by, and rule 2 (never fuse different subjects) outranks it.
+func TestSystemConsolidateStatesTheConfiguredFloor(t *testing.T) {
+	prompt := systemConsolidate(40)
+	for _, want := range []string{"down toward 40 or below", "the total is already 40 or fewer"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("the prompt never states %q", want)
+		}
+	}
+	if strings.Contains(prompt, " 20") {
+		t.Fatal("a topic count that is not the one passed in is still in the prompt")
+	}
+}
+
 // The MBTI type word is re-derived from the four dimensions, so a reply whose
 // type contradicts its own numbers does not get to keep it. The dimensions
 // themselves are clamped: an out-of-range signal would otherwise flow straight
 // into the profile record.
 func TestParseDistillResponseDerivesTypeAndClamps(t *testing.T) {
-	out, err := parseDistillResponse(`{"emotion":{"valence":4,"arousal":-2,"dominance":0.6},` +
-		`"mbti":{"i_e":-9,"n_s":0.2,"t_f":-0.3,"j_p":0.1,"type":"ZZZZ"},` +
-		`"personality":"  务实直接  ","per_node":[]}`)
+	out, err := parseDistillResponse(`{"emotion":{"valence":4,"arousal":-2,"dominance":0.6},`+
+		`"mbti":{"i_e":-9,"n_s":0.2,"t_f":-0.3,"j_p":0.1,"type":"ZZZZ"},`+
+		`"personality":"  务实直接  ","per_node":[]}`, nil)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -73,12 +89,37 @@ func TestParseDistillResponseDerivesTypeAndClamps(t *testing.T) {
 	}
 }
 
+// Valid JSON that answers none of the contract is not a thin answer, it is no
+// answer: the zeros it decodes to would erase the distilled emotion, and four
+// silent dimensions derive a personality type out of nothing.
+func TestParseDistillResponseRefusesAReplyWithNoContract(t *testing.T) {
+	for _, reply := range []string{
+		`{}`,
+		`{"personality":"看起来挺乐观"}`,
+		`{"emotion":{"valence":0.5,"arousal":0.5,"dominance":0.5}}`,
+		`{"emotion":{"valence":0.5,"arousal":0.5,"dominance":0.5},"mbti":null}`,
+	} {
+		if _, err := parseDistillResponse(reply, nil); common.CodeOf(err) != common.ErrLLM {
+			t.Fatalf("%q: want ErrLLM, got %v", reply, err)
+		}
+	}
+	// Both blocks present and quiet is a real answer: nothing to merge, nothing
+	// to invent — the caller decides what to do with a neutral reading.
+	out, err := parseDistillResponse(`{"emotion":{},"mbti":{},"personality":""}`, nil)
+	if err != nil {
+		t.Fatalf("an in-contract neutral reply was refused: %v", err)
+	}
+	if out.MBTI.Type != "ESFP" {
+		t.Fatalf("type = %q, want the four zero dimensions read as their positive side", out.MBTI.Type)
+	}
+}
+
 // A personality past the cap is cut to it rather than refused: the summary goes
 // into the profile record and into every later prompt, so the cap is what keeps
 // one verbose reply from inflating both.
 func TestParseDistillResponseCapsPersonality(t *testing.T) {
 	long := strings.Repeat("话", distillPersonalityMaxRunes+40)
-	out, err := parseDistillResponse(`{"emotion":{},"mbti":{},"personality":"` + long + `","per_node":[]}`)
+	out, err := parseDistillResponse(`{"emotion":{},"mbti":{},"personality":"`+long+`","per_node":[]}`, nil)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -87,23 +128,100 @@ func TestParseDistillResponseCapsPersonality(t *testing.T) {
 	}
 }
 
-// Per-node rows carry the id they belong to as hex; a row whose id will not
-// parse is dropped, because writing it would attribute one node's emotion to
-// whatever the hex happened to collide with.
-func TestParseDistillResponseSkipsUnparsableNodeRows(t *testing.T) {
-	out, err := parseDistillResponse(`{"emotion":{},"mbti":{},"personality":"",` +
-		`"per_node":[{"id_hex":"0000000000000001","valence":0.5,"arousal":0.5},` +
-		`{"id_hex":"nonsense","valence":0.9,"arousal":0.9}]}`)
+// A per-node row is kept only when it names a node this pass put in front of the
+// model — as hex that parses and as one of the sampled ids. The id is the
+// backfill's address: a row naming anything else has no node to write to, and
+// handing it down aborts the whole distillation stage on ErrNotFound, every pass,
+// until the model happens to answer differently.
+func TestParseDistillResponseKeepsOnlySampledNodeRows(t *testing.T) {
+	known := map[uint64]struct{}{1: {}}
+	out, err := parseDistillResponse(`{"emotion":{},"mbti":{},"personality":"",`+
+		`"per_node":[{"id_hex":"0000000000000001","valence":0.5,"arousal":0.5},`+
+		`{"id_hex":"0000000000000002","valence":0.9,"arousal":0.9},`+
+		`{"id_hex":"nonsense","valence":0.9,"arousal":0.9}]}`, known)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
 	if len(out.PerNode) != 1 || out.PerNode[0].IDHex != "0000000000000001" {
-		t.Fatalf("per_node = %+v, want only the row with a parsable id", out.PerNode)
+		t.Fatalf("per_node = %+v, want only the row naming a sampled node", out.PerNode)
 	}
 }
 
 func TestParseDistillResponseRefusesNonJSON(t *testing.T) {
-	if _, err := parseDistillResponse("the agent seems cheerful"); common.CodeOf(err) != common.ErrLLM {
+	if _, err := parseDistillResponse("the agent seems cheerful", nil); common.CodeOf(err) != common.ErrLLM {
 		t.Fatalf("want ErrLLM, got %v", err)
+	}
+}
+
+// budgetSpy records every output budget a call point asks the transport for, and
+// answers with something no parser can use, so the whole attempt ladder runs.
+type budgetSpy struct {
+	ceiling    int
+	calls      []int
+	escalation [][2]int
+}
+
+func (s *budgetSpy) Chat(_ context.Context, _, _ string, maxTokens int) (string, error) {
+	s.calls = append(s.calls, maxTokens)
+	return "not json at all", nil
+}
+
+func (s *budgetSpy) ChatWithRetry(_ context.Context, _, _ string, primaryMax, retryMax int) (string, error) {
+	s.calls = append(s.calls, primaryMax)
+	s.escalation = append(s.escalation, [2]int{primaryMax, retryMax})
+	return "not json at all", nil
+}
+
+func (s *budgetSpy) MaxOutputTokens() int { return s.ceiling }
+
+// An endpoint configured for 64 output tokens refuses a request for 8192 outright,
+// so no rung of any ladder may ask above the ceiling — the ladder that used to end
+// at the consolidation constant failed the turn it was meant to rescue.
+func TestKeywordLadderStaysWithinTheConfiguredCeiling(t *testing.T) {
+	spy := &budgetSpy{ceiling: 64}
+	if _, err := ExtractKeywords(context.Background(), spy, "今天把存储层跑通了"); err == nil {
+		t.Fatal("the spy never answers in JSON; extraction must report that")
+	}
+	if len(spy.calls) < 3 {
+		t.Fatalf("the ladder did not run: %v", spy.calls)
+	}
+	for _, asked := range spy.calls {
+		if asked > spy.ceiling {
+			t.Fatalf("asked for %d output tokens above the configured ceiling %d: %v",
+				asked, spy.ceiling, spy.calls)
+		}
+	}
+}
+
+// The truncation retry is where headroom gets spent, and it may spend exactly what
+// the endpoint declared: at or below the design ceiling nothing more is available,
+// and above it that room is what a consolidated summary actually needs. The first
+// attempt never asks above the design ceiling it was built for.
+func TestTruncationRetryEscalatesToTheEndpointCeiling(t *testing.T) {
+	for _, tc := range []struct {
+		ceiling   int
+		wantRetry int
+	}{
+		{ceiling: 1024, wantRetry: 1024},
+		{ceiling: 16384, wantRetry: 16384},
+	} {
+		spy := &budgetSpy{ceiling: tc.ceiling}
+		if _, err := Distill(context.Background(), spy, []L1Sample{{IDHash: 1, Importance: 0.5}}); err == nil {
+			t.Fatalf("ceiling %d: the spy never answers in JSON", tc.ceiling)
+		}
+		if got := spy.escalation[0]; got[0] > tc.ceiling || got[1] != tc.wantRetry {
+			t.Fatalf("ceiling %d: distill asked primary %d (over the ceiling?) then retry %d, want retry %d",
+				tc.ceiling, got[0], got[1], tc.wantRetry)
+		}
+
+		spy = &budgetSpy{ceiling: tc.ceiling}
+		topics := []core.TopicSlot{{ID: 1, SceneID: 7, UserTimestamp: 1000}}
+		if _, err := Consolidate(context.Background(), spy, topics, 20); err == nil {
+			t.Fatalf("ceiling %d: the spy never answers in JSON", tc.ceiling)
+		}
+		if got := spy.escalation[0]; got[0] > tc.ceiling || got[1] != tc.wantRetry {
+			t.Fatalf("ceiling %d: consolidate asked primary %d then retry %d, want retry %d",
+				tc.ceiling, got[0], got[1], tc.wantRetry)
+		}
 	}
 }

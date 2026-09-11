@@ -41,8 +41,8 @@ func Default() *core.ProfileSlot {
 }
 
 // Samples ranks L1 nodes by Importance×exp(-lambda×age) and returns the top
-// maxDistillSamples for distillation, plus the total node count.
-func Samples(engine *core.StorageEngine, agentID uint64) ([]core.DistillSample, int) {
+// maxDistillSamples for distillation.
+func Samples(engine *core.StorageEngine, agentID uint64) []core.DistillSample {
 	nowMs := time.Now().UnixMilli()
 	candidates := make([]core.DistillSample, 0)
 	for _, node := range core.CollectAllSceneNodes(engine, agentID) {
@@ -53,14 +53,13 @@ func Samples(engine *core.StorageEngine, agentID uint64) ([]core.DistillSample, 
 			UpdatedAt:  node.UpdatedAt,
 		})
 	}
-	total := len(candidates)
 	slices.SortFunc(candidates, func(a, b core.DistillSample) int {
 		return cmp.Compare(SampleRank(b, nowMs), SampleRank(a, nowMs))
 	})
 	if len(candidates) > maxDistillSamples {
 		candidates = candidates[:maxDistillSamples]
 	}
-	return candidates, total
+	return candidates
 }
 
 // SampleRank is the recency-weighted importance of one distillation sample.

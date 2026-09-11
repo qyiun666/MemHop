@@ -103,6 +103,46 @@ func mockLLMServerSeq(t *testing.T, contents ...string) *httptest.Server {
 	return srv
 }
 
+// contractLLMServer answers each of the three LLM contracts with a valid reply of
+// its own, told apart by the system prompt. A stub that answers every call with
+// the keyword track makes a full Dream stop at the distillation stage — and that
+// is the stage's contract working (a reply carrying no emotion/mbti block is no
+// answer), not something a scene-read test means to exercise.
+func contractLLMServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			http.NotFound(w, r)
+			return
+		}
+		var body struct {
+			Messages []struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		content := turnKeywords
+		if len(body.Messages) > 0 {
+			switch system := body.Messages[0].Content; {
+			case strings.Contains(system, "associative memory samples"):
+				content = `{"emotion":{"valence":0.5,"arousal":0.5,"dominance":0.5},` +
+					`"mbti":{"i_e":0.1,"n_s":0.1,"t_f":0.1,"j_p":0.1},"personality":"务实","per_node":[]}`
+			case strings.Contains(system, "L2 chat memory topics"):
+				content = `{"l2_groups":[]}`
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{{
+				"message": map[string]any{"role": "assistant", "content": content},
+			}},
+		})
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
 // cancellingLLMServer answers like mockLLMServerSeq and cancels cancel right
 // after replying to the cancelOn-th request (1-based). A test needs that timing
 // when the cancellation must land after a stage has already written: then it is

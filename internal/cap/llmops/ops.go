@@ -30,10 +30,21 @@ type Chat interface {
 	MaxOutputTokens() int
 }
 
-// ConsolidationMaxTokens is the L2 consolidation output ceiling; it doubles
-// as the escalation budget for every truncation retry across the call
-// points (keyword extraction and distillation escalate up to it).
+// ConsolidationMaxTokens is the L2 consolidation output ceiling and the widest
+// budget keyword extraction ever asks for. A truncation retry goes past it only as
+// far as the endpoint's own configured ceiling allows.
 const ConsolidationMaxTokens = 8192
+
+// escalationCeiling is the widest output budget a retry may ask for: what the
+// endpoint was configured to accept. Asking above it is a request the transport
+// refuses outright, and it is the only headroom a reply truncated at the first
+// attempt has — so this is where the configured ceiling is actually spent.
+func escalationCeiling(chat Chat) int {
+	if n := chat.MaxOutputTokens(); n > 0 {
+		return n
+	}
+	return ConsolidationMaxTokens
+}
 
 // minTokens keeps a call's output cap at or below the configured ceiling.
 func minTokens(configured, ceiling int) int {
