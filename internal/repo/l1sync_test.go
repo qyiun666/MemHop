@@ -134,3 +134,51 @@ func TestSyncL1NodesFromL2SkipsCompressed(t *testing.T) {
 		t.Fatal("updated_at in the future")
 	}
 }
+
+// An L1 node that is there but will not read back is not a missing node: the pass
+// that treats it as one writes a fresh record over it, resetting Importance,
+// Valence, Arousal and CreatedAt and dropping the EdgeIDs the hyperedges still
+// name — the opposite of what this pass promises.
+func TestSyncL1NodesFromL2KeepsANodeItCannotRead(t *testing.T) {
+	engine := tempEngine(t)
+	sceneID := common.HashID("sceneA")
+	nodeID := core.SceneNodeID(sceneID)
+	const unreadable = `{"id":`
+
+	mustCreateTurn(t, engine, sceneID, []string{"k1"}, 1000)
+	if _, err := SyncL1NodesFromL2(engine, core.DefaultAgentID); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if _, err := engine.WriteRecord(core.DefaultAgentID, core.RecL1SceneNode, nodeID, []byte(unreadable)); err != nil {
+		t.Fatalf("make the node unreadable: %v", err)
+	}
+	if _, err := SyncL1NodesFromL2(engine, core.DefaultAgentID); common.CodeOf(err) != common.ErrDeserialization {
+		t.Fatalf("sync must report the node it cannot read, got %v", err)
+	}
+	rt, data, err := engine.ReadRecord(core.DefaultAgentID, nodeID)
+	if err != nil {
+		t.Fatalf("read the node back: %v", err)
+	}
+	if rt != core.RecL1SceneNode || string(data) != unreadable {
+		t.Fatalf("the pass overwrote a node it could not read: type=%d data=%s", rt, data)
+	}
+}
+
+// A topic that will not read back is not a topic that left the scene: dropping it
+// from the enumeration makes the node it stood on look unchanged or shrunken, and
+// the next pass writes that shorter list as the scene's memory footprint.
+func TestSyncL1NodesFromL2StopsOnUnreadableTopic(t *testing.T) {
+	engine := tempEngine(t)
+	sceneID := common.HashID("sceneA")
+	unreadableTopic := mustCreateTurn(t, engine, sceneID, []string{"k1"}, 1000)
+	mustCreateTurn(t, engine, sceneID, []string{"k2"}, 2000)
+	if _, err := engine.WriteRecord(core.DefaultAgentID, core.RecL2Topic, unreadableTopic, []byte(`{"id":`)); err != nil {
+		t.Fatalf("make the topic unreadable: %v", err)
+	}
+	if _, err := SyncL1NodesFromL2(engine, core.DefaultAgentID); common.CodeOf(err) != common.ErrDeserialization {
+		t.Fatalf("sync must report the topic it cannot read, got %v", err)
+	}
+	if _, err := core.ReadSceneNode(engine, core.DefaultAgentID, core.SceneNodeID(sceneID)); common.CodeOf(err) != common.ErrNotFound {
+		t.Fatalf("a pass that could not enumerate must write no node: %v", err)
+	}
+}

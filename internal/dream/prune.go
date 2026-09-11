@@ -54,7 +54,17 @@ func PrunePlanStage(ac *domain.Context, agentID uint64, rep *core.DreamReport) {
 	var doomed []uint64
 	// The engine is read rather than the cache: Dream is a disk maintainer, not a
 	// hot path, and the sweep must not be shaped by a cache that could be behind.
-	for _, agg := range repo.CollectPlanNodes(ac.Engine, agentID) {
+	aggs, err := repo.CollectPlanNodes(ac.Engine, agentID)
+	if err != nil {
+		// The exemption this pass reads is per-tree and derived from every node in
+		// it, so an unreadable node is exactly the one that could still be holding a
+		// tree alive. Skipping the sweep costs one Dream cycle; sweeping on a partial
+		// set costs the tree.
+		slog.Warn("dream: plan nodes not swept", "agent", common.FormatHash(agentID), "err", err)
+		AppendStage(rep, "l5_prune", start, err)
+		return
+	}
+	for _, agg := range aggs {
 		if agg.HasNonDone && agg.LastActiveAt >= cutoff {
 			continue
 		}
@@ -70,7 +80,6 @@ func PrunePlanStage(ac *domain.Context, agentID uint64, rep *core.DreamReport) {
 		sweeps = append(sweeps, sweep{topicID: agg.TopicID, ids: ids})
 		doomed = append(doomed, ids...)
 	}
-	var err error
 	if len(doomed) > 0 {
 		if _, err = repo.DeletePlanNodesByIDs(ac.Engine, agentID, doomed); err != nil {
 			slog.Warn("dream: plan-node prune failed", "agent", common.FormatHash(agentID), "err", err)

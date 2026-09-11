@@ -129,7 +129,10 @@ func QueryArchivesL4(engine *core.StorageEngine, agentID uint64, q ArchiveQuery)
 		len(q.NodeSeqs) == 0 && q.Keyword == "" && q.Start == 0 && q.End == 0:
 		out, err = archivesByIDOnly(engine, agentID, q.IDs)
 	default:
-		out = core.CollectAllArchives(engine, agentID)
+		// The domain-wide scan is a read, not a cache rebuild: one record the
+		// index names but the payload will not decode would otherwise leave the
+		// caller holding a shorter transcript that reads exactly like a whole one.
+		out, err = core.CollectAllStrict[core.ArchiveSlot](engine, agentID, core.RecL4Archive)
 	}
 	if err != nil {
 		return nil, err

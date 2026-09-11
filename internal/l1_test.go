@@ -10,6 +10,7 @@ package internal
 import (
 	"testing"
 
+	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
@@ -66,5 +67,27 @@ func TestListL1OnAnUndreamedDomainIsEmptyNotNil(t *testing.T) {
 	}
 	if len(nodes) != 0 {
 		t.Fatalf("an undreamed domain reported %d nodes", len(nodes))
+	}
+}
+
+// One node the engine cannot return is reported, not left out: a host comparing
+// two scenes' memory footprints cannot tell "Dream never built that node" apart
+// from "this record is damaged" when the listing is just shorter.
+func TestListL1ReportsUnreadableNode(t *testing.T) {
+	db := newTestDB(t, newTestEngine(t))
+	damaged := core.SceneNodeID(7)
+	for _, scene := range []uint64{7, 8} {
+		id := core.SceneNodeID(scene)
+		if err := core.WriteSceneNode(db.engine, core.DefaultAgentID, id, &core.SceneNode{
+			IDHash: id, SceneID: scene, Importance: 1,
+		}); err != nil {
+			t.Fatalf("write node for scene %d: %v", scene, err)
+		}
+	}
+	if _, err := db.engine.WriteRecord(core.DefaultAgentID, core.RecL1SceneNode, damaged, []byte(`{"id":`)); err != nil {
+		t.Fatalf("make one node unreadable: %v", err)
+	}
+	if _, err := db.ListL1(core.DefaultAgentID); common.CodeOf(err) != common.ErrDeserialization {
+		t.Fatalf("the listing must report the node it cannot return, got %v", err)
 	}
 }

@@ -21,8 +21,12 @@ type PlanCache struct {
 }
 
 func buildPlanCache(engine *core.StorageEngine, agentID uint64) *PlanCache {
+	// The tolerant scan, unlike the retention sweep's: a cache is rebuilt from what
+	// still reads, and an unreadable node is dropped from the mirror the same way an
+	// expired one is. The sweep reads strictly because there the missing node would
+	// decide which records get tombstoned.
 	pc := &PlanCache{plans: make(map[uint64]*repo.PlanAggregate)}
-	for _, agg := range repo.CollectPlanNodes(engine, agentID) {
+	for _, agg := range repo.GroupPlanNodes(core.CollectAllPlanNodes(engine, agentID)) {
 		a := agg
 		pc.plans[a.TopicID] = &a
 	}

@@ -143,6 +143,24 @@ func TestQueryArchivesL4TopicIndexDriftIsAnError(t *testing.T) {
 	}
 }
 
+// The domain-wide route answers the same promise as the indexed one: a record it
+// cannot return is reported. Otherwise a content search quietly hands back fewer
+// lines than the domain holds, and the caller has no way to tell that from a turn
+// that said less.
+func TestQueryArchivesL4ScanReportsUnreadableRecord(t *testing.T) {
+	engine := tempEngine(t)
+	idx := index.NewL4Index()
+	writeContent(t, engine, idx, 7, core.SeqUser, core.KindUtterance, "能读的", 1000)
+	damaged := writeContent(t, engine, idx, 8, core.SeqUser, core.KindUtterance, "读不动的", 1100)
+	if _, err := engine.WriteRecord(core.DefaultAgentID, core.RecL4Archive, damaged, []byte(`{"id":`)); err != nil {
+		t.Fatalf("make the record unreadable: %v", err)
+	}
+	kind := core.KindUtterance
+	if _, err := QueryArchivesL4(engine, core.DefaultAgentID, ArchiveQuery{Kind: &kind}); common.CodeOf(err) != common.ErrDeserialization {
+		t.Fatalf("the scan must report the record it cannot return, got %v", err)
+	}
+}
+
 func TestDeleteTopicArchivesTakesBothKinds(t *testing.T) {
 	engine := tempEngine(t)
 	idx := index.NewL4Index()

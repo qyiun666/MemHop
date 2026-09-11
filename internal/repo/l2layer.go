@@ -66,53 +66,81 @@ const (
 	DeleteTopicsL2                  // ids are topics
 )
 
+// TopicIDsBySceneL2 enumerates every topic (any depth) owned by one of the
+// given scenes. The scan is strict: the list is what a cascade tombstones
+// afterwards, and a topic that merely would not read must not be dropped from it.
+func TopicIDsBySceneL2(engine *core.StorageEngine, agentID uint64, sceneIDs ...uint64) ([]uint64, error) {
+	topics, err := core.CollectAllTopicsStrict(engine, agentID)
+	if err != nil {
+		return nil, err
+	}
+	set := common.ToSet(sceneIDs)
+	var ids []uint64
+	for _, topic := range topics {
+		if _, ok := set[topic.SceneID]; ok {
+			ids = append(ids, topic.ID)
+		}
+	}
+	return ids, nil
+}
+
 // DeleteL2 batch-deletes: DeleteScenesL2 treats ids as scene IDs (all topics
 // of the scene plus the scene record itself); DeleteTopicsL2 treats them as
-// topic IDs.
-func DeleteL2(engine *core.StorageEngine, agentID uint64, ids []uint64, target uint8) bool {
+// topic IDs. An unreadable topic aborts the batch with that cause rather than
+// returning a delete that left a record alive.
+func DeleteL2(engine *core.StorageEngine, agentID uint64, ids []uint64, target uint8) error {
 	var targets []uint64
 	switch target {
 	case DeleteScenesL2: // scenes
-		sceneSet := common.ToSet(ids)
-		for _, topic := range core.CollectAllTopics(engine, agentID) {
-			if _, ok := sceneSet[topic.SceneID]; ok {
-				targets = append(targets, topic.ID)
-			}
+		sceneTopics, err := TopicIDsBySceneL2(engine, agentID, ids...)
+		if err != nil {
+			return err
 		}
-		targets = append(targets, ids...) // the scene records themselves
+		targets = append(sceneTopics, ids...) // the scene records themselves
 	case DeleteTopicsL2: // topics
+		topics, err := core.CollectAllTopicsStrict(engine, agentID)
+		if err != nil {
+			return err
+		}
 		idSet := common.ToSet(ids)
-		for _, topic := range core.CollectAllTopics(engine, agentID) {
+		for _, topic := range topics {
 			if _, ok := idSet[topic.ID]; ok {
 				targets = append(targets, topic.ID)
 			}
 		}
 	default:
-		return false
+		return common.NewError(common.ErrInvalidQuery, "unknown L2 delete target")
+	}
+	if len(targets) == 0 {
+		return nil
 	}
 	_, err := engine.DeleteRecordBatch(agentID, targets)
-	return err == nil
+	return err
 }
 
 // MergeScenesL2 rewrites topics of the secondary scenes to the primary
 // scene in one batch, then deletes the secondary scene records (now empty).
-func MergeScenesL2(engine *core.StorageEngine, agentID uint64, primaryID uint64, secondaryIDs []uint64) bool {
+func MergeScenesL2(engine *core.StorageEngine, agentID uint64, primaryID uint64, secondaryIDs []uint64) error {
+	topics, err := core.CollectAllTopicsStrict(engine, agentID)
+	if err != nil {
+		return err
+	}
 	secondarySet := common.ToSet(secondaryIDs)
 	var writes []core.RecordEntry
-	for _, topic := range core.CollectAllTopics(engine, agentID) {
+	for _, topic := range topics {
 		if _, ok := secondarySet[topic.SceneID]; !ok {
 			continue
 		}
 		topic.SceneID = primaryID
 		entry, err := core.TopicEntry(agentID, &topic)
 		if err != nil {
-			return false
+			return err
 		}
 		writes = append(writes, entry)
 	}
 	if len(writes) > 0 {
 		if _, err := engine.WriteRecordBatch(writes); err != nil {
-			return false
+			return err
 		}
 	}
 	return DeleteL2(engine, agentID, secondaryIDs, DeleteScenesL2)
@@ -184,44 +212,38 @@ func SetSceneL3ID(engine *core.StorageEngine, agentID uint64, sceneID uint64, l3
 // CollectAllScenesL2 returns every scene record of the agent domain. How many
 // topics a scene holds is derived by whoever needs it — the surface read already
 // has the topic set in hand — so this layer does not scan topics to fill a count.
+// A scene the index names but the engine cannot read is reported rather than
+// skipped: a listing quietly missing one session is indistinguishable from a
+// session that was deleted.
 func CollectAllScenesL2(engine *core.StorageEngine, agentID uint64) ([]core.SceneSlot, error) {
-	var out []core.SceneSlot
-	for idHash := range engine.IndexByType(agentID, core.RecL2Scene) {
-		slot, err := core.ReadSceneSlot(engine, agentID, idHash)
-		if err != nil {
-			// The index names this record, so the engine failing to read it is
-			// not "no scenes" — reporting it keeps a corrupt domain from
-			// looking like an empty one.
-			if common.CodeOf(err) == common.ErrNotFound {
-				continue
-			}
-			return nil, err
-		}
-		out = append(out, *slot)
-	}
-	return out, nil
+	return core.CollectAllStrict[core.SceneSlot](engine, agentID, core.RecL2Scene)
 }
 
 // TopicClosureL2 gathers a topic and its recursive children (any depth); the
 // result is empty when the root topic does not exist (DeleteTopic then reports
-// ErrNotFound). The archives each topic owns are not collected here: they are
-// addressed by the topic's own id, so the caller hands it this closure and the
-// archive index supplies the rest.
-func TopicClosureL2(engine *core.StorageEngine, agentID uint64, root uint64) []uint64 {
+// ErrNotFound). The scan is strict because the result is what a cascade deletes:
+// a child that would not read back would survive its own parent. The archives
+// each topic owns are not collected here: they are addressed by the topic's own
+// id, so the caller hands it this closure and the archive index supplies the rest.
+func TopicClosureL2(engine *core.StorageEngine, agentID uint64, root uint64) ([]uint64, error) {
+	topics, err := core.CollectAllTopicsStrict(engine, agentID)
+	if err != nil {
+		return nil, err
+	}
 	have := make(map[uint64]struct{})
 	children := make(map[uint64][]uint64)
-	for _, t := range core.CollectAllTopics(engine, agentID) {
+	for _, t := range topics {
 		have[t.ID] = struct{}{}
 		if t.ParentID != nil {
 			children[*t.ParentID] = append(children[*t.ParentID], t.ID)
 		}
 	}
 	if _, ok := have[root]; !ok {
-		return nil
+		return nil, nil
 	}
-	topics := []uint64{root}
-	for i := 0; i < len(topics); i++ {
-		topics = append(topics, children[topics[i]]...)
+	closure := []uint64{root}
+	for i := 0; i < len(closure); i++ {
+		closure = append(closure, children[closure[i]]...)
 	}
-	return topics
+	return closure, nil
 }

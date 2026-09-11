@@ -4,7 +4,6 @@
 package scene
 
 import (
-	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/domain"
 	"github.com/qyiun666/MemHop/internal/repo"
 	"github.com/qyiun666/MemHop/internal/repo/core"
@@ -13,16 +12,18 @@ import (
 // DeleteTopics removes the given topics together with the L4 content they own,
 // the plan trees they opened and their cache entries, in one engine pass.
 // Records go first and the mirrors are dropped only after the disk agrees, so a
-// failed pass never leaves an index entry naming a deleted record. Callers hold
-// ac.Mu.
+// failed pass never leaves an index entry naming a deleted record. The two passes
+// that enumerate a whole domain bucket run before the topic's own content goes, so
+// a bucket holding a record that will not read back costs nothing instead of
+// leaving a deleted turn behind with its tree still on the disk. Callers hold ac.Mu.
 func DeleteTopics(ac *domain.Context, agentID uint64, topics []uint64) error {
-	if !repo.DeleteL2(ac.Engine, agentID, topics, repo.DeleteTopicsL2) {
-		return common.NewError(common.ErrIO, "delete topics", nil)
-	}
-	if err := repo.DeleteTopicArchives(ac.Engine, agentID, ac.L4, topics); err != nil {
+	if _, err := repo.DeletePlanNodesByTopicIDs(ac.Engine, agentID, topics); err != nil {
 		return err
 	}
-	if _, err := repo.DeletePlanNodesByTopicIDs(ac.Engine, agentID, topics); err != nil {
+	if err := repo.DeleteL2(ac.Engine, agentID, topics, repo.DeleteTopicsL2); err != nil {
+		return err
+	}
+	if err := repo.DeleteTopicArchives(ac.Engine, agentID, ac.L4, topics); err != nil {
 		return err
 	}
 	ac.RemoveTopicsFromIndices(topics)

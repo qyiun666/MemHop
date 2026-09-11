@@ -91,7 +91,7 @@
 `grep -rn 'L7\|RecL7' --include='*.go'` 零残留。
 
 - `EnsureGraphL3`：槽存在就复用其 id、不覆写记录；`CreateGraphL3` 是无条件写槽，只用于确认不存在时。
-- L2/L4 读路径的错误策略：只有 `CodeOf(err)==ErrNotFound` 才跳过那一条，其余（IO/关闭/损坏）一律返回 error——调用方分不清「少一条」和「没有这一条」。`ListScenesL2`/`CollectAllScenesL2`/`QueryArchivesL4` 因此都带 error 返回。
+- 本层两份扫描各一套：`CollectAll*` 跳过读不回的记录，`core.CollectAllStrict` 把那一次读失败报出来。带 error 返回、走严格那份的有 `TopicClosureL2`/`TopicIDsBySceneL2`/`DeleteL2`/`MergeScenesL2`/`SyncL1NodesFromL2`/`CollectPlanNodes`/`DeletePlanNodesByTopicIDs`，加上按单条读的 `ListScenesL2`/`CollectAllScenesL2`/`QueryArchivesL4`。`DeleteL2` 与 `MergeScenesL2` 的返回值因此从 bool 改成 error——`err == nil` 那一行原本把「删了没有」压成一个布尔。
 - L3 的两份列举（`ListNodeL3`/`ListEdgeL3`）按记录 id 升序返回：底下的 `CollectAll*` 是哈希表迭代，不排序就让同一个调用两次给出两个顺序，调用方带的条数上限也落在任意子集上。
 - L0 有**两个**画像读原语，按调用方要不要 payload 分。`GetProfileL0` 把记录自身的错误码带出来：`ErrNotFound` 只回答「没有这条记录」，读不动与解不开分别报 `ErrIO`、`ErrDeserialization`——拿到它的三处都在这个分界上分道，读侧只在「没有」时给空画像，`UpdateL0` 只在「没有」时才不继承库自有那几项（带着读不回来的 payload 去写，就是把情绪、MBTI 与域身份覆盖掉）。`HasProfileL0` 服务只要「在不在」、根本不读 payload 的调用方：打开文件时靠它决定是否播种主域画像，前者是 `(false, nil)`，后者原样上报。
 - `RenameTopicL2` 是读-改-写：整条记录重写，所以关键词轨、父指向与场景归属都原样保留，改的只有 `name` 一个字段。名字是否合法（空名算不算一个名字）不在本层判断，那是业务层的规则；话题不在就如实报 `ErrNotFound`，绝不凭空造一个——那会留下一个没有场景、没有深度、没有关键词的话题挂在一个别的记录都不指向的 id 上。
@@ -105,4 +105,4 @@
   这类原语（第二真相的活形式）。`ReadArchivesByIDs` 是把镜像点名的 id 清单换成记录的唯一一处，
   上一条那个「点名却读不到 = `ErrIO`」的判据就实现在这里，读侧不再各写一份。
 - 删除只有两条入口，都内置「磁盘删成功后才摘镜像」这一步序：带话题的 `DeleteTopicArchives`（整话题连删带摘）、按保留窗的 `DropExpiredArchives`（先 `ExpiredBefore` 只读地拿 id，删成后逐话题 `RemoveIDs`）。`TopicClosureL2` 只返回话题闭包——内容由闭包里的每个 id 去索引取回。
-- L5 只有计划节点（`l5layer.go`）：一个节点一条记录，键是开出这一轮的话题 id。`CollectPlanNodes` 按它分组（组内按 `Seq` 升序，即创建顺序），`PlanAggregate` 只带 `{TopicID, Nodes, LastActiveAt, HasNonDone}`——不带事件计数，也不带事件清单。`WritePlanNode` 校验 `IDHash == HashPlanNode(TopicID, Seq)` 且 `Seq != 0`：节点身份是从序号派生的，本层不接受调用方自备的第二把键，而 0 是「没赋值」不是一个可寻址的步骤。删除有 `DeletePlanNodesByIDs`（按 id 批删）与 `DeletePlanNodesByTopicIDs`（按话题连它的树一起删，靠扫节点桶按 `TopicID` 过滤——树没有内容侧那样的位置键可推）。本层没有「删某分支」的原语：作废发生在键上，不在记录上；节点记录上也没有路径字符串，一步加它整棵子树的序号集合由读的人沿 `ParentSeq` 求闭包得到。节点顺序与聚合的两个派生量只有这一份实现（`ComparePlanNodeSeq` / `RecomputePlanAgg`），`CollectPlanNodes` 与任何增量改动都经它们：增量维护出来的树与从磁盘重建出来的树因此不可能各算一套而漂移，`RecomputePlanAgg` 先把两个派生量归零也正是为了节点被摘掉后不留下已删节点贡献的旧值。
+- L5 只有计划节点（`l5layer.go`）：一个节点一条记录，键是开出这一轮的话题 id。`GroupPlanNodes` 按它分组（组内按 `Seq` 升序，即创建顺序），`CollectPlanNodes` 是「严格扫全域节点桶 + 分组」那一个入口，缓存重建走的分组是幸存记录那一份，`PlanAggregate` 只带 `{TopicID, Nodes, LastActiveAt, HasNonDone}`——不带事件计数，也不带事件清单。`WritePlanNode` 校验 `IDHash == HashPlanNode(TopicID, Seq)` 且 `Seq != 0`：节点身份是从序号派生的，本层不接受调用方自备的第二把键，而 0 是「没赋值」不是一个可寻址的步骤。删除有 `DeletePlanNodesByIDs`（按 id 批删）与 `DeletePlanNodesByTopicIDs`（按话题连它的树一起删，靠扫节点桶按 `TopicID` 过滤——树没有内容侧那样的位置键可推）。本层没有「删某分支」的原语：作废发生在键上，不在记录上；节点记录上也没有路径字符串，一步加它整棵子树的序号集合由读的人沿 `ParentSeq` 求闭包得到。节点顺序与聚合的两个派生量只有这一份实现（`ComparePlanNodeSeq` / `RecomputePlanAgg`），`CollectPlanNodes` 与任何增量改动都经它们：增量维护出来的树与从磁盘重建出来的树因此不可能各算一套而漂移，`RecomputePlanAgg` 先把两个派生量归零也正是为了节点被摘掉后不留下已删节点贡献的旧值。

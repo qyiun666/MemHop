@@ -159,8 +159,8 @@ func (db *DB) MergeScenes(agentID uint64, primaryID string, secondaryIDs []strin
 	if err := db.requireScenes(agentID, append([]uint64{primaryHash}, hashes...)...); err != nil {
 		return err
 	}
-	if !repo.MergeScenesL2(db.engine, agentID, primaryHash, hashes) {
-		return common.NewError(common.ErrIO, "merge scenes", nil)
+	if err := repo.MergeScenesL2(db.engine, agentID, primaryHash, hashes); err != nil {
+		return err
 	}
 	// Mirror the scene retarget in the L2MetaIndex so cached topics match the
 	// merged records (storage write already done).
@@ -252,7 +252,10 @@ func (db *DB) DeleteTopic(agentID uint64, topicID string) error {
 	if err != nil {
 		return err
 	}
-	topics := repo.TopicClosureL2(db.engine, agentID, parsedID)
+	topics, err := repo.TopicClosureL2(db.engine, agentID, parsedID)
+	if err != nil {
+		return err
+	}
 	if len(topics) == 0 {
 		return common.NewError(common.ErrNotFound, "topic not found")
 	}
@@ -275,14 +278,14 @@ func (db *DB) DeleteScene(agentID uint64, sceneID string) error {
 	if _, err := core.ReadSceneSlot(db.engine, agentID, sceneHash); err != nil {
 		return err
 	}
-	var topics []uint64
-	for _, t := range core.CollectAllTopics(db.engine, agentID) {
-		if t.SceneID == sceneHash {
-			topics = append(topics, t.ID)
-		}
+	// One enumeration serves both halves of the cascade: the batch delete below and
+	// the content/plan/mirror cleanup that follows it key on the same list.
+	topics, err := repo.TopicIDsBySceneL2(db.engine, agentID, sceneHash)
+	if err != nil {
+		return err
 	}
-	if !repo.DeleteL2(db.engine, agentID, []uint64{sceneHash}, repo.DeleteScenesL2) {
-		return common.NewError(common.ErrIO, "delete scene", nil)
+	if err := repo.DeleteL2(db.engine, agentID, []uint64{sceneHash}, repo.DeleteScenesL2); err != nil {
+		return err
 	}
 	if err := scene.DeleteTopics(ac, agentID, topics); err != nil {
 		return err

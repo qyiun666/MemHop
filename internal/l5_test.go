@@ -789,8 +789,12 @@ func TestPlanCache_ConsistentWithDisk(t *testing.T) {
 	if cached == nil {
 		t.Fatal("cached aggregate missing")
 	}
+	diskAggs, err := repo.CollectPlanNodes(db.engine, core.DefaultAgentID)
+	if err != nil {
+		t.Fatalf("collect plan nodes: %v", err)
+	}
 	var disk *repo.PlanAggregate
-	for _, agg := range repo.CollectPlanNodes(db.engine, core.DefaultAgentID) {
+	for _, agg := range diskAggs {
 		if agg.TopicID == 9 {
 			disk = &agg
 			break

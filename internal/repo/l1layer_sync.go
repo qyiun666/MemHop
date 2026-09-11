@@ -29,9 +29,14 @@ func DeleteSceneNodeL1(engine *core.StorageEngine, agentID uint64, sceneID uint6
 // depth<=2 topics. The node ID (hash("scene-node:"+sceneID)) is stable across
 // runs: existing nodes keep Importance/Valence/Arousal — this pass never decays
 // them — and are refreshed only when the topic set changed, so UpdatedAt keeps
-// accumulating decay. Returns the number of nodes created or updated.
+// accumulating decay. Returns the number of nodes created or updated. A topic or
+// node that will not read back stops the pass with that cause, since both would
+// otherwise be written as a record that lost fields.
 func SyncL1NodesFromL2(engine *core.StorageEngine, agentID uint64) (int, error) {
-	byScene := collectTopicIDsByScene(engine, agentID)
+	byScene, err := collectTopicIDsByScene(engine, agentID)
+	if err != nil {
+		return 0, err
+	}
 	now := time.Now().UnixMilli()
 	changed := 0
 	for sceneID, set := range byScene {
@@ -47,11 +52,14 @@ func SyncL1NodesFromL2(engine *core.StorageEngine, agentID uint64) (int, error) 
 
 // collectTopicIDsByScene groups live topic idHashes per scene, keeping
 // only depth<=2 topics (deeper ones are managed by compression).
-func collectTopicIDsByScene(engine *core.StorageEngine, agentID uint64) map[uint64]map[uint64]struct{} {
+func collectTopicIDsByScene(engine *core.StorageEngine, agentID uint64) (map[uint64]map[uint64]struct{}, error) {
+	topics, err := core.CollectAllTopicsStrict(engine, agentID)
+	if err != nil {
+		return nil, err
+	}
 	byScene := make(map[uint64]map[uint64]struct{})
-	for idHash := range engine.IndexByType(agentID, core.RecL2Topic) {
-		topic, err := core.ReadTopicLenient(engine, agentID, idHash)
-		if err != nil || topic == nil || topic.Depth > 2 {
+	for _, topic := range topics {
+		if topic.Depth > 2 {
 			continue
 		}
 		set := byScene[topic.SceneID]
@@ -59,9 +67,9 @@ func collectTopicIDsByScene(engine *core.StorageEngine, agentID uint64) map[uint
 			set = make(map[uint64]struct{})
 			byScene[topic.SceneID] = set
 		}
-		set[idHash] = struct{}{}
+		set[topic.ID] = struct{}{}
 	}
-	return byScene
+	return byScene, nil
 }
 
 // syncOneSceneNode refreshes one scene's node when its topic set changed;
@@ -71,6 +79,13 @@ func syncOneSceneNode(engine *core.StorageEngine, agentID uint64, sceneID uint64
 	nodeID := core.SceneNodeID(sceneID)
 	node, err := core.ReadSceneNode(engine, agentID, nodeID)
 	if err != nil {
+		if common.CodeOf(err) != common.ErrNotFound {
+			// A node that is there but will not read back is not a node that is
+			// missing: a fresh one would overwrite it with no emotion, no
+			// importance history and no EdgeIDs, and the hyperedges naming it
+			// would be left pointing at a node that denies them.
+			return 0, err
+		}
 		node = nil
 	}
 	if node != nil && slices.Equal(node.TopicIDs, ids) {

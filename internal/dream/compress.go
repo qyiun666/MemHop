@@ -198,8 +198,8 @@ func applyOneGroup(ctx context.Context, ac *domain.Context, sceneID uint64, g ll
 // forward to undo a write. Rollback failures only warn — the children stay at
 // depth 1, so the next Dream re-picks the group.
 func discardFusedGroup(ac *domain.Context, parentID uint64) {
-	if !repo.DeleteL2(ac.Engine, ac.ID, []uint64{parentID}, repo.DeleteTopicsL2) {
-		slog.Warn("dream: rollback fused topic failed", "parent", common.FormatHash(parentID))
+	if err := repo.DeleteL2(ac.Engine, ac.ID, []uint64{parentID}, repo.DeleteTopicsL2); err != nil {
+		slog.Warn("dream: rollback fused topic failed", "parent", common.FormatHash(parentID), "err", err)
 	}
 	if err := repo.DeleteTopicArchives(ac.Engine, ac.ID, ac.L4, []uint64{parentID}); err != nil {
 		slog.Warn("dream: rollback summary content failed", "parent", common.FormatHash(parentID), "err", err)

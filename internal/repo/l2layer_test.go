@@ -457,3 +457,87 @@ func TestCompressTopicsL2RefusesUnreadableMember(t *testing.T) {
 		t.Fatalf("a refused sink must move nothing, got %+v", got)
 	}
 }
+
+// unreadableTopic writes a topic and then replaces its payload with one that will
+// not decode, which is what the enumeration passes below must refuse to be without.
+func unreadableTopic(t *testing.T, engine *core.StorageEngine, topic core.TopicSlot) {
+	t.Helper()
+	if err := core.WriteTopicSlot(engine, core.DefaultAgentID, topic.ID, &topic); err != nil {
+		t.Fatalf("write topic %d: %v", topic.ID, err)
+	}
+	if _, err := engine.WriteRecord(core.DefaultAgentID, core.RecL2Topic, topic.ID, []byte(`{"id":`)); err != nil {
+		t.Fatalf("make topic %d unreadable: %v", topic.ID, err)
+	}
+}
+
+func writeTopic(t *testing.T, engine *core.StorageEngine, topic core.TopicSlot) {
+	t.Helper()
+	if err := core.WriteTopicSlot(engine, core.DefaultAgentID, topic.ID, &topic); err != nil {
+		t.Fatalf("write topic %d: %v", topic.ID, err)
+	}
+}
+
+// A child the closure cannot read is still that parent's child: dropping it from
+// the list deletes the parent above a topic nobody will ever cascade again.
+func TestTopicClosureL2RefusesUnreadableChild(t *testing.T) {
+	engine := tempEngine(t)
+	var root uint64 = 1
+	writeTopic(t, engine, core.TopicSlot{ID: root, SceneID: 7, Depth: 1, FusedKeywords: []string{"k"}})
+	unreadableTopic(t, engine, core.TopicSlot{ID: 2, SceneID: 7, Depth: 2, ParentID: &root})
+
+	if _, err := TopicClosureL2(engine, core.DefaultAgentID, root); common.CodeOf(err) != common.ErrDeserialization {
+		t.Fatalf("a closure with a member it cannot read must be reported, got %v", err)
+	}
+}
+
+// Both halves of a scene delete key on the same enumeration, so an unreadable
+// topic has to stop the batch: deleting the scene and the topics that did read
+// would leave a topic whose scene no longer exists, still listed by nothing and
+// deleted by nobody.
+func TestDeleteL2RefusesUnreadableSceneTopic(t *testing.T) {
+	engine := tempEngine(t)
+	const sceneID = uint64(7)
+	writeTopic(t, engine, core.TopicSlot{ID: 11, SceneID: sceneID, Depth: 1, FusedKeywords: []string{"k"}})
+	unreadableTopic(t, engine, core.TopicSlot{ID: 12, SceneID: sceneID, Depth: 1, FusedKeywords: []string{"k"}})
+	if err := core.WriteSceneSlot(engine, core.DefaultAgentID, sceneID, &core.SceneSlot{SceneID: sceneID}); err != nil {
+		t.Fatalf("write scene: %v", err)
+	}
+
+	err := DeleteL2(engine, core.DefaultAgentID, []uint64{sceneID}, DeleteScenesL2)
+	if common.CodeOf(err) != common.ErrDeserialization {
+		t.Fatalf("the batch delete must report the topic it could not enumerate, got %v", err)
+	}
+	if _, err := core.ReadTopicSlot(engine, core.DefaultAgentID, 11); err != nil {
+		t.Fatalf("a refused batch must delete nothing: %v", err)
+	}
+	if _, err := core.ReadSceneSlot(engine, core.DefaultAgentID, sceneID); err != nil {
+		t.Fatalf("the scene record is not to be tombstoned either: %v", err)
+	}
+}
+
+// A merge that could not see every topic of a secondary scene must not move the
+// ones it could: the orphan would be left naming a scene the same call then deletes.
+func TestMergeScenesL2RefusesUnreadableTopic(t *testing.T) {
+	engine := tempEngine(t)
+	const (
+		primary   = uint64(7)
+		secondary = uint64(8)
+	)
+	writeTopic(t, engine, core.TopicSlot{ID: 21, SceneID: secondary, Depth: 1, FusedKeywords: []string{"k"}})
+	unreadableTopic(t, engine, core.TopicSlot{ID: 22, SceneID: secondary, Depth: 1, FusedKeywords: []string{"k"}})
+	if err := core.WriteSceneSlot(engine, core.DefaultAgentID, secondary, &core.SceneSlot{SceneID: secondary}); err != nil {
+		t.Fatalf("write scene: %v", err)
+	}
+
+	err := MergeScenesL2(engine, core.DefaultAgentID, primary, []uint64{secondary})
+	if common.CodeOf(err) != common.ErrDeserialization {
+		t.Fatalf("the merge must report the topic it could not enumerate, got %v", err)
+	}
+	got, rerr := core.ReadTopicSlot(engine, core.DefaultAgentID, 21)
+	if rerr != nil {
+		t.Fatalf("read the untouched sibling: %v", rerr)
+	}
+	if got.SceneID != secondary {
+		t.Fatalf("a refused merge must retarget nothing, got scene %d", got.SceneID)
+	}
+}

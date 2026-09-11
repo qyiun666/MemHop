@@ -71,6 +71,29 @@ func IterAll[T any](engine *StorageEngine, agentID uint64, rt uint8) iter.Seq[T]
 	}
 }
 
+// CollectAllStrict reads one agent domain's whole rt set, reporting the first
+// member that will not read back rather than skipping it. The CollectAll*
+// helpers below drop what they cannot read because a listing is allowed to be
+// rebuilt from what survives; that answer is not good enough where the set
+// decides a deletion or an overwrite — a member that merely would not read is
+// not evidence that the domain does not hold it.
+func CollectAllStrict[T any](engine *StorageEngine, agentID uint64, rt uint8) ([]T, error) {
+	var out []T
+	for idHash := range engine.IndexByType(agentID, rt) {
+		slot, err := readJSON[T](engine, agentID, idHash, rt, "")
+		if err != nil {
+			// The index and one record read are not one atomic step, so an id the
+			// sweep has already tombstoned is a legitimate hole, not a damage report.
+			if common.CodeOf(err) == common.ErrNotFound {
+				continue
+			}
+			return nil, err
+		}
+		out = append(out, *slot)
+	}
+	return out, nil
+}
+
 func ReadProfileSlot(engine *StorageEngine, agentID, id uint64) (*ProfileSlot, error) {
 	return readJSON[ProfileSlot](engine, agentID, id, RecL0Profile, "ProfileSlot")
 }
@@ -117,6 +140,12 @@ func WriteTopicSlot(engine *StorageEngine, agentID, id uint64, slot *TopicSlot) 
 
 func CollectAllTopics(engine *StorageEngine, agentID uint64) []TopicSlot {
 	return slices.Collect(IterAll[TopicSlot](engine, agentID, RecL2Topic))
+}
+
+// CollectAllTopicsStrict is CollectAllTopics for a caller whose next move deletes
+// or rewrites records keyed on this enumeration.
+func CollectAllTopicsStrict(engine *StorageEngine, agentID uint64) ([]TopicSlot, error) {
+	return CollectAllStrict[TopicSlot](engine, agentID, RecL2Topic)
 }
 
 // ReadTopicLenient returns (nil, nil) for non-RecL2Topic records instead of
@@ -190,4 +219,10 @@ func WritePlanNode(engine *StorageEngine, agentID, id uint64, node *PlanNode) er
 
 func CollectAllPlanNodes(engine *StorageEngine, agentID uint64) []PlanNode {
 	return slices.Collect(IterAll[PlanNode](engine, agentID, RecL5PlanNode))
+}
+
+// CollectAllPlanNodesStrict is CollectAllPlanNodes for a caller that decides
+// which nodes to tombstone from the set it reads.
+func CollectAllPlanNodesStrict(engine *StorageEngine, agentID uint64) ([]PlanNode, error) {
+	return CollectAllStrict[PlanNode](engine, agentID, RecL5PlanNode)
 }

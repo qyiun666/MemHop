@@ -6,6 +6,7 @@ package repo
 import (
 	"testing"
 
+	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
@@ -108,7 +109,10 @@ func TestCollectPlanNodesGroupsTrees(t *testing.T) {
 		}
 	}
 
-	aggs := CollectPlanNodes(engine, agentID)
+	aggs, err := CollectPlanNodes(engine, agentID)
+	if err != nil {
+		t.Fatalf("collect: %v", err)
+	}
 	if len(aggs) != 2 {
 		t.Fatalf("want 2 plans, got %+v", aggs)
 	}
@@ -155,11 +159,44 @@ func TestDeletePlanNodesByTopicIDsTakesWholeTrees(t *testing.T) {
 	if n != 2 {
 		t.Fatalf("deleted %d nodes, want the two of topic 9", n)
 	}
-	left := CollectPlanNodes(engine, agentID)
+	left, err := CollectPlanNodes(engine, agentID)
+	if err != nil {
+		t.Fatalf("collect: %v", err)
+	}
 	if len(left) != 1 || left[0].TopicID != 10 {
 		t.Fatalf("another turn's tree must survive: %+v", left)
 	}
 	if n, err := DeletePlanNodesByTopicIDs(engine, agentID, nil); err != nil || n != 0 {
 		t.Fatalf("no topics = no writes, got %d/%v", n, err)
+	}
+}
+
+// The retention sweep and the by-topic tombstone pass both decide deletions off a
+// whole-bucket scan, so an unreadable node has to stop them: a tree missing one of
+// its steps looks finished and expired, and a delete that names what it could not
+// see reports a cascade that did not happen.
+func TestPlanNodeScansReportAnUnreadableNode(t *testing.T) {
+	engine := tempEngine(t)
+	agentID := core.DefaultAgentID
+	victim := core.HashPlanNode(10, 1)
+	for _, n := range []*core.PlanNode{
+		{IDHash: core.HashPlanNode(9, 1), TopicID: 9, Seq: 1},
+		{IDHash: victim, TopicID: 10, Seq: 1},
+	} {
+		if _, err := WritePlanNode(engine, agentID, n); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := engine.WriteRecord(agentID, core.RecL5PlanNode, victim, []byte(`{"id":`)); err != nil {
+		t.Fatalf("make the node unreadable: %v", err)
+	}
+	if _, err := CollectPlanNodes(engine, agentID); common.CodeOf(err) != common.ErrDeserialization {
+		t.Fatalf("collect must report the unreadable node, got %v", err)
+	}
+	if _, err := DeletePlanNodesByTopicIDs(engine, agentID, []uint64{9}); common.CodeOf(err) != common.ErrDeserialization {
+		t.Fatalf("the tombstone pass must not run on a bucket it could not read, got %v", err)
+	}
+	if _, err := core.ReadPlanNode(engine, agentID, core.HashPlanNode(9, 1)); err != nil {
+		t.Fatalf("the refused pass must have deleted nothing: %v", err)
 	}
 }

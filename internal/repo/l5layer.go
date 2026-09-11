@@ -53,15 +53,19 @@ func DeletePlanNodesByIDs(engine *core.StorageEngine, agentID uint64, idHashes [
 
 // DeletePlanNodesByTopicIDs tombstones every plan tree a topic owns. A node has
 // no content-side key to hang on, so the owning topic is found by scanning the
-// node bucket — the same way a topic's whole subtree is enumerated for a scene or
-// topic deletion.
+// node bucket — strictly, because this is the pass that deletes what it finds —
+// the same way a topic's whole subtree is enumerated for a scene or topic deletion.
 func DeletePlanNodesByTopicIDs(engine *core.StorageEngine, agentID uint64, topics []uint64) (int, error) {
+	nodes, err := core.CollectAllPlanNodesStrict(engine, agentID)
+	if err != nil {
+		return 0, err
+	}
 	inTopic := make(map[uint64]struct{}, len(topics))
 	for _, id := range topics {
 		inTopic[id] = struct{}{}
 	}
 	var doomed []uint64
-	for _, node := range core.CollectAllPlanNodes(engine, agentID) {
+	for _, node := range nodes {
 		if _, ok := inTopic[node.TopicID]; ok {
 			doomed = append(doomed, node.IDHash)
 		}
@@ -100,13 +104,24 @@ func RecomputePlanAgg(agg *PlanAggregate) {
 	}
 }
 
-// CollectPlanNodes groups every plan node of one agent domain by the turn topic
-// that opened it. A key yields an aggregate exactly while at least one of its
-// nodes lives: a plan whose whole tree has been pruned is gone. Result is
-// TopicID-ascending for determinism.
-func CollectPlanNodes(engine *core.StorageEngine, agentID uint64) []PlanAggregate {
+// CollectPlanNodes groups one agent domain's plan nodes by the turn topic that
+// opened them, reading the node bucket strictly: its output drives the retention
+// sweep, so an incomplete set cannot be trusted to decide a deletion.
+func CollectPlanNodes(engine *core.StorageEngine, agentID uint64) ([]PlanAggregate, error) {
+	nodes, err := core.CollectAllPlanNodesStrict(engine, agentID)
+	if err != nil {
+		return nil, err
+	}
+	return GroupPlanNodes(nodes), nil
+}
+
+// GroupPlanNodes aggregates a caller-supplied node set by owning topic. A key
+// yields an aggregate exactly while at least one of its nodes is in the set: a
+// plan whose whole tree has been pruned is gone. Result is TopicID-ascending for
+// determinism.
+func GroupPlanNodes(nodes []core.PlanNode) []PlanAggregate {
 	byTopic := make(map[uint64]*PlanAggregate)
-	for _, node := range core.CollectAllPlanNodes(engine, agentID) {
+	for _, node := range nodes {
 		agg := byTopic[node.TopicID]
 		if agg == nil {
 			agg = &PlanAggregate{TopicID: node.TopicID}

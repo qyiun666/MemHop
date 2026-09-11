@@ -23,14 +23,20 @@ import (
 // exposes, since an edge itself has no public read.
 //
 // The result is sorted by id because the index underneath is a hash map: without
-// sorting, one domain would answer the same call twice in two different orders.
+// sorting, one domain would answer the same call twice in two different orders. A
+// node the index names but the engine cannot return is reported rather than left
+// out — a listing quietly missing one scene node is otherwise indistinguishable
+// from a node Dream never built.
 func (db *DB) ListL1(agentID uint64) ([]core.SceneNode, error) {
 	ac, err := db.lockAgent(agentID)
 	if err != nil {
 		return nil, err
 	}
 	defer ac.Mu.Unlock()
-	nodes := core.CollectAllSceneNodes(db.engine, agentID)
+	nodes, err := core.CollectAllStrict[core.SceneNode](db.engine, agentID, core.RecL1SceneNode)
+	if err != nil {
+		return nil, err
+	}
 	if nodes == nil {
 		return []core.SceneNode{}, nil
 	}
