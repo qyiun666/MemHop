@@ -151,7 +151,7 @@ func MergeScenesL2(engine *core.StorageEngine, agentID uint64, primaryID uint64,
 	return DeleteL2(engine, agentID, secondaryIDs, DeleteScenesL2)
 }
 
-// OpenSceneTurn opens the turn one Search read starts: it bumps the scene's
+// OpenSceneTurn opens the scene's next turn: it bumps the scene's
 // turn counter and returns the updated record so the caller reads back the seq
 // it just allocated rather than a stale snapshot. TurnSeq is load-bearing — the
 // caller hashes it into the turn's topic id, so a failed write must surface as
@@ -187,9 +187,9 @@ func ListScenesL2(engine *core.StorageEngine, agentID uint64, ids []uint64) ([]c
 	return out, nil
 }
 
-// CreateSceneL2WithID creates a scene under the ID the host owns (its session
-// id). An existing scene is reused as-is — the name is only ever written on
-// creation, so a repeated Search for the same session never renames it.
+// CreateSceneL2WithID creates a scene under a caller-chosen id. An existing
+// scene is reused as-is — the name is only ever written on creation, so a
+// repeated call for the same id never renames it.
 func CreateSceneL2WithID(engine *core.StorageEngine, agentID uint64, sceneID uint64, name string) error {
 	if _, err := core.ReadSceneSlot(engine, agentID, sceneID); err == nil {
 		return nil

@@ -11,7 +11,7 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
-// ReadSharedGraphL3 resolves a host-supplied hex graph id and confirms the
+// ReadSharedGraphL3 resolves a caller-supplied hex graph id and confirms the
 // graph exists. Graphs live in the file-wide shared L3 domain, not in the
 // caller's own, so every read of one goes through SharedPoolAgentID whatever
 // domain asked. A malformed id is ErrInvalidQuery; an unknown one is whatever
@@ -83,11 +83,10 @@ func CreateGraphL3(engine *core.StorageEngine, agentID uint64, name string, sour
 }
 
 // EnsureGraphL3 returns the graph of a domain name, creating its slot only
-// when no record with that id exists. The id derives from the name an import
-// batch was submitted under, but the stored Name is the host's own label —
-// UpdateL3 may have renamed the graph. Reusing an existing slot therefore keeps
-// that name and its CreatedAt intact, instead of a re-import silently undoing
-// the rename.
+// when no record with that id exists. The id derives from the name it was
+// asked for, but the stored Name is a label of its own that may have been
+// renamed since. Reusing an existing slot therefore keeps that name and its
+// CreatedAt intact, instead of a repeated call silently undoing the rename.
 func EnsureGraphL3(engine *core.StorageEngine, agentID uint64, name string, source core.HypergraphSource) (uint64, error) {
 	graphID := common.HashID(name)
 	if slot, err := core.ReadGraphSlot(engine, agentID, graphID); err == nil {

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 // L1 node sync: rebuilds one scene node per scene from the current
-// depth<=2 L2 topics. Runs only during Dream, before edge building.
+// depth<=2 L2 topics.
 package repo
 
 import (
@@ -14,8 +14,8 @@ import (
 )
 
 // DeleteSceneNodeL1 removes one scene's L1 node record by scene ID (the
-// node ID is derivable without an index); missing nodes are a no-op.
-// Incident hyperedges are cleaned by the next Dream's rebuild.
+// node ID is derivable without an index); missing nodes are a no-op. It drops
+// the node record only — incident hyperedges are another pass's to clean.
 func DeleteSceneNodeL1(engine *core.StorageEngine, agentID uint64, sceneID uint64) error {
 	if _, err := engine.DeleteRecordBatch(agentID, []uint64{core.SceneNodeID(sceneID)}); err != nil {
 		return common.NewError(common.ErrIO, "delete l1 scene node", err)
@@ -24,10 +24,9 @@ func DeleteSceneNodeL1(engine *core.StorageEngine, agentID uint64, sceneID uint6
 }
 
 // SyncL1NodesFromL2 rebuilds one L1 node per scene from the current
-// depth<=2 topics; L1 is written/updated only during Dream. The node ID
-// (hash("scene-node:"+sceneID)) is stable across dreams: existing nodes keep
-// Importance/Valence/Arousal (decay belongs to DecayL1Network) and are
-// refreshed only when the topic set changed, so UpdatedAt keeps
+// depth<=2 topics. The node ID (hash("scene-node:"+sceneID)) is stable across
+// runs: existing nodes keep Importance/Valence/Arousal — this pass never decays
+// them — and are refreshed only when the topic set changed, so UpdatedAt keeps
 // accumulating decay. Returns the number of nodes created or updated.
 func SyncL1NodesFromL2(engine *core.StorageEngine, agentID uint64) (int, error) {
 	byScene := collectTopicIDsByScene(engine, agentID)

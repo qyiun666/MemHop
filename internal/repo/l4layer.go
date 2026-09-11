@@ -14,8 +14,8 @@ import (
 )
 
 // L4 content operations. A topic's content is everything that filled that turn:
-// the dialogue originals the host spoke and the operation events it recorded,
-// told apart by Kind. AppendArchiveL4 stores one slot under the id its
+// its dialogue originals and its operation events, told apart by Kind.
+// AppendArchiveL4 stores one slot under the id its
 // (topic, Seq) hashes and mirrors it into the domain's L4Index, which is how a
 // topic's records are enumerated again. QueryArchivesL4 reads by that key or by
 // any AND-ed combination of filters.
