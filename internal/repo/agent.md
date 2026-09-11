@@ -96,6 +96,7 @@
 <!-- 2026-09-04 接口去 fallback 与按层闭环修复 -->
 - `EnsureGraphL3`：槽存在就复用其 id、不覆写记录；`CreateGraphL3` 是无条件写槽，只用于确认不存在时。
 - L2/L4 读路径的错误策略：只有 `CodeOf(err)==ErrNotFound` 才跳过那一条，其余（IO/关闭/损坏）一律返回 error——宿主分不清「少一条」和「没有这一条」。`ListScenesL2`/`CollectAllScenesL2`/`QueryArchivesL4` 因此都带 error 返回。
+- `RenameTopicL2` 是读-改-写：整条记录重写，所以关键词轨、树链接与场景归属都原样保留，改的只有 `name` 一个字段。名字是否合法（空名算不算一个名字）不在本层判断，那是业务层的规则；话题不在就如实报 `ErrNotFound`，绝不凭空造一个——那会留下一个没有场景、没有深度、没有关键词的话题挂在一个别的记录都不指向的 id 上。
 - L4 的两种读判据不同：**按 id 读**时不存在的 id 可以跳过（已墓碑的、或本来就不是本域的 id 都只是「选不中」），**按话题索引读**时索引点名却读不到就是镜像与磁盘不一致，必须 `ErrIO` 而不是少给一条对话。「槽位被保留窗回收」不属于任何一种：那次清扫同时摘掉索引条目，读侧看到的是 `Seq` 上的一个空洞，由 `SceneMessage.Seq` 暴露给宿主判别。
 - `Kind` 是**条件**而不是模式：`ArchiveQuery.Kind == nil` 表示「两种都要」，非 nil 表示「只要这一种」。它必须在每一条读路径上都生效，包括只给 id 的那条快路径——快路径绕过过滤谓词就是这个条件最容易静默失灵的地方（`TestSearchL4KindCondition` 的 `events, by id` 分支专门盯它）。
 - L4 原语的签名带着归属信息：`AppendArchiveL4(engine, agentID, idx, ArchiveContent)` 以 `core.HashContent(TopicID, Seq)` 发号、落盘后同步 `index.L4Index`。写同一个 (话题, Seq) 是**原地覆写**而不是追加第二条——这就是重放一轮能收敛的机制，本层因此没有也不需要「先列出这个话题旧有的归档、再删掉没被重写的那几条」这类原语（第二真相的活形式）。

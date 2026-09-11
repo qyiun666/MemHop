@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 // L2 scene big methods of the composition root: list / metadata patch /
-// merge / delete and the deep scene-context read. The scene steps live in
-// internal/scene.
+// topic naming / merge / delete and the deep scene-context read. The scene
+// steps live in internal/scene.
 
 package internal
 
@@ -96,6 +96,36 @@ func (db *DB) UpdateScene(agentID uint64, sceneID string, patch ScenePatch) (cor
 	if err := core.WriteSceneSlot(db.engine, agentID, sceneHash, slot); err != nil {
 		return core.SceneSlot{}, err
 	}
+	return *slot, nil
+}
+
+// RenameTopic gives one topic the name its host chose and returns the topic as
+// stored afterwards. An empty name is refused: a topic is created unnamed and
+// stays so until somebody names it, so "" is the absence of a name rather than
+// one, and clearing a name has no use that absence does not already cover. The
+// keyword track and the tree links are the engine's and survive untouched. A
+// topic that is not there is ErrNotFound — nothing is created for it.
+func (db *DB) RenameTopic(agentID uint64, topicID, name string) (core.TopicSlot, error) {
+	if name == "" {
+		return core.TopicSlot{}, common.NewError(common.ErrInvalidQuery, "topic name is required")
+	}
+	ac, err := db.lockAgent(agentID)
+	if err != nil {
+		return core.TopicSlot{}, err
+	}
+	defer ac.Mu.Unlock()
+	parsed, err := common.ParseID(topicID)
+	if err != nil {
+		return core.TopicSlot{}, common.NewError(common.ErrInvalidQuery, "parse topic id", err)
+	}
+	slot, err := repo.RenameTopicL2(db.engine, agentID, parsed, name)
+	if err != nil {
+		return core.TopicSlot{}, err
+	}
+	// The scene read serves this topic out of the cache, so the record write
+	// has to be mirrored here or the new name stays invisible until the next
+	// consolidation rebuilds the index.
+	ac.SyncL2Meta(parsed)
 	return *slot, nil
 }
 

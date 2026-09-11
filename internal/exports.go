@@ -33,6 +33,7 @@ var DefaultMemHopDefaults = config.DefaultMemHopDefaults
 type (
 	ProfileSlot      = core.ProfileSlot
 	SceneSlot        = core.SceneSlot
+	SceneNode        = core.SceneNode
 	HypergraphSlot   = core.HypergraphSlot
 	HypergraphNode   = core.HypergraphNode
 	HypergraphEdge   = core.HypergraphEdge
@@ -89,6 +90,13 @@ const (
 	RoleUser   = core.RoleUser
 	RoleAgent  = core.RoleAgent
 	RoleSystem = core.RoleSystem
+)
+
+// ---- agent domain identity ----
+
+const (
+	AgentTypePrimary = core.AgentTypePrimary
+	AgentTypeSub     = core.AgentTypeSub
 )
 
 // ---- L4 content kind constants ----

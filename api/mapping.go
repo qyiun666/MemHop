@@ -39,13 +39,15 @@ func fromProfileSlot(s internal.ProfileSlot) ProfileSlot {
 		EmotionState: s.EmotionState,
 		MBTI:         s.MBTI,
 		Preferences:  s.Preferences,
+		AgentType:    s.AgentType,
 		UpdatedAtMs:  s.UpdatedAtMs,
 	}
 }
 
 // toCoreProfileSlot maps the host-writable half of the profile. EmotionState,
 // MBTI and UpdatedAtMs are read-only echoes (Dream evolves the first two, the
-// library stamps the last), so they are deliberately not carried inbound.
+// library stamps the last), and AgentType is stamped once when the domain is
+// created, so none of the four is carried inbound.
 func toCoreProfileSlot(s *ProfileSlot) internal.ProfileSlot {
 	if s == nil {
 		return internal.ProfileSlot{}
@@ -55,6 +57,20 @@ func toCoreProfileSlot(s *ProfileSlot) internal.ProfileSlot {
 		Role:        s.Role,
 		Personality: s.Personality,
 		Preferences: s.Preferences,
+	}
+}
+
+func fromSceneNode(n internal.SceneNode) SceneNodeView {
+	return SceneNodeView{
+		IDHash:     formatID(n.IDHash),
+		SceneID:    formatID(n.SceneID),
+		TopicIDs:   formatIDs(n.TopicIDs),
+		EdgeIDs:    formatIDs(n.EdgeIDs),
+		Importance: n.Importance,
+		Valence:    n.Valence,
+		Arousal:    n.Arousal,
+		CreatedAt:  n.CreatedAt,
+		UpdatedAt:  n.UpdatedAt,
 	}
 }
 
@@ -73,6 +89,7 @@ func fromTopicSlot(t internal.TopicSlot) TopicSlot {
 		ParentID:       formatPtr(t.ParentID),
 		ChildrenIDs:    formatIDs(t.ChildrenIDs),
 		Depth:          t.Depth,
+		Name:           t.Name,
 		FusedKeywords:  slices.Clone(t.FusedKeywords),
 		UserTimestamp:  t.UserTimestamp,
 		AgentTimestamp: t.AgentTimestamp,

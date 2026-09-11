@@ -57,6 +57,8 @@ func TestSessionPublicSurface(t *testing.T) {
 		"Search", "Update", "Dream", "AppendArchive",
 		// L0 profile
 		"GetL0", "UpdateL0",
+		// L1 scene hypergraph (read-only; Dream is the only writer)
+		"ListL1",
 		// L2 scene reads
 		"ListScenes", "SceneContext",
 		// L3 knowledge
@@ -70,7 +72,7 @@ func TestSessionPublicSurface(t *testing.T) {
 		// assembly/admin face — host code at session boundaries and management
 		// channels only, never an LLM tool
 		// L2 scene management and corrections
-		"UpdateScene", "MergeScenes", "DeleteScene", "DeleteTopic",
+		"UpdateScene", "RenameTopic", "MergeScenes", "DeleteScene", "DeleteTopic",
 		// L3 management and corrections
 		"UpdateL3", "DeleteL3",
 	}

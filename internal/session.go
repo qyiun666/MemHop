@@ -73,6 +73,15 @@ func (s *Session) UpdateL0(slot *ProfileSlot) error {
 	return s.db.UpdateL0(s.agentID, slot)
 }
 
+// ---- L1 scene hypergraph ----
+
+// ListL1 returns the domain's scene nodes in a stable order. Read-only: the
+// nodes and the edges between them are Dream's, so a host can see what
+// consolidation decided but has no write here.
+func (s *Session) ListL1() ([]SceneNode, error) {
+	return s.db.ListL1(s.agentID)
+}
+
 // ---- L2 scenes/topics ----
 
 // ListScenes lists the domain's scenes; a non-empty l3ID keeps only the
@@ -86,6 +95,13 @@ func (s *Session) ListScenes(l3ID string) ([]SceneSlot, error) {
 // an anchor without listing the domain.
 func (s *Session) UpdateScene(sceneID string, patch ScenePatch) (SceneSlot, error) {
 	return s.db.UpdateScene(s.agentID, sceneID, patch)
+}
+
+// RenameTopic gives one topic the name the host chose and returns the written
+// topic. An empty name is refused: topics are created unnamed, so "" is the
+// absence of a name rather than one.
+func (s *Session) RenameTopic(topicID, name string) (TopicSlot, error) {
+	return s.db.RenameTopic(s.agentID, topicID, name)
 }
 
 func (s *Session) SceneContext(sceneID string) (*SceneContext, error) {

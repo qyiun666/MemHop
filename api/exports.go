@@ -15,6 +15,17 @@ import "github.com/qyiun666/MemHop/internal"
 // it to MultiAgentDB.Session to work in the default agent domain.
 const DefaultAgentID = "0000000000000000"
 
+// ---- agent domain identity ----
+
+// AgentTypePrimary marks the domain a file is opened on, so a file holds exactly
+// one of them; AgentTypeSub marks a domain created under it. ProfileSlot.AgentType
+// reports which, and the library stamps it — a host write inherits the stored
+// value rather than taking the caller's.
+const (
+	AgentTypePrimary = internal.AgentTypePrimary
+	AgentTypeSub     = internal.AgentTypeSub
+)
+
 // ---- L3 edge kind constants ----
 
 const (

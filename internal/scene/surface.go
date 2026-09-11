@@ -45,6 +45,7 @@ func ContextTopic(ac *domain.Context, agentID uint64, t core.TopicSlot, children
 	st := core.SceneContextTopic{
 		TopicID:    common.FormatHash(t.ID),
 		Depth:      int(t.Depth),
+		Name:       t.Name,
 		Keywords:   slices.Clone(t.FusedKeywords),
 		ChildCount: children[t.ID],
 		Messages:   make([]core.SceneMessage, 0, len(refs)),

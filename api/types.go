@@ -63,7 +63,29 @@ type ProfileSlot struct {
 	EmotionState internal.EmotionScore `json:"emotion_state"`
 	MBTI         internal.MBTIScore    `json:"mbti"`
 	Preferences  map[string]string     `json:"preferences"`
-	UpdatedAtMs  int64                 `json:"updated_at_ms"`
+	// AgentType says which kind of agent this domain holds: AgentTypePrimary
+	// for the domain the file was opened on, AgentTypeSub for one created
+	// under it. It is stamped when the domain is created and inherited on
+	// every host write, so editing a profile cannot move it between the two.
+	AgentType   uint8 `json:"agent_type"`
+	UpdatedAtMs int64 `json:"updated_at_ms"`
+}
+
+// SceneNodeView is one L1 scene node as a host reads it. Every value is Dream's:
+// Importance and the two emotion signals are what consolidation computed, and
+// the pipeline is the only writer. EdgeIDs name the co-occurrence edges incident
+// on the node. An edge has no read of its own, so those ids are useful exactly
+// one way — two nodes sharing one are a pair Dream judged related.
+type SceneNodeView struct {
+	IDHash     string   `json:"id_hash"`
+	SceneID    string   `json:"scene_id"`
+	TopicIDs   []string `json:"topic_ids"`
+	EdgeIDs    []string `json:"edge_ids"`
+	Importance float32  `json:"importance"`
+	Valence    float64  `json:"valence"`
+	Arousal    float64  `json:"arousal"`
+	CreatedAt  int64    `json:"created_at"`
+	UpdatedAt  int64    `json:"updated_at"`
 }
 
 // SceneSlot is one L2 scene container — a host session. L3ID is its optional
@@ -78,12 +100,15 @@ type SceneSlot struct {
 // Dream-fused group of turns. FusedKeywords is its only keyword track — the
 // set a host reads back as its conversation context. What was said is not on
 // the topic: the L4 archives a turn owns are addressed by that topic's id.
+// Name is the host's own label for it, written by RenameTopic and never derived
+// by the engine; empty means nobody has named this topic yet.
 type TopicSlot struct {
 	ID             string   `json:"id"`
 	SceneID        string   `json:"scene_id"`
 	ParentID       *string  `json:"parent_id,omitempty"`
 	ChildrenIDs    []string `json:"children_ids"`
 	Depth          uint8    `json:"depth"`
+	Name           string   `json:"name,omitempty"`
 	FusedKeywords  []string `json:"fused_keywords"`
 	UserTimestamp  int64    `json:"user_timestamp"`
 	AgentTimestamp int64    `json:"agent_timestamp"`

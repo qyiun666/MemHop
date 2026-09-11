@@ -33,9 +33,11 @@ func (db *DB) GetL0(agentID uint64) (*core.ProfileSlot, error) {
 }
 
 // UpdateL0 writes the host-owned half of the profile (Name/Role/Personality/
-// Preferences). The two fields Dream evolves — EmotionState and MBTI — are
-// inherited from the stored record, so a host editing its profile never wipes
-// them, and UpdatedAtMs is stamped here rather than taken from the caller. ID
+// Preferences). The three fields the library owns are inherited from the stored
+// record: EmotionState and MBTI, which Dream evolves, and AgentType, stamped
+// when the domain was created — so a host editing its profile never wipes the
+// distilled half and never moves its domain between primary and sub.
+// UpdatedAtMs is stamped here rather than taken from the caller. ID
 // is forced to hash("profile"); the domain lock comes from the agent context.
 func (db *DB) UpdateL0(agentID uint64, slot *core.ProfileSlot) error {
 	ac, err := db.lockAgent(agentID)
@@ -54,6 +56,7 @@ func (db *DB) UpdateL0(agentID uint64, slot *core.ProfileSlot) error {
 	} else {
 		slot.EmotionState = cur.EmotionState
 		slot.MBTI = cur.MBTI
+		slot.AgentType = cur.AgentType
 	}
 	slot.UpdatedAtMs = time.Now().UnixMilli()
 	return repo.UpdateProfileL0(db.engine, agentID, slot)

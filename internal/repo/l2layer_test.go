@@ -9,6 +9,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 	"github.com/qyiun666/MemHop/internal/repo/index"
 )
@@ -259,5 +260,58 @@ func TestSetSceneL3IDIsWriteOnce(t *testing.T) {
 	}
 	if slot, _ := core.ReadSceneSlot(engine, core.DefaultAgentID, sceneID); slot.L3ID != 100 {
 		t.Fatalf("write-once must keep 100, got %d", slot.L3ID)
+	}
+}
+
+// A topic name is the host's, so writing it must not disturb anything the
+// engine put on the record — and the cache path has to agree with the record
+// path, or the same topic reads as named in one and unnamed in the other.
+func TestRenameTopicL2KeepsTheRestOfTheRecord(t *testing.T) {
+	engine := tempEngine(t)
+	const sceneID = uint64(7)
+	topicID := core.ComputeTurnTopicID(sceneID, 1)
+	if !CreateTurnTopicL2(engine, core.DefaultAgentID, sceneID, topicID, []string{"登录", "JWT"}, 1000, 1001) {
+		t.Fatal("create turn topic")
+	}
+	const child = uint64(555)
+	stored, err := core.ReadTopicSlot(engine, core.DefaultAgentID, topicID)
+	if err != nil {
+		t.Fatalf("read topic: %v", err)
+	}
+	stored.ChildrenIDs = []uint64{child}
+	if err := core.WriteTopicSlot(engine, core.DefaultAgentID, topicID, stored); err != nil {
+		t.Fatalf("give the topic a child: %v", err)
+	}
+
+	const want = "决定把 L5 让给计划树的那一轮"
+	got, err := RenameTopicL2(engine, core.DefaultAgentID, topicID, want)
+	if err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+	if got.Name != want {
+		t.Fatalf("name not written: %+v", got)
+	}
+	if !slices.Equal(got.FusedKeywords, []string{"登录", "JWT"}) {
+		t.Fatalf("keyword track disturbed: %v", got.FusedKeywords)
+	}
+	if !slices.Equal(got.ChildrenIDs, []uint64{child}) || got.SceneID != sceneID || got.Depth != 1 {
+		t.Fatalf("tree links or scene ownership disturbed: %+v", got)
+	}
+	if cached := index.L2MetaFromTopic(got).ToTopicSlot(); cached.Name != want {
+		t.Fatalf("cache path lost the name: %+v", cached)
+	}
+}
+
+// A name addresses a turn that already settled: naming one that is not there
+// reports ErrNotFound instead of inventing a topic behind an id nothing else
+// refers to.
+func TestRenameTopicL2MissingTopic(t *testing.T) {
+	engine := tempEngine(t)
+	const missing = uint64(424242)
+	if _, err := RenameTopicL2(engine, core.DefaultAgentID, missing, "nobody"); common.CodeOf(err) != common.ErrNotFound {
+		t.Fatalf("want ErrNotFound, got %v", err)
+	}
+	if _, err := core.ReadTopicSlot(engine, core.DefaultAgentID, missing); common.CodeOf(err) != common.ErrNotFound {
+		t.Fatalf("the refused rename must leave no record behind, got %v", err)
 	}
 }

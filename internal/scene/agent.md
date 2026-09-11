@@ -6,6 +6,9 @@
 - **契约**：大方法（Search/SceneContext/DeleteTopic/DeleteScene/
   MergeScenes）在根里持域锁后调用本包；`FreshID` 只有 `ErrNotFound` 才算
   ID 可用；`OpenTurn` 是读路径唯一的写，失败必须使整次读取失败。
+  `ContextTopic` 渲染一个话题时连宿主给它起的名字一起带出：这条读面是唯一
+  把整场转录取回来的路径，而 `Search` 只返回 depth-1，被巩固下沉的子话题在
+  别处对不上号，名字在这里缺席就等于宿主看不到自己对那些轮的命名。
 - **陷阱**：消息顺序只看 `Seq`。`ac.L4.IDs(topicID, KindUtterance)` 给的就是
   Seq 升序，而沉淀把用户说的钉在 1、回复钉在 2，所以「谁先说话」由写入侧构造
   保证，读侧不需要时间戳、更不需要拿 `Role` 打平——事件的 `Role` 未设即 0，

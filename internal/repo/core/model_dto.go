@@ -46,9 +46,11 @@ type SceneMessage struct {
 
 // SceneContextTopic is one topic of a scene context with its L4 messages and
 // its child count. Depth tells a fused parent (1) from a turn Dream sunk (2).
+// Name is the host's own label, empty until somebody sets one.
 type SceneContextTopic struct {
 	TopicID    string         `json:"topic_id"`
 	Depth      int            `json:"depth"`
+	Name       string         `json:"name,omitempty"`
 	Keywords   []string       `json:"keywords"`
 	Messages   []SceneMessage `json:"messages,omitempty"`
 	ChildCount int            `json:"child_count"`

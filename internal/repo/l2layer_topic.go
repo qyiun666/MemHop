@@ -83,6 +83,23 @@ func ListTopicsL2(q TopicListQuery) ([]core.TopicSlot, error) {
 	return out, nil
 }
 
+// RenameTopicL2 writes the name its host chose onto one topic. The record is
+// rewritten whole, so the keyword track and the tree links survive untouched. A
+// topic that is not there is an error rather than a new record: a name addresses
+// a turn that already settled, and inventing one would leave a topic with no
+// scene, no depth and no keywords behind an id nothing else refers to.
+func RenameTopicL2(engine *core.StorageEngine, agentID uint64, topicID uint64, name string) (*core.TopicSlot, error) {
+	topic, err := core.ReadTopicSlot(engine, agentID, topicID)
+	if err != nil {
+		return nil, err
+	}
+	topic.Name = name
+	if err := core.WriteTopicSlot(engine, agentID, topic.ID, topic); err != nil {
+		return nil, err
+	}
+	return topic, nil
+}
+
 // CreateTurnTopicL2 writes one turn topic (depth 1) under sceneHash with its
 // single keyword track and both message timestamps.
 func CreateTurnTopicL2(engine *core.StorageEngine, agentID uint64, sceneHash, topicID uint64, keywords []string, userTS, agentTS int64) bool {

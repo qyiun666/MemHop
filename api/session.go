@@ -6,14 +6,14 @@
 // set is exactly the externally callable surface. Every call is serialized
 // per agent domain by the internal domain lock.
 //
-// The methods split by audience. The runtime/task face (18) is what the host
+// The methods split by audience. The runtime/task face (19) is what the host
 // drives every turn and what LLM tools bind to: Search, Update, Dream,
 // AppendArchive (the host-driven loop), SceneContext, ListScenes, GetL0,
-// UpdateL0, SearchL4, GetL3, ListL3, ImportL3, QueryL3Nodes, QueryL3Subgraph,
-// PlanCreate, PlanNodeAdd, PlanNodeUpdate, PlanState.
-// The assembly/admin face (6, plus all of
+// UpdateL0, ListL1, SearchL4, GetL3, ListL3, ImportL3, QueryL3Nodes,
+// QueryL3Subgraph, PlanCreate, PlanNodeAdd, PlanNodeUpdate, PlanState.
+// The assembly/admin face (7, plus all of
 // MultiAgentDB) is host code at session boundaries and management channels
-// only — never an LLM tool: UpdateScene, MergeScenes, DeleteTopic,
+// only — never an LLM tool: UpdateScene, RenameTopic, MergeScenes, DeleteTopic,
 // DeleteScene, UpdateL3, DeleteL3.
 
 package api
@@ -60,15 +60,33 @@ func (s *Session) GetL0() (*ProfileSlot, error) {
 }
 
 // UpdateL0 writes the host-owned profile fields (Name / Role / Personality /
-// Preferences). The two fields Dream evolves — EmotionState and MBTI — are kept
-// from the stored profile, and UpdatedAtMs is stamped by the library, so a
-// profile edit never wipes the distilled half.
+// Preferences). The library-owned three are kept from the stored profile:
+// EmotionState and MBTI, which Dream evolves, and AgentType, stamped once when
+// the domain was created. UpdatedAtMs is stamped here. So a profile edit never
+// wipes the distilled half, and never moves a domain between primary and sub.
 func (s *Session) UpdateL0(slot *ProfileSlot) error {
 	if slot == nil {
 		return internal.NewError(internal.ErrInvalidQuery, "UpdateL0: slot is required")
 	}
 	coreSlot := toCoreProfileSlot(slot)
 	return s.Session.UpdateL0(&coreSlot)
+}
+
+// ListL1 returns the domain's L1 scene nodes, every id rendered as hex and the
+// order stable across calls. Read-only by design: Dream builds the nodes and the
+// co-occurrence edges between them, decays both, and is the only writer — a host
+// reads what consolidation decided and cannot set it. EdgeIDs have no read of
+// their own; two nodes sharing one are a pair Dream judged related.
+func (s *Session) ListL1() ([]SceneNodeView, error) {
+	nodes, err := s.Session.ListL1()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]SceneNodeView, len(nodes))
+	for i, n := range nodes {
+		out[i] = fromSceneNode(n)
+	}
+	return out, nil
 }
 
 // ListScenes returns scenes with hex IDs; a non-empty l3ID keeps only the
@@ -94,6 +112,21 @@ func (s *Session) UpdateScene(sceneID string, patch ScenePatch) (SceneSlot, erro
 		return SceneSlot{}, err
 	}
 	return fromSceneSlot(slot), nil
+}
+
+// RenameTopic gives one topic the name the host chose and returns the topic as
+// stored afterwards. The name is the host's alone — the engine derives nothing
+// into it, so consolidating or merging a scene rewrites the record around the
+// name and never over it. An empty name is refused: topics are created unnamed,
+// so "" is the absence of a name rather than one. A topic that is not there is
+// ErrNotFound, and nothing is created for it. The new name is visible to
+// Search and SceneContext immediately, not at the next consolidation.
+func (s *Session) RenameTopic(topicID, name string) (TopicSlot, error) {
+	slot, err := s.Session.RenameTopic(topicID, name)
+	if err != nil {
+		return TopicSlot{}, err
+	}
+	return fromTopicSlot(slot), nil
 }
 
 // GetL3 returns an L3 graph with hex IDs.
