@@ -132,7 +132,7 @@ func (db *DB) SubAgent(llmCfg LlmConfig, profile core.ProfileSlot) (*Session, er
 	if err != nil {
 		return nil, err
 	}
-	db.setDomainLLM(id, llmCfg)
+	provider := db.setDomainLLM(id, llmCfg)
 	// Session admission reads the registry, so the handle has to be fetched
 	// before the domain lock is taken: agentsMu under ac.Mu is the one lock
 	// order this layer must never build.
@@ -145,6 +145,11 @@ func (db *DB) SubAgent(llmCfg LlmConfig, profile core.ProfileSlot) (*Session, er
 		return nil, err
 	}
 	defer ac.Mu.Unlock()
+	// The table only reaches a context the idle sweep has yet to build, and a
+	// reconnecting host is by definition holding a live one — so the endpoint it
+	// just named goes onto the context too. Every operation reads the transport
+	// under this lock, which is the lock this write holds.
+	ac.LLM = provider
 	has, err := repo.HasProfileL0(db.engine, id)
 	if err != nil {
 		return nil, err

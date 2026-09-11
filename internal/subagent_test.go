@@ -166,6 +166,50 @@ func TestSubAgentEndpointSurvivesIdleReclaim(t *testing.T) {
 	}
 }
 
+// A host that reconnects names its new endpoint on a domain it is still holding,
+// so the replacement has to reach the live context: with the idle sweep disabled
+// there is no rebuild left to credit, and a domain still running on the endpoint
+// it was created with is the bug this pins.
+func TestSubAgentMovesALiveDomainToItsNewEndpoint(t *testing.T) {
+	primarySrv, _ := countingLLMServer(t, turnKeywords)
+	firstSrv, firstCalls := countingLLMServer(t, turnKeywords)
+	secondSrv, secondCalls := countingLLMServer(t, turnKeywords)
+
+	defaults := DefaultMemHopDefaults
+	defaults.AgentIdleTTLMs = 0 // never reclaimed: only a replacement can move this domain
+	db, err := OpenDB(filepath.Join(t.TempDir(), "swap.meh"),
+		LlmConfig{APIURL: primarySrv.URL, APIKey: "test", Model: "mock"},
+		defaults, primaryProfile("primary"))
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+
+	endpoint := func(url string) LlmConfig {
+		return LlmConfig{APIURL: url, APIKey: "test", Model: "mock"}
+	}
+	sub, err := db.SubAgent(endpoint(firstSrv.URL), core.ProfileSlot{Name: "worker"})
+	if err != nil {
+		t.Fatalf("SubAgent: %v", err)
+	}
+	runTurn(t, sub)
+	if got := firstCalls.Load(); got != 1 {
+		t.Fatalf("the first endpoint took %d distillations, want 1", got)
+	}
+
+	if _, err := db.SubAgent(endpoint(secondSrv.URL), core.ProfileSlot{Name: "worker"}); err != nil {
+		t.Fatalf("SubAgent again: %v", err)
+	}
+	runTurn(t, sub)
+
+	if got := secondCalls.Load(); got != 1 {
+		t.Fatalf("the swapped endpoint took %d distillations, want 1: the live domain still runs on the old one", got)
+	}
+	if got := firstCalls.Load(); got != 1 {
+		t.Fatalf("turns still reach the endpoint the host replaced: %d calls, want only the first turn", got)
+	}
+}
+
 // Registration and the profile are two writes, so a crash between them leaves a
 // domain that is registered but has no identity. Asking for the same name again
 // finishes the job rather than leaving it that way.

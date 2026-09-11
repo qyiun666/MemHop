@@ -111,8 +111,8 @@ internal/{domain,scene,turn,dream,graph,plan,content}
   `SubAgent(llm, profile)` 按 `profile.Name` 幂等建/取一个注册域并挂上它自己的
   LLM 端点。`SubAgent` 的顺序是硬约束：注册（`agentsMu`）→ 挂端点（`agentsMu`）
   → 取会话句柄（`CheckSession` 读注册表，`agentsMu`）→ **最后**才 `lockAgent`
-  拿域锁写画像。反过来就是 `ac.Mu` 之下取 `agentsMu`，正是本文件域锁纪律第 2 条
-  禁止的那个环。写画像用 ensure 语义（已有就不动），所以注册记录写完、画像没写完
+  拿域锁，在锁内把这次的端点装到域上下文上、再写画像。反过来就是 `ac.Mu` 之下取
+  `agentsMu`，正是本文件域锁纪律第 2 条禁止的那个环。写画像用 ensure 语义（已有就不动），所以注册记录写完、画像没写完
   就崩的情况下，同名再调一次会把画像补上。
   建**新**域的前提是这个名字空闲，而「空闲」的判据是整个注册表里没有一条解不出名字的
   键：一条读不回的注册记录仍然占着一个域，此时另发一个同名域等于把宿主引到一个空域，
@@ -137,7 +137,10 @@ internal/{domain,scene,turn,dream,graph,plan,content}
   客户端。一个域可以有自己的端点：`db.llmByAgent` 是覆盖表，`db.providers` 按
   `LlmConfig` 值去重（上百个租户共用一个端点时只有一个 http.Client）。**两张表都
   刻意比域上下文活得久**——空闲回收丢掉上下文后 `contextFor` 会重建它，覆盖若挂在
-  上下文上，一个闲置超过 TTL 的域会静默退回库级端点。
+  上下文上，一个闲置超过 TTL 的域会静默退回库级端点。表只管**未来**的重建：同名再调
+  `SubAgent` 换端点时，宿主手里正是一个活域，所以新 transport 由 `SubAgent` 在域锁内
+  赋给 `ac.LLM`——只写表就是让重连的宿主每一轮继续打旧端点，旧 key 一旦失效就是每轮
+  `ErrLLM`、那一轮永不沉淀。
   **所有 LLM 调用点一律读 `ac.LLM`，不读 `db.llm`**——库级那一个只是注入的默认
   值，绕过注入位的调用点在「每个域同一个端点」时看不出问题，只在某个域带自己的
   端点时才显形，而且显形成同一个域的两类调用打到两个端点。

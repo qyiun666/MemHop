@@ -106,13 +106,17 @@ func (db *DB) providerForLocked(cfg LlmConfig) *llm.Provider {
 	return p
 }
 
-// setDomainLLM points one domain at its own endpoint. A later call for the same
-// domain replaces it, which is what a reconnecting host wants: the endpoint it
-// names now is the one its turns use from here on.
-func (db *DB) setDomainLLM(agentID uint64, cfg LlmConfig) {
+// setDomainLLM records one domain's own endpoint and hands back the transport it
+// names. The table is what a domain rebuilt after the idle sweep reads; a domain
+// that is still live has to be re-pointed by its caller under the domain lock,
+// which is what a reconnecting host wants: the endpoint it names now is the one
+// its turns use from here on.
+func (db *DB) setDomainLLM(agentID uint64, cfg LlmConfig) *llm.Provider {
 	db.agentsMu.Lock()
 	defer db.agentsMu.Unlock()
-	db.llmByAgent[agentID] = db.providerForLocked(cfg)
+	provider := db.providerForLocked(cfg)
+	db.llmByAgent[agentID] = provider
+	return provider
 }
 
 // lockAgent takes the domain lock and re-checks under it that the database is
