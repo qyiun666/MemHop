@@ -81,15 +81,11 @@ func (db *DB) SearchL4(agentID uint64, q L4Query) ([]core.ArchiveSlot, error) {
 // mistake to report rather than a tree to grow. A record that does not satisfy
 // the write contract is refused before anything is stored.
 func (db *DB) AppendArchive(agentID uint64, topicID string, slot core.ArchiveSlot) error {
-	ac, err := db.lockAgent(agentID)
+	ac, th, err := db.lockSession(agentID, topicID)
 	if err != nil {
 		return err
 	}
 	defer ac.Mu.Unlock()
-	th, err := content.ParseTopicID(topicID)
-	if err != nil {
-		return err
-	}
 	// Both checks run before the first byte is written: a refused record must not
 	// land, and must not touch the tree either.
 	if err := content.ValidateAppend(slot); err != nil {

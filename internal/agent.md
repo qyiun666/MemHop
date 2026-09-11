@@ -44,10 +44,11 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    方法；引擎自带的锁在内层，顺序不可颠倒。同 agent 串行、跨 agent 并行。
    `contextFor` 对非默认域校验注册表：未注册的 agentID 直接
    `ErrAgentNotFound`。
-   L5 族统一走 `db.lockSession(agentID, turnID)`（lockAgent +
-   `content.ParseTopicID`，解析失败先解锁）：一个话题键同时寻址两样东西——
-   它的内容（L4 的原文与事件，`SearchL4{TopicID, Kind}` 按 Kind 取）与它开出的
-   计划树（L5 节点，`PlanState(topic)` 给树）。
+   L4/L5 的轮次键写读面统一走 `db.lockSession(agentID, turnID)`（lockAgent +
+   `content.ParseTopicID`，解析失败先解锁）——根上只有这一处解析轮次键：一轮的
+   内容（L4 的原文与事件，`SearchL4{TopicID, Kind}` 按 Kind 取）与它开出的
+   计划树（L5 节点，`PlanState(topic)` 给树）共用同一个键。`SearchL4` 不在这一族里：
+   它的话题条件可选，没有键要先解析。
    门面侧的会话准入策略在 `CheckSession`。L3 的方法是唯一例外：走
    `db.lockSharedPool(callerID)`——先 `CheckSession` 校验调用方域活着，再锁
    保留公共域 `core.SharedPoolAgentID`（L3 记录全部住该域，跨 agent

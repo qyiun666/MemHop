@@ -13,7 +13,6 @@
 package internal
 
 import (
-	"github.com/qyiun666/MemHop/internal/content"
 	"github.com/qyiun666/MemHop/internal/plan"
 )
 
@@ -32,15 +31,11 @@ func (db *DB) PlanCreate(agentID uint64, topicID, title string) (uint32, error) 
 // branch to hang it on. This is the only way a node comes into existence: no
 // write elsewhere, an event included, creates one.
 func (db *DB) PlanNodeAdd(agentID uint64, topicID string, parentSeq uint32, title string) (uint32, error) {
-	ac, err := db.lockAgent(agentID)
+	ac, th, err := db.lockSession(agentID, topicID)
 	if err != nil {
 		return 0, err
 	}
 	defer ac.Mu.Unlock()
-	th, err := content.ParseTopicID(topicID)
-	if err != nil {
-		return 0, err
-	}
 	// A new step lands in progress, so its parent cannot fold a summary from it:
 	// the rollup would run and change nothing, which is why no RollupTree call
 	// follows a create.
@@ -59,15 +54,11 @@ func (db *DB) PlanNodeAdd(agentID uint64, topicID string, parentSeq uint32, titl
 // turn's content: the events a step produced are L4 records the host appends
 // itself, so restating a step can never rewrite what a turn recorded.
 func (db *DB) PlanNodeUpdate(agentID uint64, topicID string, step plan.Step) error {
-	ac, err := db.lockAgent(agentID)
+	ac, th, err := db.lockSession(agentID, topicID)
 	if err != nil {
 		return err
 	}
 	defer ac.Mu.Unlock()
-	th, err := content.ParseTopicID(topicID)
-	if err != nil {
-		return err
-	}
 	step.TopicID = th
 	if err := plan.UpdateNode(ac, agentID, step); err != nil {
 		return err
@@ -79,14 +70,10 @@ func (db *DB) PlanNodeUpdate(agentID uint64, topicID string, step plan.Step) err
 // the actual stored statuses — no auto-fold: a parent becomes Done only where
 // the host declared it so.
 func (db *DB) PlanState(agentID uint64, topicID string) (*PlanTree, error) {
-	ac, err := db.lockAgent(agentID)
+	ac, th, err := db.lockSession(agentID, topicID)
 	if err != nil {
 		return nil, err
 	}
 	defer ac.Mu.Unlock()
-	th, err := content.ParseTopicID(topicID)
-	if err != nil {
-		return nil, err
-	}
 	return plan.BuildTree(ac, th)
 }
