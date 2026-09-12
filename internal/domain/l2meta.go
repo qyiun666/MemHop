@@ -31,16 +31,10 @@ func (c *Context) RemoveTopicsFromIndices(ids []uint64) {
 }
 
 // RetargetL2Meta moves every topic of the merged-away scenes to the primary scene
-// in the L2MetaIndex; call it once the merge has been applied to the records.
+// in the L2Meta cache; call it once the merge has been applied to the records. The
+// move itself is the mirror's: it owns both tables and changes them together.
 func (c *Context) RetargetL2Meta(primaryHash uint64, removed map[uint64]struct{}) {
 	for sid := range removed {
-		for _, id := range c.L2Meta.GetByScene(sid) {
-			meta := c.L2Meta.Remove(id)
-			if meta == nil {
-				continue
-			}
-			meta.SceneID = primaryHash
-			c.L2Meta.Update(meta)
-		}
+		c.L2Meta.RetargetScene(sid, primaryHash)
 	}
 }

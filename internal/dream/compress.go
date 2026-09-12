@@ -41,7 +41,6 @@ func CompressScenes(ctx context.Context, ac *domain.Context, scenes []uint64, re
 				MetaIdx: ac.L2Meta,
 				SceneID: sceneID,
 				Depth:   1,
-				ByScene: true,
 			})
 			// Skip below the compress threshold: few topics keep raw detail.
 			if len(topics) < ac.Defaults.DreamCompressMinTopics {

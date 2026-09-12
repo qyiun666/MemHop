@@ -159,11 +159,29 @@ func TestAppendEventPayloadRefused(t *testing.T) {
 	if len(events) != 0 {
 		t.Fatalf("a refused append must store nothing, got %d events", len(events))
 	}
-	// exactly at the budget still writes
+	// exactly at the budget still writes — the budget is the whole record, so a
+	// one-byte name leaves the rest to the body
 	if err := db.AppendArchive(core.DefaultAgentID, key, core.ArchiveSlot{
-		Kind: core.KindEvent, EventType: "tool_call", Content: strings.Repeat("x", content.MaxEventPayload), CreatedAt: 1,
+		Kind: core.KindEvent, EventType: "t",
+		Content: strings.Repeat("x", content.MaxEventPayload-1), CreatedAt: 1,
 	}); err != nil {
 		t.Fatalf("payload at the budget limit should append: %v", err)
+	}
+	// The name is part of the record. A caller that puts the bulk there instead of
+	// in Content is carrying the same oversized text, so it is refused the same way
+	// and stores nothing.
+	if err := db.AppendArchive(core.DefaultAgentID, key, core.ArchiveSlot{
+		Kind: core.KindEvent, EventType: strings.Repeat("n", content.MaxEventPayload),
+		Content: "x", CreatedAt: 1,
+	}); common.CodeOf(err) != common.ErrInvalidQuery {
+		t.Fatalf("an over-budget event name must be refused with ErrInvalidQuery, got %v", err)
+	}
+	events, err = db.eventsOf(core.DefaultAgentID, key)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("a refused append must store nothing, got %d events", len(events))
 	}
 }
 

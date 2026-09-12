@@ -44,17 +44,19 @@ func main() {
 	}
 
 	reg := newRegistry(cfg.LLM, cfg.Defaults, cfg.DBDir, cfg.Tenants, logger)
+	// The transport is settled before the database is opened: an unusable
+	// --transport must stop the process without going near the shared file.
+	handler, err := buildHandler(cfg, reg)
+	if err != nil {
+		logger.Error("configuration", "error", err)
+		os.Exit(2)
+	}
 	// Open the shared database now: an unusable --db-dir or a half-specified LLM
 	// endpoint should stop the process here rather than answer the first request
 	// with a 500.
 	if err := reg.OpenShared(); err != nil {
 		logger.Error("open shared database", "error", err)
 		os.Exit(1)
-	}
-	handler, err := buildHandler(cfg, reg)
-	if err != nil {
-		logger.Error("unknown transport", "transport", cfg.Transport)
-		os.Exit(2)
 	}
 	srv := &http.Server{
 		Addr:    cfg.Listen,
@@ -65,6 +67,11 @@ func main() {
 	defer stop()
 	if err := serve(ctx, srv, cfg, logger); err != nil {
 		logger.Error("server failed", "error", err)
+		// The database is open by now, and Close is what persists the checkpoints;
+		// a process that stops on a busy port still owes that much.
+		if cerr := reg.CloseAll(); cerr != nil {
+			logger.Error("close databases", "error", cerr)
+		}
 		os.Exit(1)
 	}
 
@@ -76,17 +83,17 @@ func main() {
 	logger.Info("server exited cleanly")
 }
 
-// buildHandler wires the tenant registry into the selected MCP HTTP
-// transport.
+// buildHandler wires the tenant registry into the selected MCP HTTP transport.
+// This is where the transport vocabulary is judged: --transport reaches here
+// unchecked, so a value outside this switch is the process's refusal to serve.
 func buildHandler(cfg *serverConfig, reg *tenantRegistry) (http.Handler, error) {
 	switch cfg.Transport {
 	case "sse":
 		return newSSEHandler(reg), nil
 	case "streamable-http":
 		return newStreamableHandler(reg), nil
-	default:
-		return nil, fmt.Errorf("unknown transport %q", cfg.Transport)
 	}
+	return nil, fmt.Errorf("--transport must be sse or streamable-http, got %q", cfg.Transport)
 }
 
 // serve runs the HTTP server until a shutdown signal arrives or the

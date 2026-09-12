@@ -228,7 +228,7 @@ step — only `PlanCreate` and `PlanNodeAdd` do): an undefined `Kind`, empty `Co
 `CreatedAt <= 0`, an undefined `ContentType`, an event with no `EventType`, an utterance
 carrying an `EventType` or a `NodeSeq`, an event whose `NodeSeq` names a step this turn
 never created (`ErrInvalidQuery`, and nothing lands), the consolidation role `3` (the
-library marks its own summaries with it), and content over budget — 4 KiB per event, 64
+library marks its own summaries with it), and content over budget — 4 KiB per event record, its name included, 64
 KiB per utterance. Over budget is **refused, never truncated**: a shortened record reads
 back exactly like a complete one.
 
@@ -428,7 +428,7 @@ on a large domain.
 err := db.AppendArchive(turnIDHex, api.ArchiveSlot{
     Kind:      api.KindEvent,
     EventType: "tool_call",   // any non-empty name the host chooses; no whitelist
-    Content:   "tool name + arg summary", // 4 KiB budget, over-budget is refused
+    Content:   "tool name + arg summary", // 4 KiB covers the whole record, name included
     CreatedAt: time.Now().UnixMilli(),
 })
 // Seq and the owning topic are engine-assigned: the key you append under IS the
@@ -443,7 +443,7 @@ write because no public call takes one, and Dream drops content older than the
 retention window. Of an event you hand in, `EventType`, `NodeSeq`, `Content` and
 `CreatedAt` are used as given; the library assigns `Seq` and the owning topic and
 forces `ContentType` to `text` with no speaker — a thing that happened has neither.
-Payload over 4 KiB is refused: a shortened event would read back exactly like a
+An event over 4 KiB — name and body together — is refused: a shortened event would read back exactly like a
 complete one.
 
 What those events become is the host's decision and the engine takes no part in it.

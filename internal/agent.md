@@ -28,7 +28,7 @@ internal/{domain,scene,turn,dream,graph,plan,content}
 | 包 | 职责 |
 |---|---|
 | `domain` | 域状态容器 `Context`（Mu/L2Meta/L4/Plans/DreamInFlight/OpCtx，持 Engine/LLM/Defaults 注入）+ PlanCache + L2Meta 缓存维护（SyncL2Meta/RemoveTopicsFromIndices/RetargetL2Meta）；`L4` 是「话题 → 它名下的内容槽位（原文 + 事件）」的镜像 |
-| `scene` | L2 场景读写面：ResolveForRead/Create/FreshID/OpenTurn/SurfaceTopics/ContextTopic/DeleteCascade |
+| `scene` | L2 场景读写面：ResolveForRead（没有场景可读时就在内部新建）/OpenTurn/SurfaceTopics/ContextTopic/DeleteCascade |
 | `turn` | 轮次归属：SettleTarget（可沉淀的轮次范围）、ReadProfile（Search 的 L0 读面）；进来的 hex 键已在根上解析完，本包不碰内容 |
 | `dream` | 巩固阶段：SceneSet、PruneContentStage(`l4_prune`) 与 PrunePlanStage(`l5_prune`)（共用 `ContentRetention` 窗口、各读自己的时间戳）、CompressScenes(+组回滚)、StructureStages、L1 各阶段、DistillL0Stage；调参常量随阶段在此 |
 | `graph` | L3 导入/查询：`ImportBatch`（一次批次的 mode + result + 缓存：domain→图、图→标题集、图→边键，外加两份图集「访问过」/「写过内容」；方法 ImportNode/ImportRelations/GraphIDs/StampChanged）、NodeFilter.Matches/ResolveSubgraphStart/SubgraphAdjacency/BfsWithinDepth/AllNodesVisited |
@@ -60,6 +60,11 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    唯一的例外是 Dream 的 L2 压缩：它改写话题的深度与父子链而不逐条 `SyncL2Meta`，
    对账靠 `dream.StructureStages` 的整表重建——所以那份重建一算出来就要装回 `ac.L2Meta`，
    不得被其后任何阶段的失败丢弃（L1 各阶段只写 L1 记录，丢不掉它的正确性）。
+   这份对账**不覆盖回滚自己也失败**的那种状态：`RestoreSunkTopicsL2` 只 warn 之后，那几个
+   成员在盘上仍是 depth 2、挂着一个已被抹掉的父，而镜像还把它们列在表浅一层——**正是这份
+   滞后让那一轮还读得到**。下一次走通压缩的整表重建会照盘上的深度认下来，那一轮从此不在
+   任何读路径上出现（它的原文此时还在保留窗内）。这条极限只在双重失败时到达；别把它当成
+   「全场景失败就早退、没对账」的缺陷去修——把重建提前到那条路径上，只是让这次丢失来得更早。
    **禁止在域锁内取 `db.agentsMu`**（锁序环：sweep 走 agentsMu -> ac.Mu），
    域内簿记里不受本域锁保护的那两个（`ac.LastActiveAt`、`ac.Reclaimed`）是 atomic 字段。
 3. **Dream 域化**：`RunDream` 全程持本域锁；后台触发经
@@ -182,11 +187,12 @@ internal/{domain,scene,turn,dream,graph,plan,content}
 
 ## 读写路径契约
 
-1. **一次 `Search` = 读场景 + 开一轮**：`scene_id` 为空 → `scene.FreshID`
-   铸一个未被占用的 ID（`0` 跳过；只有 `ErrNotFound` 才算可用，其他读错误
-   原样上抛）并落场景记录（名字一律库生成 `session:<id>`）；非空且不存在 →
+1. **一次 `Search` = 读场景 + 开一轮**：`scene_id` 为空 → `scene` 在自己内部铸一个未被
+   占用的 ID（`0` 跳过；只有 `ErrNotFound` 才算可用，其他读错误原样上抛）并落一条场景记录
+   （名字一律库生成 `session:<id>`，锚点与它同批写入，交回的就是刚写的这条）；非空且不存在 →
    `ErrNotFound`；非空、已存在、且带了 `L3ID` 一律拒——锚点是创建期字段，改锚只走
-   `UpdateScene`，静默丢弃会让一次没生效的锚定看起来生效了。同一批调用还经
+   `UpdateScene`，静默丢弃会让一次没生效的锚定看起来生效了。这道拒绝不看那张图在不在，
+   否则一张已删的图会把「场景已在这里」报成「记录不存在」。同一批调用还经
    `scene.OpenTurn`（`repo.OpenSceneTurn`）把
    场景的 `TurnSeq` 推到下一轮，返回值 `NewTopicID = hash("turn:" +
    场景:TurnSeq)` 就是本轮要沉淀进去的话题。`Update` 一律拒绝未知场景，
@@ -267,8 +273,10 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    选的重放语义。一个话题内读回顺序只看 `Seq`：按惯例用户说的占 1、回复占 2，所以「问在前、
    答在后」由写入侧选的槽位保证，不需要时间戳、更不需要拿 `Role` 打平（事件的
    `Role` 未设即 0，正是 `RoleUser`，一旦混进对话读法就会把一次工具调用显示成
-   用户发言）。`SceneMessage.Seq` 因此是**契约字段**：空洞就是被保留窗裁过的
-   证据，宿主据此把「裁掉了」与「没说过」分开。**两种宽度两种顺序**：一个话题内
+   用户发言）。`SceneMessage.Seq` 因此是**契约字段**：它说的只是「这一格没有内容」。
+   空洞有**两种成因且读侧分不出**：保留窗把那一格收了（连镜像条目一起摘，`Dream` 的清扫
+   就是这么报的），或宿主自己没写那一格——点名 `Seq` 的写入是合法的重放语义，跳号写就是
+   留一个空着的位置。把空洞一律读成「被裁掉了」，等于让宿主把自己少写的那一行当成丢数据。**两种宽度两种顺序**：一个话题内
    `Seq` 就是顺序；跨话题的读（不带 `TopicID` 的 `SearchL4`）没有共同的 `Seq` 可看
    ——那是轮内序号——按记录自己的时间排、以记录 id 收尾，`Limit` 说的才是「最近的
    N 条」，同一个查询两次给出同一个子集。
@@ -311,8 +319,9 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    事件若绑了 `NodeSeq`，本话题的树上必须已有那一步
    （`ac.Plans.HasSeq`）：一个序号指向计划里没有的步骤，是宿主的计划与它的记录
    对不上，报出来比顺手长出一棵树诚实。这道检查也排在落盘之前。
-   两种 Kind 各自的字段归属、
-   4 KiB/64 KiB 预算与跨 Kind 的 Seq 覆写语义记在
+   两种 Kind 各自的字段归属、预算（事件的 4 KiB 量的是**整条记录**——
+   `EventType` 与 `Content` 合起来算，分开各量一道就等于给批量写入留一个免检的口袋）
+   与跨 Kind 的 Seq 覆写语义记在
    `internal/content/agent.md` 与门面注释里，根不复述。
    `EventType` 是宿主自定的步骤名，计划绑定事件与裸事件同口径：引擎从不按它
    分支（读回时原样回显那个名字），唯一约束是非空。

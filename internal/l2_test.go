@@ -114,7 +114,7 @@ func TestMergeScenesRetargetsCache(t *testing.T) {
 	if got := ac.L2Meta.Get(topic.ID); got == nil || got.SceneID != primary.SceneID {
 		t.Fatalf("cache not retargeted: %+v", got)
 	}
-	if ids := ac.L2Meta.GetByScene(secondary.SceneID); len(ids) != 0 {
+	if ids := ac.L2Meta.TopicsByScene(secondary.SceneID); len(ids) != 0 {
 		t.Fatalf("merged scene still cached: %v", ids)
 	}
 }

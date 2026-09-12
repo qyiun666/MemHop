@@ -14,19 +14,9 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
-// countEntries reads the cache the way its callers do — by iterating — so a test
-// never needs an accessor the library itself does not use.
-func countEntries(idx *L2MetaIndex) int {
-	n := 0
-	for range idx.Iter() {
-		n++
-	}
-	return n
-}
-
 func TestL2MetaIndex(t *testing.T) {
 	t.Run("basic_crud", func(t *testing.T) {
-		idx := NewL2MetaIndex()
+		idx := newL2MetaIndex()
 		meta := &L2Meta{
 			IDHash:        42,
 			Depth:         1,
@@ -35,20 +25,18 @@ func TestL2MetaIndex(t *testing.T) {
 			UserTimestamp: 2000,
 		}
 		idx.Update(meta)
-		if countEntries(idx) != 1 {
-			t.Errorf("expected len 1, got %d", countEntries(idx))
+		if got := idx.TopicsByScene(100); len(got) != 1 || got[0].IDHash != 42 {
+			t.Errorf("TopicsByScene(100) should list [42], got %+v", got)
 		}
 		if got := idx.Get(42); got == nil || !slices.Equal(got.FusedKeywords, []string{"rust", "memory"}) {
 			t.Errorf("Get(42) should return the cached keywords, got %+v", got)
 		}
-		if sceneIDs := idx.GetByScene(100); len(sceneIDs) != 1 || sceneIDs[0] != 42 {
-			t.Errorf("GetByScene(100) should return [42], got %v", sceneIDs)
+		idx.Remove(42)
+		if idx.Get(42) != nil {
+			t.Error("the row is still addressable by id after Remove")
 		}
-		if removed := idx.Remove(42); removed == nil || removed.Depth != 1 {
-			t.Error("Remove should return removed meta")
-		}
-		if countEntries(idx) != 0 {
-			t.Error("should be empty after remove")
+		if got := idx.TopicsByScene(100); len(got) != 0 {
+			t.Errorf("the scene still lists %d topics after Remove", len(got))
 		}
 	})
 
@@ -87,6 +75,38 @@ func TestL2MetaIndex(t *testing.T) {
 	})
 }
 
+// A merge moves a whole scene at once. The row carries the scene it belongs to, so
+// a move that updated only the scene list would leave the row pointing at the scene
+// it came from — and the next removal would then look for it in the wrong list.
+func TestRetargetSceneMovesTheWholeScene(t *testing.T) {
+	idx := newL2MetaIndex()
+	idx.Update(&L2Meta{IDHash: 11, SceneID: 1, Depth: 1})
+	idx.Update(&L2Meta{IDHash: 12, SceneID: 1, Depth: 2})
+	idx.Update(&L2Meta{IDHash: 21, SceneID: 2, Depth: 1})
+
+	idx.RetargetScene(1, 2)
+
+	if got := idx.TopicsByScene(1); len(got) != 0 {
+		t.Fatalf("the merged-away scene still lists %d topics", len(got))
+	}
+	moved := idx.TopicsByScene(2)
+	if len(moved) != 3 {
+		t.Fatalf("the primary scene lists %d topics, want 3", len(moved))
+	}
+	for _, m := range moved {
+		if m.SceneID != 2 {
+			t.Fatalf("row %d is listed by scene 2 but still says %d", m.IDHash, m.SceneID)
+		}
+	}
+	idx.Remove(11)
+	if idx.Get(11) != nil {
+		t.Fatal("row 11 is still addressable")
+	}
+	if got := idx.TopicsByScene(2); len(got) != 2 {
+		t.Fatalf("after Remove the primary lists %d topics, want 2", len(got))
+	}
+}
+
 // fieldNames maps each exported field to its type, so the cache structure can
 // be compared against the record it stands in for.
 func fieldNames(typ reflect.Type) map[string]string {
@@ -123,8 +143,8 @@ func TestBuildL2MetaFromEngine(t *testing.T) {
 	}
 
 	l2idx := BuildL2MetaFromEngine(engine, core.DefaultAgentID)
-	if countEntries(l2idx) != 1 {
-		t.Fatalf("expected 1 L2 entry, got %d", countEntries(l2idx))
+	if got := l2idx.TopicsByScene(1); len(got) != 1 {
+		t.Fatalf("expected 1 L2 entry under scene 1, got %d", len(got))
 	}
 	meta := l2idx.Get(101)
 	if meta == nil {

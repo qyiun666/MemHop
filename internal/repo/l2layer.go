@@ -187,31 +187,23 @@ func ListScenesL2(engine *core.StorageEngine, agentID uint64, ids []uint64) ([]c
 	return out, nil
 }
 
-// CreateSceneL2WithID creates a scene under a caller-chosen id. An existing
-// scene is reused as-is — the name is only ever written on creation, so a
-// repeated call for the same id never renames it.
-func CreateSceneL2WithID(engine *core.StorageEngine, agentID uint64, sceneID uint64, name string) error {
-	if _, err := core.ReadSceneSlot(engine, agentID, sceneID); err == nil {
+// CreateSceneL2 stores a scene record built by the caller. An existing record
+// under that id is left exactly as stored — name and anchor are creation-time
+// fields, so a repeated call for the same id neither renames the scene nor moves
+// its domain.
+func CreateSceneL2(engine *core.StorageEngine, agentID uint64, slot *core.SceneSlot) error {
+	_, err := core.ReadSceneSlot(engine, agentID, slot.SceneID)
+	if err == nil {
 		return nil
 	}
-	slot := core.NewSceneSlot(sceneID, name)
-	return core.WriteSceneSlot(engine, agentID, sceneID, &slot)
-}
-
-// SetSceneL3ID assigns a scene's organizational L3 domain (project/目录) id,
-// but only when the scene has no domain yet. A scene already owning a domain
-// (whether the same one or a different one) is left untouched, so a Directed
-// route can never steal an already-anchored scene from its domain.
-func SetSceneL3ID(engine *core.StorageEngine, agentID uint64, sceneID uint64, l3ID uint64) error {
-	slot, err := core.ReadSceneSlot(engine, agentID, sceneID)
-	if err != nil {
-		return err
+	if common.CodeOf(err) != common.ErrNotFound {
+		// "Not there" and "will not read" are different answers, and only the first
+		// one may be written over: a scene record that exists but came back unreadable
+		// still holds the turn counter that mints this domain's turn ids, and storing a
+		// fresh one resets it — the next turns would be issued ids the domain holds.
+		return common.NewError(common.CodeOf(err), "create scene: the record under that id will not read", err)
 	}
-	if slot.L3ID != 0 {
-		return nil
-	}
-	slot.L3ID = l3ID
-	return core.WriteSceneSlot(engine, agentID, sceneID, slot)
+	return core.WriteSceneSlot(engine, agentID, slot.SceneID, slot)
 }
 
 // CollectAllScenesL2 returns every scene record of the agent domain. How many

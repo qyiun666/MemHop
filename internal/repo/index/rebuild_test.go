@@ -37,10 +37,13 @@ func TestBuildL2MetaIndexesEveryDepth(t *testing.T) {
 	l2Meta := BuildL2MetaFromEngine(engine, core.DefaultAgentID)
 	// The scene read is served by depth-1 entries, so every topic must be
 	// cached regardless of depth.
-	if countEntries(l2Meta) != 3 {
-		t.Errorf("expected 3 cached topics, got %d", countEntries(l2Meta))
+	if got := l2Meta.TopicsByScene(100); len(got) != 2 {
+		t.Errorf("scene 100 should hold 2 topics, got %d", len(got))
 	}
-	if got := l2Meta.GetByScene(100); len(got) != 2 {
-		t.Errorf("scene 100 should hold 2 topics, got %v", got)
+	if got := l2Meta.TopicsByScene(200); len(got) != 1 {
+		t.Errorf("scene 200 should hold its depth-3 topic, got %d", len(got))
+	}
+	if deep := l2Meta.Get(3); deep == nil || deep.Depth != 3 {
+		t.Errorf("the deep topic is not cached as stored: %+v", deep)
 	}
 }

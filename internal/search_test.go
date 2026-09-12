@@ -242,3 +242,30 @@ func TestSearchRefusesAnUnknownAnchorWithoutLeavingAScene(t *testing.T) {
 		t.Fatalf("the refusal left %d scene records behind", n)
 	}
 }
+
+// Naming a scene that already exists together with an anchor is a mistake about
+// when anchors are set, and the refusal says so on the argument alone. Looking the
+// named graph up first made that answer depend on the graph: one deleted after this
+// scene was anchored turned "this scene is already here" into a not-found (3001)
+// about a record the host never asked to read, and it paid a read of the file-wide
+// shared pool inside the caller's domain lock to say nothing new.
+func TestSearchRefusesAnAnchorOnAnExistingSceneWithoutLookingItUp(t *testing.T) {
+	srv := mockLLMServer(t, `{"keywords":["unused"]}`)
+	db := newSearchTestDB(t, srv.URL)
+
+	opened, err := db.Search(core.DefaultAgentID, SearchQuery{})
+	if err != nil {
+		t.Fatalf("open a scene: %v", err)
+	}
+	gone := common.FormatHash(common.HashID("proj-deleted-after-this-scene-opened"))
+	_, err = db.Search(core.DefaultAgentID, SearchQuery{
+		SceneID: common.FormatHash(opened.Scene.SceneID),
+		L3ID:    gone,
+	})
+	if common.CodeOf(err) != common.ErrInvalidQuery {
+		t.Fatalf("an anchor on an existing scene must be refused as a bad query, got %v", err)
+	}
+	if !strings.Contains(err.Error(), common.FormatHash(opened.Scene.SceneID)) {
+		t.Fatalf("the refusal must name the scene the host held: %v", err)
+	}
+}

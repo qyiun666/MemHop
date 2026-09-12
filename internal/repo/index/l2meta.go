@@ -4,7 +4,6 @@
 package index
 
 import (
-	"iter"
 	"slices"
 	"sync"
 
@@ -32,7 +31,7 @@ type L2MetaIndex struct {
 	byScene map[uint64][]uint64
 }
 
-func NewL2MetaIndex() *L2MetaIndex {
+func newL2MetaIndex() *L2MetaIndex {
 	return &L2MetaIndex{
 		entries: make(map[uint64]*L2Meta),
 		byScene: make(map[uint64][]uint64),
@@ -71,37 +70,48 @@ func (idx *L2MetaIndex) Update(meta *L2Meta) {
 	idx.insertMeta(meta)
 }
 
-func (idx *L2MetaIndex) Remove(idHash uint64) *L2Meta {
+func (idx *L2MetaIndex) Remove(idHash uint64) {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 	meta, ok := idx.entries[idHash]
 	if !ok {
-		return nil
+		return
 	}
 	idx.removeFromIndices(meta.SceneID, idHash)
 	delete(idx.entries, idHash)
-	return meta
 }
 
-func (idx *L2MetaIndex) GetByScene(sceneID uint64) []uint64 {
+// TopicsByScene is one scene's cached rows, resolved under a single read lock.
+// The two tables move together only under the write lock, so every id a scene
+// lists resolves to a row here.
+func (idx *L2MetaIndex) TopicsByScene(sceneID uint64) []*L2Meta {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
-	// Clone so callers never hold or mutate the internal slice; the
-	// byScene list may be rebuilt on the next Remove/Update.
-	return slices.Clone(idx.byScene[sceneID])
+	out := make([]*L2Meta, 0, len(idx.byScene[sceneID]))
+	for _, id := range idx.byScene[sceneID] {
+		out = append(out, idx.entries[id])
+	}
+	return out
 }
 
-// Iter iterates over all entries as a pull iterator; the read lock is held
-// for the whole loop, so yields must not call back into the index.
-func (idx *L2MetaIndex) Iter() iter.Seq2[uint64, *L2Meta] {
-	return func(yield func(uint64, *L2Meta) bool) {
-		idx.mu.RLock()
-		defer idx.mu.RUnlock()
-		for id, meta := range idx.entries {
-			if !yield(id, meta) {
-				return
-			}
-		}
+// RetargetScene moves every topic of one scene to another in a single write. A
+// merge applies to the whole scene at once: doing it row by row would leave the
+// table between two states for the length of the loop and rebuild the scene list
+// once per topic.
+func (idx *L2MetaIndex) RetargetScene(fromSceneID, toSceneID uint64) {
+	if fromSceneID == toSceneID {
+		return
+	}
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+	ids := idx.byScene[fromSceneID]
+	if len(ids) == 0 {
+		return
+	}
+	delete(idx.byScene, fromSceneID)
+	idx.byScene[toSceneID] = append(idx.byScene[toSceneID], ids...)
+	for _, id := range ids {
+		idx.entries[id].SceneID = toSceneID
 	}
 }
 
@@ -111,19 +121,25 @@ func (idx *L2MetaIndex) insertMeta(meta *L2Meta) {
 }
 
 func (idx *L2MetaIndex) removeFromIndices(sceneID uint64, idHash uint64) {
-	if ids, ok := idx.byScene[sceneID]; ok {
-		filtered := slices.DeleteFunc(slices.Clone(ids), func(x uint64) bool { return x == idHash })
-		if len(filtered) == 0 {
-			delete(idx.byScene, sceneID)
-		} else {
-			idx.byScene[sceneID] = filtered
-		}
+	ids, ok := idx.byScene[sceneID]
+	if !ok {
+		return
+	}
+	// No clone: this runs under the write lock, and the only way a reader holds a
+	// scene's list is through a method that copies it out.
+	filtered := slices.DeleteFunc(ids, func(x uint64) bool { return x == idHash })
+	if len(filtered) == 0 {
+		delete(idx.byScene, sceneID)
+	} else {
+		idx.byScene[sceneID] = filtered
 	}
 }
 
 // ToTopicSlot rebuilds the full topic slot from cached metadata. The field
 // mapping matches core.TopicSlot exactly, so candidates returned from the
-// cache are identical to freshly unmarshalled records.
+// cache are identical to freshly unmarshalled records. The keyword track is the
+// cached row's own slice, not a copy: a reader that would reorder or truncate it
+// copies it first.
 func (m *L2Meta) ToTopicSlot() core.TopicSlot {
 	return core.TopicSlot{
 		ID:             m.IDHash,

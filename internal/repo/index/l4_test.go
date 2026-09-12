@@ -109,13 +109,10 @@ func TestL4IndexExpiredBeforeReadsOnly(t *testing.T) {
 	}
 	eqIDs(t, "index unchanged after report", idx.AllIDs(1), []uint64{11, 12, 13})
 
-	if n := idx.RemoveIDs(1, []uint64{11, 12}); n != 2 {
-		t.Fatalf("RemoveIDs = %d, want 2", n)
-	}
+	idx.RemoveIDs(1, []uint64{11, 12})
 	eqIDs(t, "after RemoveIDs", idx.AllIDs(1), []uint64{13})
-	if n := idx.RemoveIDs(1, []uint64{11}); n != 0 {
-		t.Fatalf("removing an absent id = %d, want 0", n)
-	}
+	idx.RemoveIDs(1, []uint64{11})
+	eqIDs(t, "removing an absent id", idx.AllIDs(1), []uint64{13})
 	idx.RemoveTopic(1)
 	if got := idx.AllIDs(1); got != nil {
 		t.Fatalf("RemoveTopic left %v", got)
@@ -127,9 +124,7 @@ func TestL4IndexExpiredBeforeReadsOnly(t *testing.T) {
 func TestL4IndexRemoveAllIDsDropsTopic(t *testing.T) {
 	idx := NewL4Index()
 	idx.Append(1, core.SeqUser, 11, core.KindUtterance, 1000)
-	if n := idx.RemoveIDs(1, []uint64{11}); n != 1 {
-		t.Fatalf("RemoveIDs = %d, want 1", n)
-	}
+	idx.RemoveIDs(1, []uint64{11})
 	if got := idx.AllIDs(1); got != nil {
 		t.Fatalf("emptied topic still listed: %v", got)
 	}

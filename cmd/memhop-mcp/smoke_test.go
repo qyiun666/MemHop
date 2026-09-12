@@ -397,6 +397,48 @@ func TestSSECloseAllPersists(t *testing.T) {
 	}
 }
 
+// A burst of first requests for the same tenant settles on one server: opening
+// the domain happens outside the registry lock, so the work may be repeated and
+// two servers may be built, but only one of them may be what the next request
+// finds. A different tenant is a different domain, and its first request must not
+// be decided by another tenant's cold start.
+func TestRegistryConcurrentFirstAccessServesOneServerPerTenant(t *testing.T) {
+	reg := newRegistry(testLLM(t), memhop.MemHopDefaults{}, t.TempDir(), nil,
+		slog.New(slog.NewTextHandler(io.Discard, nil)))
+	t.Cleanup(func() { _ = reg.CloseAll() })
+
+	const tenants = 2
+	got := make([]*mcp.Server, tenants)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	for i, name := range []string{"alice", "bob"} {
+		for range 24 {
+			wg.Add(1)
+			go func(i int, name string) {
+				defer wg.Done()
+				srv, err := reg.get(name)
+				if err != nil {
+					t.Errorf("get %s: %v", name, err)
+					return
+				}
+				mu.Lock()
+				defer mu.Unlock()
+				if got[i] != nil && got[i] != srv {
+					t.Errorf("%s was served a second server", name)
+				}
+				got[i] = srv
+			}(i, name)
+		}
+	}
+	wg.Wait()
+	if got[0] == nil || got[1] == nil || got[0] == got[1] {
+		t.Fatalf("tenants did not each get their own server: %v %v", got[0] != nil, got[1] != nil)
+	}
+	if n := len(reg.entries); n != tenants {
+		t.Fatalf("registry holds %d entries, want %d", n, tenants)
+	}
+}
+
 // TestSSETurnFlow drives the hot path the way a host does, over MCP:
 // memhop_search opens a scene and issues the turn's topic id, memhop_archive_append
 // records what the turn said and what it did under that one key, memhop_update

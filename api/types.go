@@ -18,6 +18,9 @@ import "github.com/qyiun666/MemHop/internal"
 type (
 	// LlmConfig holds LLM provider settings: the engine's only external
 	// service, with no embedding service and no dimension to declare.
+	// TimeoutSecs is the whole HTTP call's budget in seconds and MaxOutputTokens
+	// the cap on one reply; leave either at 0 and the library answers with its
+	// own default (120 seconds, 8192 tokens).
 	LlmConfig = internal.LlmConfig
 	// MemHopDefaults holds the host-facing business knobs (consolidation
 	// thresholds and the idle-domain TTL); engine tuning constants are
@@ -31,19 +34,70 @@ type (
 var DefaultMemHopDefaults = internal.DefaultMemHopDefaults
 
 // ---- input aliases ----
+//
+// These are the shapes a host fills in. internal is not a published package, so
+// the lines below are where a host reads their field rules.
 
 type (
-	SearchQuery   = internal.SearchQuery
-	L3ImportItem  = internal.L3ImportItem
-	L3Relation    = internal.L3Relation
-	L3ImportMode  = internal.L3ImportMode
-	L3NodeQuery   = internal.L3NodeQuery
-	L4Query       = internal.L4Query
-	ScenePatch    = internal.ScenePatch
-	PlanStatus    = internal.PlanStatus
+	// SearchQuery scopes one scene read. An empty SceneID asks for a fresh scene,
+	// which L3ID may anchor to a project domain; naming a scene that already exists
+	// together with an L3ID is refused (ErrInvalidQuery) rather than quietly
+	// dropping that anchor. UpdateScene moves the anchor of a scene that exists.
+	SearchQuery = internal.SearchQuery
+	// L3ImportItem is one knowledge node of an ImportL3 batch: Title names it
+	// inside its graph, Domain says which graph, and SourceRef carries a positional
+	// reference (file:line, or a URL). Related declares same-graph hyperedges by
+	// title, and a target may appear later in the same batch.
+	L3ImportItem = internal.L3ImportItem
+	// L3Relation is one import-time hyperedge. The edge spans {item.Title} ∪
+	// Titles, so naming several titles stays one N-ary fact instead of dissolving
+	// into pairs. An unset Kind means "related".
+	L3Relation = internal.L3Relation
+	// L3ImportMode is ImportL3's policy for a node the graph already holds. Skip
+	// leaves the record alone and counts it in skipped_count. Merge folds the
+	// imported values in: an empty imported value keeps the current one, keywords
+	// union, and content grows only by what it does not already contain. Overwrite
+	// replaces the mutable fields wholesale — and there an empty sourceRef clears
+	// the reference, where Merge keeps it.
+	L3ImportMode = internal.L3ImportMode
+	// L3NodeQuery filters the nodes of one graph. GraphID is required and every
+	// other condition that is set narrows the result: IDs, Keyword and NodeType
+	// AND together. Keyword matches case-insensitively over title, content and the
+	// keyword track; a Limit of 0 or less means no cap.
+	L3NodeQuery = internal.L3NodeQuery
+	// L4Query reads a turn's content. Dialogue and events live in one layer, so Kind
+	// is a condition like any other and leaving it unset asks for both. Every field
+	// is optional and the set ones AND. Order is what the query spans: Seq within
+	// one topic, creation time across topics, and Limit keeps the tail of whichever
+	// order applies. NodeSeq keeps one plan step and its whole subtree, and is
+	// refused without TopicID because a step is addressed inside a turn. A Kind or
+	// Type outside the defined vocabulary is refused rather than answered with an
+	// empty set — a filter that can match nothing is indistinguishable from a turn
+	// that holds nothing.
+	L4Query = internal.L4Query
+	// ScenePatch is UpdateScene's partial payload: a nil field is left alone, and
+	// an empty Name is refused. An empty L3ID clears the anchor. Force is read only
+	// by the re-anchor path, and only when the scene already has one: moving a
+	// scene from graph A to graph B loses A, while clearing an anchor is
+	// reversible and needs no Force.
+	ScenePatch = internal.ScenePatch
+	// PlanStatus is a plan step's state: "in_progress" (what a created step is),
+	// "done" or "failed". Any other spelling is refused. There is no "leave it as
+	// it was": restating a step always gives its status.
+	PlanStatus = internal.PlanStatus
+	// GraphEdgeKind names an L3 relation: related, causal, part_of, sequence,
+	// dependency or custom. The same vocabulary is judged on both ends — the import
+	// write and the subgraph filter refuse an undefined value.
 	GraphEdgeKind = internal.GraphEdgeKind
-	ContentType   = internal.ContentType
-	ArchiveKind   = internal.ArchiveKind
+	// ContentType is the medium of one L4 record's content: text, image, video,
+	// document, audio, code, and 255 ("other") for a medium with no name of its
+	// own. An undefined value is refused at the write boundary and in a filter.
+	ContentType = internal.ContentType
+	// ArchiveKind says which of a turn's records an L4 slot is: an utterance —
+	// something somebody said, or a Dream-fused summary — or an event, something
+	// that happened while they said it. It is orthogonal to ContentType, which
+	// names the medium of the text.
+	ArchiveKind = internal.ArchiveKind
 )
 
 // ---- response aliases ----

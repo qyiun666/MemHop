@@ -15,10 +15,10 @@ import (
 // the L2Meta cache so a read costs no record scan; ties break by ID to keep the
 // order deterministic.
 func SurfaceTopics(ac *domain.Context, sceneID uint64) []core.TopicSlot {
-	out := make([]core.TopicSlot, 0, 16)
-	for _, id := range ac.L2Meta.GetByScene(sceneID) {
-		meta := ac.L2Meta.Get(id)
-		if meta == nil || meta.Depth != 1 {
+	metas := ac.L2Meta.TopicsByScene(sceneID)
+	out := make([]core.TopicSlot, 0, len(metas))
+	for _, meta := range metas {
+		if meta.Depth != 1 {
 			continue
 		}
 		out = append(out, meta.ToTopicSlot())

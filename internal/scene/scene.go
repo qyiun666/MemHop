@@ -22,7 +22,7 @@ import (
 // and a closing database stays ErrClosed.
 func ResolveForRead(engine *core.StorageEngine, agentID uint64, q core.SearchQuery) (*core.SceneSlot, error) {
 	if q.SceneID == "" {
-		return Create(engine, agentID, q.L3ID)
+		return create(engine, agentID, q.L3ID)
 	}
 	id, err := common.ParseID(q.SceneID)
 	if err != nil {
@@ -33,52 +33,48 @@ func ResolveForRead(engine *core.StorageEngine, agentID uint64, q core.SearchQue
 		return nil, err
 	}
 	// The anchor is a creation-time field: a scene that already exists keeps the
-	// anchor it has until UpdateScene moves it, and the named graph has to at
-	// least resolve.
+	// anchor it has until UpdateScene moves it. That refusal needs no lookup —
+	// reaching for the named graph first would report an unresolvable anchor as a
+	// not-found about a record the host never asked to read, and would pay a
+	// shared-pool read inside the caller's domain lock to say nothing new.
 	if q.L3ID != "" {
-		if _, err := repo.ReadSharedGraphL3(engine, q.L3ID); err != nil {
-			return nil, err
-		}
 		return nil, common.NewError(common.ErrInvalidQuery,
 			"scene "+q.SceneID+" already exists; its L3 anchor is set at creation only (use UpdateScene)")
 	}
 	return slot, nil
 }
 
-// Create allocates a free scene id, persists the scene record under a
-// library-generated name and applies the optional L3 anchor (write-once
-// semantics). The anchor is resolved before anything is written: a refusal has to
-// leave no scene behind, and the id minted here never reaches the caller on that
-// path.
-func Create(engine *core.StorageEngine, agentID uint64, l3ID string) (*core.SceneSlot, error) {
-	var anchor *core.HypergraphSlot
+// create allocates a free scene id and persists the scene under a
+// library-generated name, anchored on the named L3 domain when one is given. The
+// domain is resolved before anything is written: a refusal has to leave no scene
+// behind. The record returned is the one just written — freshID proved the id free
+// under the caller's domain lock, so nothing is left to read back, and no step
+// remains where the scene is stored while its id cannot be handed to the caller.
+func create(engine *core.StorageEngine, agentID uint64, l3ID string) (*core.SceneSlot, error) {
+	var anchor uint64
 	if l3ID != "" {
 		g, err := repo.ReadSharedGraphL3(engine, l3ID)
 		if err != nil {
 			return nil, err
 		}
-		anchor = g
+		anchor = g.IDHash
 	}
-	id, err := FreshID(engine, agentID)
+	id, err := freshID(engine, agentID)
 	if err != nil {
 		return nil, err
 	}
-	name := "session:" + common.FormatHash(id)
-	if err := repo.CreateSceneL2WithID(engine, agentID, id, name); err != nil {
+	slot := core.NewSceneSlot(id, "session:"+common.FormatHash(id))
+	slot.L3ID = anchor
+	if err := repo.CreateSceneL2(engine, agentID, &slot); err != nil {
 		return nil, err
 	}
-	if anchor != nil {
-		if err := repo.SetSceneL3ID(engine, agentID, id, anchor.IDHash); err != nil {
-			return nil, err
-		}
-	}
-	return core.ReadSceneSlot(engine, agentID, id)
+	return &slot, nil
 }
 
-// FreshID mints an unused 8-byte scene id. Zero is skipped: it is the
+// freshID mints an unused 8-byte scene id. Zero is skipped: it is the
 // "no scene" sentinel of the ID surface. A collision would silently merge two
 // distinct scenes, so allocation loops until the id is free.
-func FreshID(engine *core.StorageEngine, agentID uint64) (uint64, error) {
+func freshID(engine *core.StorageEngine, agentID uint64) (uint64, error) {
 	for {
 		var b [8]byte
 		if _, err := rand.Read(b[:]); err != nil {

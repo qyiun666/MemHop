@@ -53,7 +53,7 @@ func (db *DB) Update(agentID uint64, sceneID, topicID string) error {
 	if err := turn.SettleTarget(parsedScene, parsedTopic, slot.TurnSeq); err != nil {
 		return err
 	}
-	utterances, err := content.Read(db.engine, agentID, ac, parsedTopic, core.KindUtterance)
+	utterances, err := content.Read(agentID, ac, parsedTopic, core.KindUtterance)
 	if err != nil {
 		return err
 	}

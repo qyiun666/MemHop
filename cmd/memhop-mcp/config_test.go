@@ -85,7 +85,6 @@ func TestLoadConfigErrors(t *testing.T) {
 		{"missing db-dir", nil, "--db-dir is required"},
 		{"unknown encoder flag", []string{"--db-dir", "/tmp/meh", "--embed-model", "bge-m3"}, "flag provided but not defined"},
 		{"unknown vector-dim flag", []string{"--db-dir", "/tmp/meh", "--vector-dim", "512"}, "flag provided but not defined"},
-		{"bad transport", []string{"--db-dir", "/tmp/meh", "--transport", "stdio"}, "--transport must be sse or streamable-http"},
 		{"bad tenant", []string{"--db-dir", "/tmp/meh", "--tenants", "alice/../root"}, "invalid tenant id"},
 		{"positional args", []string{"--db-dir", "/tmp/meh", "extra"}, "unexpected positional arguments"},
 	}
@@ -99,6 +98,23 @@ func TestLoadConfigErrors(t *testing.T) {
 				t.Errorf("error = %q, want containing %q", err.Error(), tc.want)
 			}
 		})
+	}
+}
+
+// The transport vocabulary is judged in exactly one place: buildHandler, which
+// main reaches before it opens the shared database. A name it does not serve is a
+// process that refuses to start; the two it does serve are the two the flags
+// advertise.
+func TestBuildHandlerJudgesTransport(t *testing.T) {
+	for _, name := range []string{"sse", "streamable-http"} {
+		h, err := buildHandler(&serverConfig{Transport: name}, nil)
+		if err != nil || h == nil {
+			t.Fatalf("%q must be served: handler=%v err=%v", name, h, err)
+		}
+	}
+	_, err := buildHandler(&serverConfig{Transport: "stdio"}, nil)
+	if err == nil || !strings.Contains(err.Error(), "--transport must be sse or streamable-http") {
+		t.Fatalf("an unservable transport must be refused, got %v", err)
 	}
 }
 

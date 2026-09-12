@@ -167,7 +167,7 @@ func registerTurnEventsTool(s *mcp.Server, db *memhop.Session) {
 		Name:        "memhop_trajectory_read",
 		Description: "读取本轮的全部操作事件（按 Seq 升序）。本轮的计划节点不在这一读里——它们住在 L5，Go 侧用 PlanState 取。",
 		InputSchema: objSchema(map[string]any{
-			"session_id": strProp("轮轨迹 ID（16 位 hex），必填"),
+			"session_id": strProp("本轮的话题 ID（16 位 hex，本轮 memhop_search 返回值里的那个），必填。不是场景 ID：场景 ID 也解析得过去，读回来是空的事件轨，看起来像这一轮什么都没做"),
 		}, "session_id"),
 	}, handle[turnEventsArgs, []memhop.ArchiveSlot](func(a turnEventsArgs) ([]memhop.ArchiveSlot, error) {
 		kind := memhop.KindEvent
@@ -181,14 +181,14 @@ func registerTurnEventsTool(s *mcp.Server, db *memhop.Session) {
 func registerArchiveAppendTool(s *mcp.Server, db *memhop.Session) {
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_archive_append",
-		Description: "向本轮写一条 L4 内容（每轮一个键：本轮 memhop_search 铸出的话题 ID）。kind=utterance 写谁说了什么（role 必填：user/agent/system），kind=event 写发生了什么（event_type 必填，由宿主自定；惯例：llm_request/llm_output/tool_call/tool_result/subagent_spawn/subagent_done/context_inject/ask_user/user_reply）。seq 不填即库分配：事件恒从 3 起，槽 1/2 留给对话；显式写一个已被占用的 seq 是覆写而非报错（重放因此收敛）。内容超预算直接拒写、不截断（事件 4KB、原文 64KB）。带 node_seq 的事件必须绑到本轮计划里已创建的步骤——步骤由 Go 侧 PlanCreate/PlanNodeAdd 创建（本工具面不暴露计划写面），所以纯 MCP 宿主用不了 node_seq。一切校验先于写入，被拒不留下任何记录与节点。",
+		Description: "向本轮写一条 L4 内容（每轮一个键：本轮 memhop_search 铸出的话题 ID）。kind=utterance 写谁说了什么（role 必填：user/agent/system），kind=event 写发生了什么（event_type 必填，由宿主自定；惯例：llm_request/llm_output/tool_call/tool_result/subagent_spawn/subagent_done/context_inject/ask_user/user_reply）。seq 不填即库分配：事件恒从 3 起，槽 1/2 留给对话；显式写一个已被占用的 seq 是覆写而非报错（重放因此收敛）。内容超预算直接拒写、不截断（事件整条 4KB——名字与正文合计；原文 64KB）。带 node_seq 的事件必须绑到本轮计划里已创建的步骤——步骤由 Go 侧 PlanCreate/PlanNodeAdd 创建（本工具面不暴露计划写面），所以纯 MCP 宿主用不了 node_seq。一切校验先于写入，被拒不留下任何记录与节点。",
 		InputSchema: objSchema(map[string]any{
 			"topic_id":     strProp("本轮话题 ID（16 位 hex），必填"),
 			"kind":         strProp("utterance（对话原文，缺省）| event（操作事件）"),
 			"role":         strProp("说话者：user | agent | system（kind=utterance 必填）"),
 			"content":      strProp("内容本体；媒体类型的 content 存路径"),
 			"content_type": strProp("内容类型：text（缺省）| image | video | document | audio | code | other；仅 kind=utterance 采信，event 无媒介、恒存 text"),
-			"event_type":   strProp("事件名（kind=event 必填，任意非空宿主命名）"),
+			"event_type":   strProp("事件名（kind=event 必填，任意非空宿主命名；与正文合计计入事件那条 4KB 预算）"),
 			"node_seq":     intProp("事件绑到哪一步（仅 kind=event，轮次内步骤序号）；该步必须已由 Go 侧 PlanCreate/PlanNodeAdd 创建，本工具面不建节点"),
 			"seq":          intProp("写入的槽位；0/不填 = 库自动分配（自动分配跳过 1/2）"),
 			"timestamp":    intProp("Unix 毫秒时间戳，必填"),

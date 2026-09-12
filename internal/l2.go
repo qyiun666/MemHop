@@ -223,7 +223,6 @@ func (db *DB) SceneContext(agentID uint64, sceneID string) (*SceneContext, error
 		MetaIdx: ac.L2Meta,
 		SceneID: sceneHash,
 		Depth:   2,
-		ByScene: true,
 	})
 	children := make(map[uint64]int)
 	for _, t := range topics {
@@ -233,7 +232,7 @@ func (db *DB) SceneContext(agentID uint64, sceneID string) (*SceneContext, error
 	}
 	out := &SceneContext{SceneName: scenes[0].SceneName, Topics: []SceneContextTopic{}}
 	for _, t := range topics {
-		utterances, err := content.Read(db.engine, agentID, ac, t.ID, core.KindUtterance)
+		utterances, err := content.Read(agentID, ac, t.ID, core.KindUtterance)
 		if err != nil {
 			return nil, err
 		}

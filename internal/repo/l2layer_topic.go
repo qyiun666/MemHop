@@ -17,18 +17,16 @@ import (
 
 // TopicListQuery carries ListTopicsL2 inputs. MetaIdx is the L2MetaIndex mirror
 // the listing reads: it is the same table the scene read path serves, so a
-// listing never disagrees with what a scene shows. ByScene restricts the listing
-// to SceneID; unset lists the whole domain.
+// listing never disagrees with what a scene shows, and SceneID is the scene
+// whose topics come back.
 type TopicListQuery struct {
 	MetaIdx *index.L2MetaIndex
 	SceneID uint64
 	Depth   uint8
-	ByScene bool
 }
 
-// ListTopicsL2 lists the topics of one scene (ByScene) or of the whole domain,
-// up to depth. depth is clamped to [1, MaxDepth]; results sorted by
-// UserTimestamp.
+// ListTopicsL2 lists one scene's topics up to depth. depth is clamped to
+// [1, MaxDepth]; results sorted by UserTimestamp.
 func ListTopicsL2(q TopicListQuery) []core.TopicSlot {
 	depth := q.Depth
 	if depth == 0 {
@@ -37,11 +35,8 @@ func ListTopicsL2(q TopicListQuery) []core.TopicSlot {
 		depth = MaxDepth
 	}
 	var out []core.TopicSlot
-	for _, meta := range q.MetaIdx.Iter() {
+	for _, meta := range q.MetaIdx.TopicsByScene(q.SceneID) {
 		if meta.Depth > depth {
-			continue
-		}
-		if q.ByScene && meta.SceneID != q.SceneID {
 			continue
 		}
 		out = append(out, meta.ToTopicSlot())

@@ -1,11 +1,15 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// Tool registration for the memhop-mcp server. Every public DB method of
-// the api package is exposed as one MCP tool; arguments and results are
-// plain JSON (the DB DTOs carry json tags already). Record IDs reach a
-// client as the 16-char hex strings the api DTOs render — no numeric id
-// crosses this boundary, which api/surface_public_test.go pins.
+// Tool registration for the memhop-mcp server. The tool set is a deliberate
+// subset of the public surface: most of it is session methods, plus
+// memhop_checkpoint and memhop_status from DB, plus a few convenience reads that
+// re-express a Go-side read for a client that holds no session state. What is
+// left off the tools on purpose — the plan write face, the memory-correction
+// deletes, and CompactTo — is listed in the repository's MCP boundary notes, and
+// the count and names are pinned by smoke_test.go. Arguments and results are
+// plain JSON (the DTOs carry json tags already). Record IDs reach a client as the
+// 16-char hex strings the api DTOs render — no numeric id crosses this boundary.
 
 package main
 

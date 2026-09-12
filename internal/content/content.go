@@ -35,7 +35,7 @@ func ParseTopicID(topicID string) (uint64, error) {
 	return h, nil
 }
 
-// MaxEventPayload caps a single event payload (no raw token streams). An event
+// MaxEventPayload caps one event record: its name and its body together. An event
 // over the budget is refused rather than shortened: a truncated event reads
 // exactly like a complete one.
 const MaxEventPayload = 4 * 1024
@@ -72,7 +72,10 @@ func ValidateAppend(in core.ArchiveSlot) error {
 		if in.EventType == "" {
 			return common.NewError(common.ErrInvalidQuery, "an event requires EventType")
 		}
-		return checkPayload(in.Content, MaxEventPayload, "event")
+		// The name is part of the record. Measuring only the body would leave an
+		// unbounded text one field away from the budget, which is the same token
+		// stream the budget exists to keep out.
+		return checkPayload(len(in.EventType)+len(in.Content), MaxEventPayload, "event")
 	}
 	if in.EventType != "" {
 		return common.NewError(common.ErrInvalidQuery, "an utterance carries no EventType")
@@ -86,21 +89,21 @@ func ValidateAppend(in core.ArchiveSlot) error {
 		return common.NewError(common.ErrInvalidQuery,
 			"an utterance speaks as user, agent or system")
 	}
-	return checkPayload(in.Content, MaxUtterancePayload, "utterance")
+	return checkPayload(len(in.Content), MaxUtterancePayload, "utterance")
 }
 
-func checkPayload(content string, budget int, what string) error {
-	if len(content) > budget {
+func checkPayload(size, budget int, what string) error {
+	if size > budget {
 		return common.NewError(common.ErrInvalidQuery,
-			fmt.Sprintf("%s content of %d bytes exceeds the %d-byte budget", what, len(content), budget))
+			fmt.Sprintf("%s of %d bytes exceeds the %d-byte budget", what, size, budget))
 	}
 	return nil
 }
 
 // Append is this package's only write path, and the one every host-side record of
-// a turn goes through: it lands one entry on the topic's content track and returns
-// the Seq it took. NodeSeq lives on the record: a non-zero one names the plan step
-// an event belongs to, which is how a read attributes an event to a step afterwards.
+// a turn goes through: it lands one entry on the topic's content track. The slot it
+// took is not handed back — it is readable on that topic's own track, and the write
+// surface promises no handle.
 //
 // Field ownership is the contract. Of the record a caller passes, the ones the
 // utterance kind owns are adopted verbatim (Role, ContentType, EventType,
@@ -116,9 +119,9 @@ func checkPayload(content string, budget int, what string) error {
 // is an overwrite, not an error — that is what lets a replayed turn converge
 // instead of accumulating versions, and it reaches across Kind: naming a slot an
 // event holds replaces the event.
-func Append(ac *domain.Context, agentID, topicID uint64, in core.ArchiveSlot) (uint64, error) {
+func Append(ac *domain.Context, agentID, topicID uint64, in core.ArchiveSlot) error {
 	if err := ValidateAppend(in); err != nil {
-		return 0, err
+		return err
 	}
 	seq := in.Seq
 	if seq == 0 {
@@ -129,29 +132,26 @@ func Append(ac *domain.Context, agentID, topicID uint64, in core.ArchiveSlot) (u
 		// address before taking it. A named Seq is unchecked on purpose: overwriting a
 		// slot the caller points at is this write path's replay contract.
 		if _, err := core.ReadArchiveSlot(ac.Engine, agentID, core.HashContent(topicID, seq)); err != nil && common.CodeOf(err) != common.ErrNotFound {
-			return 0, common.NewError(common.CodeOf(err), "read the slot the content mirror offered", err)
+			return common.NewError(common.CodeOf(err), "read the slot the content mirror offered", err)
 		}
 	}
 	in.TopicID, in.Seq = topicID, seq
 	if in.Kind == core.KindEvent {
 		in.Role, in.ContentType = 0, core.ContentText
 	}
-	if err := repo.AppendArchiveL4(ac.Engine, agentID, ac.L4, &in); err != nil {
-		return 0, err
-	}
-	return seq, nil
+	return repo.AppendArchiveL4(ac.Engine, agentID, ac.L4, &in)
 }
 
 // Read loads one topic's content of one kind, Seq ascending, through the domain's
 // content mirror. The mirror is the only list of what a topic owns, so a record it
-// names but the disk cannot produce is an error rather than a shorter track — that
-// judgment lives with the read that drains it, in repo.
-func Read(engine *core.StorageEngine, agentID uint64, ac *domain.Context, topicID uint64, kind core.ArchiveKind) ([]core.ArchiveSlot, error) {
-	return repo.ReadArchivesByIDs(engine, agentID, ac.L4.IDs(topicID, kind))
+// names but the disk cannot produce is an error rather than a shorter track.
+func Read(agentID uint64, ac *domain.Context, topicID uint64, kind core.ArchiveKind) ([]core.ArchiveSlot, error) {
+	return repo.ReadArchivesByIDs(ac.Engine, agentID, ac.L4.IDs(topicID, kind))
 }
 
 // RenderForDistill turns a topic's utterances into the one text a keyword call
-// reads: Seq order, one "<speaker>: <content>" line each.
+// reads: Seq order, each entry labelled with its speaker. A record's own newlines
+// are written out as they came in, so an entry can span several lines.
 //
 // Seq order is the order the topic reads back in, so the text that produced a
 // topic's keywords is the text its transcript reads back as. The speaker labels

@@ -118,7 +118,7 @@ func TestReadOrdersUtterancesBySeqNotWriteOrder(t *testing.T) {
 		Role: core.RoleUser, ContentType: core.ContentText, Content: "question", CreatedAt: 1500,
 	})
 
-	got, err := Read(engine, core.DefaultAgentID, ac, topicID, core.KindUtterance)
+	got, err := Read(core.DefaultAgentID, ac, topicID, core.KindUtterance)
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
@@ -151,7 +151,7 @@ func TestReadUtterancesExcludesEvents(t *testing.T) {
 		Role: core.RoleAgent, ContentType: core.ContentText, Content: "answer", CreatedAt: 1002,
 	})
 
-	got, err := Read(engine, core.DefaultAgentID, ac, topicID, core.KindUtterance)
+	got, err := Read(core.DefaultAgentID, ac, topicID, core.KindUtterance)
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
@@ -173,7 +173,7 @@ func TestReadReportsSeqGaps(t *testing.T) {
 		})
 	}
 
-	got, err := Read(engine, core.DefaultAgentID, ac, topicID, core.KindUtterance)
+	got, err := Read(core.DefaultAgentID, ac, topicID, core.KindUtterance)
 	if err != nil {
 		t.Fatalf("a reclaimed slot is not a read failure: %v", err)
 	}

@@ -13,9 +13,9 @@
 // question-first reading and an event log its chronology, with no tie-break on
 // timestamp or role.
 //
-// Kind is part of every entry, not decoration: without it a turn that holds
-// nothing but its two originals reports as a turn with a trajectory, and a scene
-// read pulls back dozens of events for a two-line conversation.
+// Kind is carried by every entry and takes part in no ordering: the two kinds a
+// topic holds come out of one Seq-ordered list as disjoint sets, so an entry that
+// did not say which kind it is would make a read for one kind answer with the other.
 package index
 
 import (
@@ -132,9 +132,9 @@ func (idx *L4Index) ExpiredBefore(cutoff int64) map[uint64][]uint64 {
 }
 
 // RemoveIDs drops specific records of one topic — the counterpart of deleting
-// them — and returns how many went away. Leaving an entry that names a deleted
-// record makes every later read of that topic fail on a record that is gone.
-func (idx *L4Index) RemoveIDs(topicID uint64, idHashes []uint64) int {
+// them. Leaving an entry that names a deleted record makes every later read of that
+// topic fail on a record that is gone.
+func (idx *L4Index) RemoveIDs(topicID uint64, idHashes []uint64) {
 	doomed := make(map[uint64]struct{}, len(idHashes))
 	for _, h := range idHashes {
 		doomed[h] = struct{}{}
@@ -143,21 +143,20 @@ func (idx *L4Index) RemoveIDs(topicID uint64, idHashes []uint64) int {
 	defer idx.mu.Unlock()
 	entries := idx.byTopic[topicID]
 	if len(entries) == 0 {
-		return 0
+		return
 	}
 	kept := slices.DeleteFunc(slices.Clone(entries), func(e l4Entry) bool {
 		_, ok := doomed[e.IDHash]
 		return ok
 	})
 	if len(kept) == len(entries) {
-		return 0
+		return
 	}
 	if len(kept) == 0 {
 		delete(idx.byTopic, topicID)
-		return len(entries)
+		return
 	}
 	idx.byTopic[topicID] = kept
-	return len(entries) - len(kept)
 }
 
 // RemoveTopic drops a whole topic's entries, the counterpart of deleting all the

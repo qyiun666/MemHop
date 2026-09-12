@@ -72,27 +72,38 @@ func newRegistry(llm memhop.LlmConfig, defaults memhop.MemHopDefaults, dbDir str
 }
 
 // get returns the tenant's MCP server, creating its agent domain on first
-// access.
+// access. The registry lock guards the map alone: opening a domain takes that
+// domain's lock inside the engine, and a busy tenant holds that one for the length
+// of an LLM round-trip. Since every request resolves its tenant here, a registry
+// held across that call would put one tenant's work in front of all the others.
+// Two concurrent first requests for one name may therefore both open the domain —
+// registration is serialized by the engine and idempotent by name, so they land on
+// the same domain and the later server is dropped.
 func (r *tenantRegistry) get(tenant string) (*mcp.Server, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
 	if !tenantIDRe.MatchString(tenant) {
 		return nil, fmt.Errorf("invalid tenant id %q", tenant)
 	}
+	r.mu.Lock()
 	if srv, ok := r.entries[tenant]; ok {
+		r.mu.Unlock()
 		return srv, nil
 	}
 	if len(r.allowed) > 0 && !r.allowed[tenant] {
+		r.mu.Unlock()
 		return nil, fmt.Errorf("tenant %q is not allowed", tenant)
 	}
 	if r.db == nil {
 		if err := r.openShared(); err != nil {
+			r.mu.Unlock()
 			return nil, err
 		}
 	}
+	db := r.db
+	r.mu.Unlock()
+
 	// The tenant name is the domain's address, so a reconnecting tenant lands on
 	// the domain it already had rather than minting a second one.
-	session, err := r.db.SubAgent(r.llm, memhop.ProfileInput{Name: tenant, Role: "MCP tenant"})
+	session, err := db.SubAgent(r.llm, memhop.ProfileInput{Name: tenant, Role: "MCP tenant"})
 	if err != nil {
 		return nil, err
 	}
@@ -100,8 +111,13 @@ func (r *tenantRegistry) get(tenant string) (*mcp.Server, error) {
 	server := mcp.NewServer(&mcp.Implementation{Name: "memhop", Version: version}, &mcp.ServerOptions{
 		Logger: r.logger,
 	})
-	registerTools(server, r.db, session)
+	registerTools(server, db, session)
 
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if first, ok := r.entries[tenant]; ok {
+		return first, nil
+	}
 	r.entries[tenant] = server
 	return server, nil
 }
@@ -111,9 +127,10 @@ func (r *tenantRegistry) get(tenant string) (*mcp.Server, error) {
 // refuses to start rather than a 500 on the first request; get also calls it, so
 // a registry used without that step still works.
 //
-// os.Root anchors every file operation to db-dir: the constant database filename
-// is resolved through the root, whose operations can never escape the directory
-// (path-traversal defense in depth on top of the tenant-id whitelist).
+// The database filename is a constant, so the only way the path leaves db-dir is a
+// symlink planted there: os.Root is what notices, and the file is then refused
+// before it is opened. The open itself goes through the joined path, because the
+// library takes a path rather than a root.
 func (r *tenantRegistry) OpenShared() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()

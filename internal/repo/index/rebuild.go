@@ -11,7 +11,7 @@ import "github.com/qyiun666/MemHop/internal/repo/core"
 // records in a single scan. Records that cannot be read or decoded are skipped
 // (see core.IterAll): torn residue must not decide what the cache holds.
 func BuildL2MetaFromEngine(engine *core.StorageEngine, agentID uint64) *L2MetaIndex {
-	l2Meta := NewL2MetaIndex()
+	l2Meta := newL2MetaIndex()
 	for topic := range core.IterAll[core.TopicSlot](engine, agentID, core.RecL2Topic) {
 		l2Meta.insertMeta(L2MetaFromTopic(&topic))
 	}

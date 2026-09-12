@@ -95,17 +95,13 @@ func (db *DB) AppendArchive(agentID uint64, topicID string, slot core.ArchiveSlo
 		return err
 	}
 	defer ac.Mu.Unlock()
-	// Both checks run before the first byte is written: a refused record must not
-	// land, and must not touch the tree either.
-	if err := content.ValidateAppend(slot); err != nil {
-		return err
-	}
+	// The step check runs before the first byte is written, and so does the record
+	// contract inside content.Append: a refused record lands nowhere.
 	if slot.Kind == core.KindEvent && slot.NodeSeq != 0 &&
 		!ac.Plans.HasSeq(th, slot.NodeSeq) {
 		return common.NewError(common.ErrInvalidQuery,
 			fmt.Sprintf("the event names step %d, which is not on this turn's plan tree",
 				slot.NodeSeq))
 	}
-	_, err = content.Append(ac, agentID, th, slot)
-	return err
+	return content.Append(ac, agentID, th, slot)
 }

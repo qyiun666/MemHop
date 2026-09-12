@@ -41,24 +41,6 @@ type serverConfig struct {
 	Defaults memhop.MemHopDefaults
 }
 
-// envOr returns the environment value when set, otherwise the fallback.
-func envOr(envKey, fallback string) string {
-	if v := os.Getenv(envKey); v != "" {
-		return v
-	}
-	return fallback
-}
-
-// firstNonEmpty returns the first non-empty value (flags win over env).
-func firstNonEmpty(vals ...string) string {
-	for _, v := range vals {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
-}
-
 // splitTenants parses a comma-separated tenant whitelist, dropping empty
 // entries. Invalid ids are rejected at load time, not on first access.
 func splitTenants(raw string) ([]string, error) {
@@ -107,9 +89,6 @@ func parseFlags(args []string) (*flagValues, error) {
 	if v.dbDir == "" {
 		return nil, fmt.Errorf("--db-dir is required")
 	}
-	if v.transport != "sse" && v.transport != "streamable-http" {
-		return nil, fmt.Errorf("--transport must be sse or streamable-http, got %q", v.transport)
-	}
 	return v, nil
 }
 
@@ -126,10 +105,14 @@ func buildBaseLLM(v *flagValues) (memhop.LlmConfig, error) {
 	if err != nil {
 		return memhop.LlmConfig{}, err
 	}
+	model := v.llmModel
+	if model == "" {
+		model = os.Getenv("MEMHOP_LLM_MODEL")
+	}
 	llm := memhop.LlmConfig{
-		APIURL:          envOr("MEMHOP_LLM_API_URL", ""),
+		APIURL:          os.Getenv("MEMHOP_LLM_API_URL"),
 		APIKey:          os.Getenv("MEMHOP_LLM_API_KEY"),
-		Model:           firstNonEmpty(v.llmModel, os.Getenv("MEMHOP_LLM_MODEL")),
+		Model:           model,
 		TimeoutSecs:     llmTimeout,
 		MaxOutputTokens: llmMaxTokens,
 	}

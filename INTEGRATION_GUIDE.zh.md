@@ -202,7 +202,7 @@ err = db.AppendArchive(topicIDHex, api.ArchiveSlot{
 **之前**拒绝：未定义的 `Kind`、空 `Content`、`CreatedAt <= 0`、未定义的 `ContentType`、
 事件没有 `EventType`、原文带了 `EventType` 或 `NodeSeq`、事件的 `NodeSeq` 指向本轮计划
 从未建出的步骤（`ErrInvalidQuery`，且什么都不落库）、以及值 3 那个角色（融合摘要的标记，
-库自己盖）；超预算同样拒写不截断——事件 4 KiB、原文 64 KiB，被剪短的记录读回来和完整的
+库自己盖）；超预算同样拒写不截断——事件整条 4 KiB（名字与正文合计）、原文 64 KiB，被剪短的记录读回来和完整的
 无法区分。
 
 ### 6.3 轮次结束：`Update(sceneID, topicID)`
@@ -340,7 +340,7 @@ arcs, err := db.SearchL4(api.L4Query{
 err := db.AppendArchive(turnIDHex, api.ArchiveSlot{
     Kind:      api.KindEvent,
     EventType: "tool_call",   // 宿主自己起名，任意非空即可；库不设白名单
-    Content:   "工具名+入参摘要", // 4 KiB 预算，超了直接拒
+    Content:   "工具名+入参摘要", // 整条 4 KiB 预算（含事件名），超了直接拒
     CreatedAt: time.Now().UnixMilli(),
 })
 // Seq 与所属话题都由引擎按轮键填好；这一轮开出的计划节点也在同一个键下
@@ -351,7 +351,7 @@ err := db.AppendArchive(turnIDHex, api.ArchiveSlot{
 整体寻址**的：没有任何调用返回事件句柄，因为公开面上没有读者；Dream 自动清理超出保留窗
 的内容。宿主传入的事件里 `EventType` / `NodeSeq` / `Content` / `CreatedAt` 按原样采用，库
 负责 `Seq` 与所属话题，并把 `ContentType` 钉成 text、角色留 0——发生了事，没有谁在说话。
-超过 4 KiB 拒写而不是截断：被剪短的事件读回来和完整事件无法区分。
+整条（名字 + 正文）超过 4 KiB 拒写而不是截断：被剪短的事件读回来和完整事件无法区分。
 
 这些事件之后变成什么，是宿主的决定，引擎不分毫插手：库里没有能力面——不落能力记录、
 不解析卡片格式、也没有结晶调用。宿主要从自己的动作日志里提炼东西，用的是自己的提示词、

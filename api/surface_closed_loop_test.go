@@ -338,9 +338,18 @@ func TestAppendArchiveRefusesAndStoresNothing(t *testing.T) {
 	if evs := eventsOf(t, sess, turn); len(evs) != 0 {
 		t.Fatalf("a refused append stored %d events", len(evs))
 	}
-	// exactly at the budget is accepted
-	if err := sess.AppendArchive(turn, event("x", strings.Repeat("a", 4*1024), 1)); err != nil {
+	// exactly at the budget is accepted — the budget is the whole record, so the
+	// one-byte name leaves the rest to the body
+	if err := sess.AppendArchive(turn, event("x", strings.Repeat("a", 4*1024-1), 1)); err != nil {
 		t.Fatalf("event at the budget limit: %v", err)
+	}
+	// A name is part of the record too: putting the bulk there is the same
+	// oversized event, refused the same way, and it stores nothing.
+	if err := sess.AppendArchive(turn, event(strings.Repeat("n", 4*1024), "a", 1)); err == nil {
+		t.Fatal("an over-budget event name must be refused")
+	}
+	if evs := eventsOf(t, sess, turn); len(evs) != 1 {
+		t.Fatalf("a refused append stored %d events", len(evs))
 	}
 	// A step-bound event answers to the same content contract as a bare one: the
 	// step being real does not excuse a record missing its own name.

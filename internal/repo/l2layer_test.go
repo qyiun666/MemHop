@@ -14,23 +14,18 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/index"
 )
 
-// countL2Meta counts the cached topics by iterating, the way every reader does.
-func countL2Meta(idx *index.L2MetaIndex) int {
-	n := 0
-	for range idx.Iter() {
-		n++
-	}
-	return n
-}
-
-// A scene is a host session: its id comes from the host, and creating it
-// twice must not rename or duplicate it.
-func TestCreateSceneL2WithIDIsIdempotent(t *testing.T) {
+// A scene is a host session: its id comes from the caller, and creating it twice
+// must not rename it, duplicate it, or move it to another L3 domain.
+func TestCreateSceneL2LeavesAnExistingSceneAlone(t *testing.T) {
 	engine := tempEngine(t)
-	if err := CreateSceneL2WithID(engine, core.DefaultAgentID, 4242, "session one"); err != nil {
+	first := core.NewSceneSlot(4242, "session one")
+	first.L3ID = 100
+	if err := CreateSceneL2(engine, core.DefaultAgentID, &first); err != nil {
 		t.Fatalf("create scene: %v", err)
 	}
-	if err := CreateSceneL2WithID(engine, core.DefaultAgentID, 4242, "ignored"); err != nil {
+	again := core.NewSceneSlot(4242, "ignored")
+	again.L3ID = 200
+	if err := CreateSceneL2(engine, core.DefaultAgentID, &again); err != nil {
 		t.Fatalf("re-create same scene must be a no-op: %v", err)
 	}
 	slot, err := core.ReadSceneSlot(engine, core.DefaultAgentID, 4242)
@@ -39,6 +34,9 @@ func TestCreateSceneL2WithIDIsIdempotent(t *testing.T) {
 	}
 	if slot.SceneName != "session one" {
 		t.Fatalf("existing scene was renamed to %q", slot.SceneName)
+	}
+	if slot.L3ID != 100 {
+		t.Fatalf("existing scene was re-anchored to %d", slot.L3ID)
 	}
 }
 
@@ -67,9 +65,10 @@ func TestCreateTurnTopicL2WritesSingleTrack(t *testing.T) {
 	}
 }
 
-// TestListTopicsL2FromL2Meta verifies the listing reads the L2MetaIndex mirror:
-// depth filtering, scene filtering when asked for one scene, UserTimestamp
-// ascending sort, and a mirror entry that rebuilds to the stored record exactly.
+// TestListTopicsL2FromL2Meta verifies the listing is served by the L2MetaIndex
+// mirror and scoped to the scene it asks about: another scene's turns never appear,
+// depth filters (and clamps to the surface when unset), UserTimestamp orders the
+// result, and a mirror entry rebuilds to the stored record exactly.
 func TestListTopicsL2FromL2Meta(t *testing.T) {
 	engine, err := core.Create(filepath.Join(t.TempDir(), "list.meh"))
 	if err != nil {
@@ -99,88 +98,63 @@ func TestListTopicsL2FromL2Meta(t *testing.T) {
 	}
 
 	l2Meta := index.BuildL2MetaFromEngine(engine, core.DefaultAgentID)
-	if countL2Meta(l2Meta) != len(raw) {
-		t.Fatalf("L2MetaIndex entries = %d, want %d", countL2Meta(l2Meta), len(raw))
+	q := func(sceneID uint64, depth uint8) []core.TopicSlot {
+		return ListTopicsL2(TopicListQuery{MetaIdx: l2Meta, SceneID: sceneID, Depth: depth})
 	}
-
-	q := func(byScene bool, sceneID uint64, depth uint8) []core.TopicSlot {
-		return ListTopicsL2(TopicListQuery{
-			MetaIdx: l2Meta,
-			SceneID: sceneID,
-			Depth:   depth,
-			ByScene: byScene,
-		})
-	}
-
-	t.Run("domain_wide_filters_depth_and_sorts_asc", func(t *testing.T) {
-		got := q(false, 0, 2)
-		wantIDs := []uint64{12, 13, 11} // UserTimestamp 100, 200, 300
+	wantOrder := func(t *testing.T, got []core.TopicSlot, wantIDs ...uint64) {
+		t.Helper()
 		if len(got) != len(wantIDs) {
-			t.Fatalf("got %d topics, want %d", len(got), len(wantIDs))
+			ids := make([]uint64, len(got))
+			for i, tp := range got {
+				ids[i] = tp.ID
+			}
+			t.Fatalf("listing = %v, want %v", ids, wantIDs)
 		}
 		for i, id := range wantIDs {
 			if got[i].ID != id {
-				t.Errorf("sorted[%d].ID = %d, want %d", i, got[i].ID, id)
+				t.Errorf("listing[%d].ID = %d, want %d", i, got[i].ID, id)
 			}
 		}
-		for i := 1; i < len(got); i++ {
-			if got[i].UserTimestamp < got[i-1].UserTimestamp {
-				t.Errorf("not sorted by UserTimestamp: %d after %d",
-					got[i].UserTimestamp, got[i-1].UserTimestamp)
-			}
-		}
-		for _, tp := range got {
-			if tp.Depth > 2 {
-				t.Errorf("depth-3 topic %d leaked into the domain-wide listing", tp.ID)
-			}
-		}
+	}
+
+	t.Run("one_scene_only", func(t *testing.T) {
+		// sceneB holds the two oldest turns; neither may land in sceneA's listing.
+		wantOrder(t, q(sceneA, 2), 13, 11)
+		// Depth 3 is past every listing this layer serves.
+		wantOrder(t, q(sceneB, 2), 12)
 	})
 
-	t.Run("by_scene_filters", func(t *testing.T) {
-		got := q(true, sceneA, 2)
-		wantIDs := []uint64{13, 11} // sceneA only, asc by timestamp
-		if len(got) != len(wantIDs) {
-			t.Fatalf("got %d topics, want %d", len(got), len(wantIDs))
-		}
-		for i, id := range wantIDs {
-			if got[i].ID != id {
-				t.Errorf("scene-filtered[%d].ID = %d, want %d", i, got[i].ID, id)
-			}
-		}
+	t.Run("depth_clamps_to_the_surface", func(t *testing.T) {
+		wantOrder(t, q(sceneA, 0), 11)
 	})
 
 	t.Run("fields_match_record_exactly", func(t *testing.T) {
-		got := q(false, 0, 2)
-		for _, tp := range got {
-			record, err := core.ReadTopicSlot(engine, core.DefaultAgentID, tp.ID)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !reflect.DeepEqual(tp, *record) {
-				t.Errorf("topic %d rebuilt from cache differs from record:\ncache:  %+v\nrecord: %+v",
-					tp.ID, tp, *record)
+		for _, sceneID := range []uint64{sceneA, sceneB} {
+			for _, tp := range q(sceneID, 2) {
+				record, err := core.ReadTopicSlot(engine, core.DefaultAgentID, tp.ID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !reflect.DeepEqual(tp, *record) {
+					t.Errorf("topic %d rebuilt from cache differs from record:\ncache:  %+v\nrecord: %+v",
+						tp.ID, tp, *record)
+				}
 			}
 		}
 	})
 
 	t.Run("incremental_updates_reflect_in_listing", func(t *testing.T) {
-		// Simulate write-path sync: new topic inserted via Update, then
-		// removed; listing must follow both.
+		// Simulate write-path sync: a new topic of sceneB inserted via Update,
+		// then removed; that scene's listing must follow both, and sceneA's must
+		// not move at all.
 		newID := uint64(15)
 		tp := core.TopicSlot{ID: newID, SceneID: sceneB, Depth: 1,
 			FusedKeywords: []string{"k5"}, UserTimestamp: 50}
 		l2Meta.Update(index.L2MetaFromTopic(&tp))
-		got := q(false, 0, 2)
-		// A domain-wide depth<=2 listing sees 3 of the 4 raw topics; +1 after Update.
-		if len(got) != 4 || got[0].ID != newID {
-			t.Errorf("after Update: got %d topics, first=%d; want 4 topics, first=%d",
-				len(got), got[0].ID, newID)
-		}
+		wantOrder(t, q(sceneB, 2), newID, 12)
+		wantOrder(t, q(sceneA, 2), 13, 11)
 		l2Meta.Remove(newID)
-		got = q(false, 0, 2)
-		if len(got) != 3 {
-			t.Errorf("after Remove: got %d topics, want 3", len(got))
-		}
+		wantOrder(t, q(sceneB, 2), 12)
 	})
 }
 
@@ -189,7 +163,8 @@ func TestListTopicsL2FromL2Meta(t *testing.T) {
 func TestOpenSceneTurnAdvancesTurnSeq(t *testing.T) {
 	engine := tempEngine(t)
 	const sceneID = uint64(4242)
-	if err := CreateSceneL2WithID(engine, core.DefaultAgentID, sceneID, "scene-usage-1"); err != nil {
+	scene := core.NewSceneSlot(sceneID, "scene-usage-1")
+	if err := CreateSceneL2(engine, core.DefaultAgentID, &scene); err != nil {
 		t.Fatalf("create scene: %v", err)
 	}
 	if _, err := OpenSceneTurn(engine, core.DefaultAgentID, sceneID); err != nil {
@@ -211,23 +186,30 @@ func TestOpenSceneTurnAdvancesTurnSeq(t *testing.T) {
 	}
 }
 
-// SetSceneL3ID is the routing primitive: it claims an unanchored scene and
-// never moves one that already has a domain. Host corrections take the
-// read-modify-write path in the composition root instead.
-func TestSetSceneL3IDIsWriteOnce(t *testing.T) {
+// A scene record that exists but will not decode is not an absent one: writing a
+// fresh record over it would reset the turn counter that mints this domain's turn
+// ids, so the turns after it get issued ids the domain already holds.
+func TestCreateSceneL2RefusesAnUnreadableRecord(t *testing.T) {
 	engine := tempEngine(t)
 	const sceneID = uint64(99)
-	if err := CreateSceneL2WithID(engine, core.DefaultAgentID, sceneID, "scene-l3"); err != nil {
-		t.Fatalf("create scene: %v", err)
+	stored := core.NewSceneSlot(sceneID, "scene-l3")
+	stored.TurnSeq = 7
+	if err := core.WriteSceneSlot(engine, core.DefaultAgentID, sceneID, &stored); err != nil {
+		t.Fatalf("write scene: %v", err)
 	}
-	if err := SetSceneL3ID(engine, core.DefaultAgentID, sceneID, 100); err != nil {
-		t.Fatalf("first anchor: %v", err)
+	if _, err := engine.WriteRecord(core.DefaultAgentID, core.RecL2Scene, sceneID, []byte(`{"scene_id":`)); err != nil {
+		t.Fatalf("make scene unreadable: %v", err)
 	}
-	if err := SetSceneL3ID(engine, core.DefaultAgentID, sceneID, 200); err != nil {
-		t.Fatalf("second set: %v", err)
+	fresh := core.NewSceneSlot(sceneID, "session:overwrite")
+	err := CreateSceneL2(engine, core.DefaultAgentID, &fresh)
+	if err == nil {
+		t.Fatal("a record that will not read must not be written over")
 	}
-	if slot, _ := core.ReadSceneSlot(engine, core.DefaultAgentID, sceneID); slot.L3ID != 100 {
-		t.Fatalf("write-once must keep 100, got %d", slot.L3ID)
+	if common.CodeOf(err) == common.ErrNotFound {
+		t.Fatalf("an unreadable record reported as absent: %v", err)
+	}
+	if _, err := core.ReadSceneSlot(engine, core.DefaultAgentID, sceneID); err == nil {
+		t.Fatal("the create stored a record over the damaged one")
 	}
 }
 
@@ -376,7 +358,7 @@ func TestListTopicsL2BreaksTiesOnID(t *testing.T) {
 	for attempt := range 3 {
 		got := ListTopicsL2(TopicListQuery{
 			MetaIdx: index.BuildL2MetaFromEngine(engine, core.DefaultAgentID),
-			SceneID: sceneID, Depth: 1, ByScene: true,
+			SceneID: sceneID, Depth: 1,
 		})
 		if len(got) != 3 {
 			t.Fatalf("attempt %d: want 3 topics, got %d", attempt, len(got))
