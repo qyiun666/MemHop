@@ -112,8 +112,8 @@ func jaccard(setA, setB map[string]struct{}) (float32, bool) {
 // upsertSceneEdge writes the co-occurrence edge between two scene nodes
 // (ID = hash("l1edge:"+min+":"+max), deterministic and idempotent) and
 // attaches it to both nodes' EdgeIDs. A new edge is weighted by the similarity;
-// an existing one only rises when evidenceChanged says one endpoint's keyword
-// evidence moved. Returns whether the edge was actually written.
+// an existing one only rises when evidenceChanged says one endpoint's turn list
+// came out different. Returns whether the edge was actually written.
 func upsertSceneEdge(engine *core.StorageEngine, agentID uint64, nodeA, nodeB uint64, weight float32, now int64, evidenceChanged bool) (bool, error) {
 	lo, hi := min(nodeA, nodeB), max(nodeA, nodeB)
 	edgeID := common.HashID(fmt.Sprintf("l1edge:%d:%d", lo, hi))

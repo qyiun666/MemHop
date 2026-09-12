@@ -232,9 +232,12 @@ func (s *Session) SearchL4(q L4Query) ([]ArchiveSlot, error) {
 //
 // Seq 0 allocates: the record lands one slot above everything the topic holds, and
 // above Seq 1 and 2, which belong to dialogue — so the first event of a turn is
-// Seq 3. A Seq you name is written as named, and taking a held slot overwrites it
-// instead of erroring, across kinds: that is what lets a replayed turn converge
-// rather than accumulate versions. Nothing reclaims a slot a replay stopped
+// Seq 3. Allocation is this library choosing the slot, so it confirms the slot is
+// empty before taking one: a slot whose record will not read back is refused with
+// that read's own code rather than overwritten. A Seq you name is written as named,
+// and taking a held slot overwrites it instead of erroring, across kinds: that is
+// what lets a replayed turn converge rather than accumulate versions — you pointed
+// at the slot, so it is yours to replace. Nothing reclaims a slot a replay stopped
 // filling, so a withdrawn line stays until DeleteTopic or the retention window.
 //
 // Every rule below is refused before any record or plan node is touched. An event

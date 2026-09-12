@@ -276,7 +276,10 @@ internal/{domain,scene,turn,dream,graph,plan,content}
 9. **L3 的 id 与边身份**：`core.readJSON` 校验帧内记录类型，种类不符即
    `ErrNotFound`（否则 `UpdateL3(节点 id)` 会把节点记录改写成图槽）；
    `CreateEdgeL3` 的 id 含 kind，导入按「排序成员 + kind」的语义键去重，
-   故同一对节点可并存多种关系。`ImportL3` 结果带 `GraphIDs`
+   故同一对节点可并存多种关系。标签就是这张图的地址：宿主拿 `Domain` 找图，图 id
+   又由它派生，所以两道写口都不接受空标签——导入条目缺 `Domain` 即拒，`UpdateL3`
+   改名给空串也拒（`nil` 才是「不改名」），改到别的图已占用的标签同样拒。
+   `ImportL3` 结果带 `GraphIDs`
    （图 id = `hash(Domain)`，没有别的公开调用能渲染它）。全部 L3 记录住保留公共域
    `core.SharedPoolAgentID`（文件级公共池：`contextFor`/空闲回收/租户注册表
    三处豁免，域发号时跳过它与默认域，宿主因此拿不到也绑不上这个 id）。

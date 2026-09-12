@@ -87,9 +87,16 @@ func okResult(v any) *mcp.CallToolResult {
 	}
 }
 
-// errResult reports a tool error to the client (IsError=true).
+// errResult reports a tool failure to the client (IsError=true). The engine's
+// numeric code goes into the text because a tool client has no other channel for
+// it: several descriptions promise a refusal by its code name, and "no such record"
+// (3001) versus "that record will not read" (5001) is not something the sentence
+// alone lets a client tell apart. An error with no code of its own stays as it is.
 func errResult(err error) *mcp.CallToolResult {
 	r := &mcp.CallToolResult{}
+	if code := memhop.CodeOf(err); code != 0 {
+		err = fmt.Errorf("[%d] %w", code, err)
+	}
 	r.SetError(err)
 	return r
 }

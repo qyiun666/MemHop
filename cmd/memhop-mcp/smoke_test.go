@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -447,6 +448,45 @@ func TestSSETurnFlow(t *testing.T) {
 		"content": "anonymous", "timestamp": 2100,
 	}); err == nil {
 		t.Fatal("an utterance without a role must be refused")
+	}
+
+	// An engine refusal reaches the client with its code, the only channel a tool
+	// client has: the reserved all-zero topic key is refused on the read side exactly
+	// as it is on the write side, and a client has to be able to tell that refusal
+	// from a record that will not read.
+	_, zeroKey := callClient(t, alice, "memhop_archive_search", map[string]any{
+		"topic_id": "0000000000000000"})
+	if zeroKey == nil {
+		t.Fatal("the reserved zero topic key must be refused")
+	}
+	if want := fmt.Sprintf("[%d]", memhop.ErrInvalidQuery); !strings.Contains(zeroKey.Error(), want) {
+		t.Fatalf("an engine refusal must carry its code %s, got %v", want, zeroKey)
+	}
+
+	// An optional filter sent as an empty string is no filter. The resolvers'
+	// empty-value defaults serve the append path, where a record naming no kind is an
+	// utterance; a search naming no kind wants both — and this topic holds three
+	// records, one of them an event.
+	both, err := callClient(t, alice, "memhop_archive_search", map[string]any{
+		"topic_id": turn.NewTopicID, "kind": ""})
+	if err != nil {
+		t.Fatalf("archive search with an empty kind: %v", err)
+	}
+	var slots []struct {
+		Kind int `json:"kind"`
+	}
+	if err := json.Unmarshal([]byte(both), &slots); err != nil {
+		t.Fatalf("search output: %v (%s)", err, both)
+	}
+	var eventCount int
+	for _, s := range slots {
+		if s.Kind == int(memhop.KindEvent) {
+			eventCount++
+		}
+	}
+	if len(slots) != 3 || eventCount != 1 {
+		t.Fatalf("an empty kind must not narrow the read: %d records, %d events (%s)",
+			len(slots), eventCount, both)
 	}
 
 	settled, err := callClient(t, alice, "memhop_update", map[string]any{

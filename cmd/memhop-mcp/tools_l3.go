@@ -126,7 +126,7 @@ func registerKnowledgeReadTools(s *mcp.Server, db *memhop.Session) {
 
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_knowledge_list",
-		Description: "列出所有 L3 知识超图（仅图元信息，不含节点）。",
+		Description: "列出所有 L3 知识超图（仅图元信息，不含节点）。图池是整份文件共享的唯一一份：这里列出的是所有租户共用的那些图，不是本租户私有的清单。",
 		InputSchema: objSchema(nil),
 	}, handleNoArgs[[]memhop.HypergraphSlot](func() ([]memhop.HypergraphSlot, error) {
 		return db.ListL3()
@@ -136,7 +136,7 @@ func registerKnowledgeReadTools(s *mcp.Server, db *memhop.Session) {
 func registerKnowledgeImportTool(s *mcp.Server, db *memhop.Session) {
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_knowledge_import",
-		Description: "批量导入 L3 知识条目（按标题+领域匹配既有图）：mode=Skip 跳过已存在、Merge 合并节点、Overwrite 覆盖。source_ref 存位置引用（如 file:line）；related 在同图内按标题建边（目标可在同批后文），同一对节点可并存不同 kind 的关系，重导入同批不会重复建边。返回 graph_ids（本批写入的图，可直接用于把场景挂到图上）+ created_ids/updated_ids（**节点** ID，不是图 ID）+ edges_created/skipped_count；逐条失败进 errors，批次不中断。",
+		Description: "批量导入 L3 知识条目（按标题+领域匹配既有图）：mode=Skip 跳过已存在、Merge 合并节点、Overwrite 覆盖。source_ref 存位置引用（如 file:line）；related 在同图内按标题建边（目标可在同批后文），同一对节点可并存不同 kind 的关系，重导入同批不会重复建边。返回 graph_ids（本批写入的图，可直接用于把场景挂到图上）+ created_ids/updated_ids（**节点** ID，不是图 ID）+ edges_created/skipped_count。两层拒绝要分清：整批预校验（items 为空、某条缺 title 或 domain）不过就是整批被拒、一条不写；过了预校验之后，单条存储失败才进 errors，批次不中断。",
 		InputSchema: objSchema(map[string]any{
 			"items": map[string]any{
 				"type": "array",
@@ -216,7 +216,7 @@ func toImportItems(in []knowledgeImportItem) ([]memhop.L3ImportItem, error) {
 func registerKnowledgeWriteTools(s *mcp.Server, db *memhop.Session) {
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_knowledge_update",
-		Description: "重命名一个 L3 知识超图（name 缺省则不修改）。新名称不能被其他图占用——domain 标签就是 ImportL3 寻图的方式，撞名会报 ErrInvalidQuery 而不是让该 domain 每次解析到不同的图。改用自己当前的名字是成功的空操作。",
+		Description: "重命名一个 L3 知识超图（不填 name 即不修改；空串会被拒——没有标签的图 ImportL3 再也寻不回来）。新名称不能被其他图占用——domain 标签就是 ImportL3 寻图的方式，撞名会报 ErrInvalidQuery 而不是让该 domain 每次解析到不同的图。改用自己当前的名字是成功的空操作。",
 		InputSchema: objSchema(map[string]any{
 			"id":   strProp("知识图 ID（16 位 hex），必填"),
 			"name": strProp("新名称（可选）"),
@@ -231,7 +231,7 @@ func registerKnowledgeWriteTools(s *mcp.Server, db *memhop.Session) {
 
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_knowledge_delete",
-		Description: "删除一个 L3 知识超图及其全部节点与边，并清掉命名该图的 L2 场景锚点（删完不会有场景还挂在已消失的项目域下）。影响范围是整张图：绑到图内任何节点的边一起走。没有更细粒度的删除口——内容错了的图重新导入覆盖。",
+		Description: "删除一个 L3 知识超图及其全部节点与边，并清掉命名该图的 L2 场景锚点（删完不会有场景还挂在已消失的项目域下）。影响范围是整张图：绑到图内任何节点的边一起走，而那些锚点可能属于别的租户——图池是全文件共享的唯一一份，本工具删的就是大家共用的那一张。没有更细粒度的删除口——内容错了的图重新导入覆盖。",
 		InputSchema: objSchema(map[string]any{
 			"id": strProp("知识图 ID（16 位 hex），必填"),
 		}, "id"),

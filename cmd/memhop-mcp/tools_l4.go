@@ -83,14 +83,17 @@ func registerL4Tools(s *mcp.Server, db *memhop.Session) {
 			"end":          intProp("时间范围终点（毫秒）"),
 			"ids":          arrProp("档案 ID 列表", "string"),
 			"topic_id":     strProp("限定话题 ID（16 位 hex）"),
-			"kind":         strProp("内容种类过滤：utterance（对话原文）| event（操作事件）；不填即两种都要"),
+			"kind":         strProp("内容种类过滤：utterance（对话原文）| event（操作事件）；不填或空串即两种都要"),
 			"node_seq":     intProp("只取该计划步骤及其全部子步归因的记录（轮次内步骤序号，如 1、2）；须与 topic_id 同填，不填即不加这条约束"),
-			"content_type": strProp("内容类型过滤：text | image | video | document | audio | code | other"),
+			"content_type": strProp("内容类型过滤：text | image | video | document | audio | code | other；不填或空串即不加这条约束"),
 			"limit":        intProp("按本查询的定序取末尾 N 条（缺省 50；<=0 也按缺省处理）"),
 		}),
 	}, handle[archiveSearchArgs, []memhop.ArchiveSlot](func(a archiveSearchArgs) ([]memhop.ArchiveSlot, error) {
+		// An empty optional name is no condition here. The resolvers' empty-value
+		// defaults serve the append path, where a record that names no kind is what
+		// somebody said; a search that says no kind wants both kinds.
 		var ct *memhop.ContentType
-		if a.Type != nil {
+		if a.Type != nil && *a.Type != "" {
 			v, err := resolveContentType(*a.Type)
 			if err != nil {
 				return nil, err
@@ -98,7 +101,7 @@ func registerL4Tools(s *mcp.Server, db *memhop.Session) {
 			ct = &v
 		}
 		var kind *memhop.ArchiveKind
-		if a.Kind != nil {
+		if a.Kind != nil && *a.Kind != "" {
 			v, err := resolveArchiveKind(*a.Kind)
 			if err != nil {
 				return nil, err

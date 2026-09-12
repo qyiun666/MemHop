@@ -573,6 +573,19 @@ func TestUpdateL3RejectsNameCollision(t *testing.T) {
 	if _, err := db.UpdateL3(core.DefaultAgentID, common.FormatHash(alpha), &free); err != nil {
 		t.Fatalf("rename onto a free label: %v", err)
 	}
+	// The label it now carries is free again, so an empty one is refused: a graph
+	// with no label is one ImportL3 can never address again.
+	blank := ""
+	if _, err := db.UpdateL3(core.DefaultAgentID, common.FormatHash(alpha), &blank); common.CodeOf(err) != common.ErrInvalidQuery {
+		t.Fatalf("an empty label must be refused, code=%d err=%v", common.CodeOf(err), err)
+	}
+	if _, err := db.UpdateL3(core.DefaultAgentID, common.FormatHash(alpha), nil); err != nil {
+		t.Fatalf("a nil name is the no-change spelling: %v", err)
+	}
+	after, err := db.GetL3(core.DefaultAgentID, common.FormatHash(alpha))
+	if err != nil || after.Slot.Name != "gamma" {
+		t.Fatalf("the refused rename left its mark: name=%q err=%v", after.Slot.Name, err)
+	}
 }
 
 // TestImportL3NameCollisionRoutesByDerivation keeps the read path total for a

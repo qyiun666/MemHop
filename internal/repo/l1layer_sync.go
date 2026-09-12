@@ -31,9 +31,11 @@ func DeleteSceneNodeL1(engine *core.StorageEngine, agentID uint64, sceneID uint6
 // Importance/Valence/Arousal — this pass never decays them — while a scene whose
 // topic set changed has its UpdatedAt moved to now, so a scene still being talked
 // about restarts the clock its decay runs on. The returned set is the only new
-// evidence the co-occurrence pass may strengthen an existing edge from: a scene
-// whose topic set did not grow carries nothing a live edge was not already weighted
-// by, even when re-distilling the same turns words its keywords differently.
+// evidence the co-occurrence pass may strengthen an existing edge from: it names the
+// scenes whose topic list came out different (a turn lost counts as much as one
+// gained), and a scene whose list is unchanged carries nothing a live edge was not
+// already weighted by, even when re-distilling the same turns words its keywords
+// differently.
 // A topic or node that will not read back stops the pass with that cause, since
 // both would otherwise be written as a record that lost fields.
 func SyncL1NodesFromL2(engine *core.StorageEngine, agentID uint64) (map[uint64]struct{}, error) {

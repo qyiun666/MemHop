@@ -214,7 +214,10 @@ err = db.AppendArchive(topicIDHex, api.ArchiveSlot{
 `IDHash` and `TopicID` are ignored on the way in: the topic comes from the
 argument and the record id follows from `(topic, Seq)`, which is what lets a host
 read a record back, change one field and write it to the slot it came from. `Seq: 0`
-allocates above every held slot, skipping 1 and 2, which are the dialogue's; naming a
+allocates above every held slot, skipping 1 and 2, which are the dialogue's; because
+allocating is the library choosing the slot, it confirms that slot is empty first, and
+one whose record will not read back is refused with that read's own code rather than
+overwritten. Naming a
 held `Seq` **overwrites** it rather than erroring — across kinds too. That is the whole
 replay story: a retried turn rewrites its slots instead of accumulating versions. What
 a replay does not do is reclaim a slot it stopped filling, so a withdrawn line stays

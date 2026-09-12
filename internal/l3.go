@@ -140,7 +140,10 @@ func (db *DB) ImportL3(agentID uint64, items []L3ImportItem, mode L3ImportMode) 
 
 // UpdateL3 partially updates a graph slot (currently Name only). The new name
 // has to be free: a domain label addresses a graph for the import path, so two
-// slots under one label would make that label resolve ambiguously.
+// slots under one label would make that label resolve ambiguously. An empty one
+// is refused for the same reason in the other direction — a graph carrying no
+// label is one ImportL3 can never find again — while a nil name is the "change
+// nothing" spelling.
 func (db *DB) UpdateL3(agentID uint64, id string, name *string) (*L3Graph, error) {
 	ac, err := db.lockSharedPool(agentID)
 	if err != nil {
@@ -152,6 +155,10 @@ func (db *DB) UpdateL3(agentID uint64, id string, name *string) (*L3Graph, error
 		return nil, common.NewError(common.ErrInvalidQuery, "parse l3 id", err)
 	}
 	if name != nil {
+		if *name == "" {
+			return nil, common.NewError(common.ErrInvalidQuery,
+				"a graph label is how ImportL3 finds the graph, so an empty one names nothing", nil)
+		}
 		if err := graph.CheckName(db.engine, core.SharedPoolAgentID, graphHash, *name); err != nil {
 			return nil, err
 		}

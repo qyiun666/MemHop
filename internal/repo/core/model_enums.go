@@ -1,8 +1,9 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// Enumerations of the L0-L5 data model: content-medium, edge-kind and
-// source tags with their string forms. Slot structures live in model.go.
+// Enumerations of the data model: the content medium and archive kind an L4
+// record carries, and the relation kind an L3 edge carries, each with its string
+// form. Slot structures live in model.go.
 package core
 
 import "github.com/qyiun666/MemHop/internal/common"
