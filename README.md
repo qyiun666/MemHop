@@ -166,7 +166,7 @@ Layer   Name             Human Parallel          Mechanism
  L5     Plan             Task tree               One node per step, keyed by the turn that opened it; expired trees are swept by Dream
  L4     Archive            Turn content            A turn's dialogue originals and operation events (Kind), addressed by (topic, Seq); 7-day window — the keyword track is what outlives it
  L3     Knowledge        Semantic memory         Multi-source hypergraph knowledge base
- L2     Context          Working memory          Compressed topic structures (4 depth levels)
+ L2     Context          Working memory          Topics on a scene's surface, plus turns Dream folded under a fused group (one sink per topic)
  L1     Engram           Scene hypergraph        Scene nodes + keyword-overlap hyperedges; maintained by Dream for explicit graph queries
  L0     Profile          Identity                Agent personality, preferences & language habits
 ```

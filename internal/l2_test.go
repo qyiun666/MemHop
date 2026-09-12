@@ -105,7 +105,7 @@ func TestMergeScenesRetargetsCache(t *testing.T) {
 		t.Fatal(err)
 	}
 	ac := testDefaultContext(db)
-	ac.SyncL2Meta(topic.ID)
+	ac.SyncL2Meta(&topic)
 
 	if err := db.MergeScenes(core.DefaultAgentID, common.FormatHash(primary.SceneID),
 		[]string{common.FormatHash(secondary.SceneID)}); err != nil {

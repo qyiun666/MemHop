@@ -8,15 +8,12 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/index"
 )
 
-// SyncL2Meta refreshes one topic entry of the agent's L2MetaIndex from the
-// record just written; call it right after the engine writes. On read failure
-// the entry is removed so stale metadata is never served.
-func (c *Context) SyncL2Meta(idHash uint64) {
-	topic, err := core.ReadTopicLenient(c.Engine, c.ID, idHash)
-	if err != nil || topic == nil {
-		c.L2Meta.Remove(idHash)
-		return
-	}
+// SyncL2Meta refreshes one topic entry of the agent's L2MetaIndex; call it with
+// the slot right after the engine writes it. The written value is the only
+// source: a refresh that read the record back would have to answer a read failure
+// somehow, and dropping the entry is the answer that hides a turn the host was
+// just told had settled. Callers hold c.Mu.
+func (c *Context) SyncL2Meta(topic *core.TopicSlot) {
 	c.L2Meta.Update(index.L2MetaFromTopic(topic))
 }
 

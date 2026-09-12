@@ -29,7 +29,7 @@ func tempEngine(t *testing.T) *core.StorageEngine {
 func mustCreateTurn(t *testing.T, engine *core.StorageEngine, sceneID uint64, kws []string, userTS int64) uint64 {
 	t.Helper()
 	id := core.ComputeTurnTopicID(sceneID, uint64(userTS))
-	if err := CreateTurnTopicL2(engine, core.DefaultAgentID, sceneID, id, kws, userTS, userTS+1); err != nil {
+	if _, err := CreateTurnTopicL2(engine, core.DefaultAgentID, sceneID, id, kws, userTS, userTS+1); err != nil {
 		t.Fatalf("create topic %v", kws)
 	}
 	return id

@@ -32,9 +32,10 @@ func SurfaceTopics(ac *domain.Context, sceneID uint64) []core.TopicSlot {
 //
 // The utterances come from the topic's own content read, already ordered and
 // already judged: which ids a topic owns is the mirror's answer, and only it can
-// tell a reclaimed slot from a missing record. What rides along on every message is
-// the Seq itself, precisely so that a gap in it stays distinguishable from a turn
-// that never said those words.
+// tell a reclaimed slot from a missing record. What rides along on every message
+// is the Seq itself — the slot this line holds in a space the topic's events
+// share with it, so a reader can see which of a turn's slots came back and which
+// did not, without the list's length having to carry that.
 func ContextTopic(t core.TopicSlot, children map[uint64]int, utterances []core.ArchiveSlot) core.SceneContextTopic {
 	st := core.SceneContextTopic{
 		TopicID:    common.FormatHash(t.ID),

@@ -126,7 +126,7 @@ func (db *DB) RenameTopic(agentID uint64, topicID, name string) (core.TopicSlot,
 	// The scene read serves this topic out of the cache, so the record write
 	// has to be mirrored here or the new name stays invisible until the next
 	// consolidation rebuilds the index.
-	ac.SyncL2Meta(parsed)
+	ac.SyncL2Meta(slot)
 	return *slot, nil
 }
 
@@ -231,7 +231,7 @@ func (db *DB) SceneContext(agentID uint64, sceneID string) (*SceneContext, error
 			children[*t.ParentID]++
 		}
 	}
-	out := &SceneContext{SceneName: scenes[0].SceneName}
+	out := &SceneContext{SceneName: scenes[0].SceneName, Topics: []SceneContextTopic{}}
 	for _, t := range topics {
 		utterances, err := content.Read(db.engine, agentID, ac, t.ID, core.KindUtterance)
 		if err != nil {

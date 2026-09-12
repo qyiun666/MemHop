@@ -163,7 +163,7 @@ report, err := sess.Dream(context.Background(), "")
  L5    Plan            任务树                一节点一步，键是开出它的那一轮；过期的树由 Dream 清扫
  L4    Archive         轮内内容             一轮的对话原文与操作事件（Kind），按 (话题, Seq) 寻址；7 天窗口——越过它的只有关键词轨存活
  L3    Knowledge       语义记忆             多源超图知识库
- L2    Context         工作记忆             压缩的话题结构（4 级压缩深度）
+ L2    Context         工作记忆             场景表浅话题 + 被 Dream 折进融合组的那一层（一条话题至多下沉一次）
  L1    Engram          场景超图             场景节点 + 关键词重叠超边；由 Dream 维护，供显式图查询
  L0    Profile         身份认同             Agent 人格、偏好与语言习惯
 ```

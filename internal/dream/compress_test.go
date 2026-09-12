@@ -294,3 +294,70 @@ func TestApplyGroupsCountsADegenerateGroupAsProposedButUnapplied(t *testing.T) {
 		t.Fatalf("a degenerate group sinks nothing: depth=%d parent=%v", member.Depth, member.ParentID)
 	}
 }
+
+// A fused parent is a topic like any other, so the next pass can hand it back as a
+// group member: it sinks to depth 2 and ends level with the turns it summarizes.
+// Depth therefore reports surface (1) versus swallowed (2), never "summary" versus
+// "turn" — and nothing falls out of the depth-2 window SceneContext reads, so the
+// originals under a folded group are still the only place they are said.
+func TestAFusedParentFoldsIntoALaterGroup(t *testing.T) {
+	engine, err := core.Create(filepath.Join(t.TempDir(), "test.meh"))
+	if err != nil {
+		t.Fatalf("create engine: %v", err)
+	}
+	t.Cleanup(func() { _ = engine.Close() })
+
+	const sceneID = uint64(7)
+	writeTurn := func(id uint64, userTS int64) core.TopicSlot {
+		topic := core.TopicSlot{
+			ID: id, SceneID: sceneID, Depth: 1, FusedKeywords: []string{"原文"},
+			UserTimestamp: userTS, AgentTimestamp: userTS + 1000,
+		}
+		if err := core.WriteTopicSlot(engine, core.DefaultAgentID, id, &topic); err != nil {
+			t.Fatalf("write topic %d: %v", id, err)
+		}
+		return topic
+	}
+	ac := domain.NewContext(core.DefaultAgentID, context.Background(), engine, anyKeywords{}, &config.MemHopDefaults{})
+	ctx := context.Background()
+
+	first := []core.TopicSlot{writeTurn(61, 1000), writeTurn(62, 1001)}
+	if applied, rejected := applyGroups(ctx, ac, sceneID, first, &llmops.ConsolidationOutput{
+		L2Groups: []llmops.L2Group{{NodeHashes: []uint64{61, 62}, MergedSummary: "两轮讲完登录链路"}},
+	}); applied != 1 || rejected != 0 {
+		t.Fatalf("first pass: applied=%d rejected=%d", applied, rejected)
+	}
+	parent, err := core.ReadTopicSlot(engine, core.DefaultAgentID, core.ComputeTopicID(sceneID, 1000, 2001))
+	if err != nil {
+		t.Fatalf("read the fused parent: %v", err)
+	}
+	if parent.Depth != 1 {
+		t.Fatalf("a fresh fused parent belongs to the surface, got depth %d", parent.Depth)
+	}
+
+	second := []core.TopicSlot{*parent, writeTurn(63, 1002)}
+	if applied, rejected := applyGroups(ctx, ac, sceneID, second, &llmops.ConsolidationOutput{
+		L2Groups: []llmops.L2Group{{NodeHashes: []uint64{parent.ID, 63}, MergedSummary: "三轮都在追同一个 token"}},
+	}); applied != 1 || rejected != 0 {
+		t.Fatalf("second pass: applied=%d rejected=%d", applied, rejected)
+	}
+
+	folded, err := core.ReadTopicSlot(engine, core.DefaultAgentID, parent.ID)
+	if err != nil {
+		t.Fatalf("read the folded parent: %v", err)
+	}
+	if folded.Depth != 2 || folded.ParentID == nil {
+		t.Fatalf("a later pass must be able to swallow a fused parent: depth=%d parent=%v",
+			folded.Depth, folded.ParentID)
+	}
+	for _, id := range []uint64{61, 62} {
+		child, err := core.ReadTopicSlot(engine, core.DefaultAgentID, id)
+		if err != nil {
+			t.Fatalf("read %d: %v", id, err)
+		}
+		if child.Depth != folded.Depth || child.ParentID == nil || *child.ParentID != parent.ID {
+			t.Fatalf("the folded group's own children must stay where they were, level with it: depth=%d parent=%v",
+				child.Depth, child.ParentID)
+		}
+	}
+}

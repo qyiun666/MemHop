@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/qyiun666/MemHop/internal/domain"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
@@ -46,6 +47,14 @@ func writeTopic(t *testing.T, engine *core.StorageEngine, agentID uint64, topic 
 	if _, err := engine.WriteRecord(agentID, core.RecL2Topic, topic.ID, data); err != nil {
 		t.Fatalf("write topic: %v", err)
 	}
+}
+
+// writeTopicCached writes one topic and mirrors it into the domain's L2Meta
+// cache, the way the root's own write path does.
+func writeTopicCached(t *testing.T, ac *domain.Context, engine *core.StorageEngine, agentID uint64, topic core.TopicSlot) {
+	t.Helper()
+	writeTopic(t, engine, agentID, topic)
+	ac.SyncL2Meta(&topic)
 }
 
 // mustWriteScene persists a scene record for a host session id.

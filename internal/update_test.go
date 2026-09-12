@@ -299,8 +299,8 @@ func TestConsolidateSceneThreshold(t *testing.T) {
 		const sceneID = uint64(7)
 		mustWriteScene(t, db.engine, core.DefaultAgentID, sceneID, "s")
 		for i := 1; i <= 3; i++ {
-			writeTopic(t, db.engine, core.DefaultAgentID, newTopic(uint64(10+i), sceneID, int64(i*100), []string{"kw"}))
-			ac.SyncL2Meta(uint64(10 + i))
+			writeTopicCached(t, ac, db.engine, core.DefaultAgentID,
+				newTopic(uint64(10+i), sceneID, int64(i*100), []string{"kw"}))
 		}
 		db.consolidateScene(ac, sceneID)
 		if _, ok := ac.DreamInFlight[sceneID]; !ok {
@@ -315,8 +315,7 @@ func TestConsolidateSceneThreshold(t *testing.T) {
 		ac := testDefaultContext(db)
 		const sceneID = uint64(8)
 		mustWriteScene(t, db.engine, core.DefaultAgentID, sceneID, "s")
-		writeTopic(t, db.engine, core.DefaultAgentID, newTopic(21, sceneID, 100, []string{"kw"}))
-		ac.SyncL2Meta(21)
+		writeTopicCached(t, ac, db.engine, core.DefaultAgentID, newTopic(21, sceneID, 100, []string{"kw"}))
 
 		db.consolidateScene(ac, sceneID)
 		if len(ac.DreamInFlight) != 0 {
@@ -332,8 +331,8 @@ func TestConsolidateSceneThreshold(t *testing.T) {
 		const sceneID = uint64(9)
 		mustWriteScene(t, db.engine, core.DefaultAgentID, sceneID, "s")
 		for i := 1; i <= 5; i++ {
-			writeTopic(t, db.engine, core.DefaultAgentID, newTopic(uint64(30+i), sceneID, int64(i*100), []string{"kw"}))
-			ac.SyncL2Meta(uint64(30 + i))
+			writeTopicCached(t, ac, db.engine, core.DefaultAgentID,
+				newTopic(uint64(30+i), sceneID, int64(i*100), []string{"kw"}))
 		}
 		db.consolidateScene(ac, sceneID)
 		if len(ac.DreamInFlight) != 0 {

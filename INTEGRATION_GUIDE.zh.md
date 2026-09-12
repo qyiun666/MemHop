@@ -267,7 +267,7 @@ err = db.UpdateL0(&api.ProfileInput{Name: "..."})
 | 方法 | 说明 |
 |---|---|
 | `db.ListScenes(l3ID) ([]SceneSlot, error)` | 场景列表（`SceneID / SceneName / L3ID`）；`l3ID` 非空时只列挂到该项目域的场景，`""` 列全部 |
-| `db.SceneContext(sceneID) (*SceneContext, error)` | 场景全貌（含各话题的 L4 原文），且**完全不写**——不开轮次，**会话恢复用这个**。与 `Search` 的取数差异是刻意的：它平铺到 depth 2，因为 Dream 融合组把原文下沉到了子话题，只有这条路能取回；每条带 `Depth` 与 `ChildCount`，于是一个融合父节点（它的消息是 Dream 的摘要）与它归并的那几轮可分辨。返回的这些条目本身就是全量计数——根与只有这条路能带回的下沉子条目都在里面 |
+| `db.SceneContext(sceneID) (*SceneContext, error)` | 场景全貌（含各话题的 L4 原文），且**完全不写**——不开轮次，**会话恢复用这个**。与 `Search` 的取数差异是刻意的：它平铺到 depth 2，因为 Dream 融合组把原文下沉到了子话题，只有这条路能取回。认出「一个融合组」看 `ChildCount > 0`（它自己那条唯一的消息带着 role 3，即 Dream 给组摘要盖的记号），`Depth` 只回答这条话题还在不在场景表浅——被后一轮巩固折走的组会与它归并的那几轮同为 depth 2，分不出父子。返回的这些条目本身就是全量计数——根与只有这条路能带回的下沉子条目都在里面 |
 | `db.UpdateScene(sceneID, api.ScenePatch{Name, L3ID, Force}) (SceneSlot, error)` | 一次调用改标题（`Name`）/ 锚定到 L3 项目域（`L3ID`）/ 清除锚定（`L3ID: &""`）；未传的字段保持库里现值，**返回值就是写入后的场景** |
 | `db.MergeScenes(primaryID, []secondaryIDs) error` | 场景合并 |
 | `db.DeleteTopic(topicID) error` | 删除话题子树 + 其 L4 原文 + 索引；子树即 `parent_id` 指向它的那批话题（记忆纠错） |

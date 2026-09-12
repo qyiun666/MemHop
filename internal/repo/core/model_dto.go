@@ -29,9 +29,9 @@ type SearchResult struct {
 
 // SceneMessage is one L4 utterance inside a scene context topic. Type says
 // whether the content is prose or a reference to media. Seq is the slot the
-// utterance holds in its topic, and it is what makes a gap visible: Seq skipping
-// a value means that utterance was reclaimed, which is a legal end state for a
-// turn, not a read that lost a line.
+// utterance holds in its topic, and the topic's events share that slot space: a
+// gap says the slot is empty, not what emptied it — a reclaimed utterance is one
+// such reason and a legal end state for a turn, not a read that lost a line.
 type SceneMessage struct {
 	Role      uint8       `json:"role"`
 	Type      ContentType `json:"type"`
@@ -41,8 +41,10 @@ type SceneMessage struct {
 }
 
 // SceneContextTopic is one topic of a scene context with its L4 messages and
-// its child count. Depth tells a fused parent (1) from a sunk turn (2).
-// Name is a caller-supplied label, empty until one is set.
+// its child count. Depth says whether the topic is still on the scene's surface
+// (1) or a Dream group has swallowed it (2) — and a fused summary is itself a
+// topic, so a group folded into a later one sits at 2 level with the turns it
+// summarizes. Name is a caller-supplied label, empty until one is set.
 type SceneContextTopic struct {
 	TopicID    string         `json:"topic_id"`
 	Depth      int            `json:"depth"`

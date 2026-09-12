@@ -53,7 +53,9 @@ func ListTopicsL2(q TopicListQuery) []core.TopicSlot {
 		// A fused parent is stamped with the group's earliest user timestamp,
 		// so it ties with the first turn it swallowed. Shallower first keeps the
 		// group's summary introducing its own originals instead of landing in
-		// the middle of them at the sort's whim.
+		// the middle of them at the sort's whim. A later pass that folds this
+		// parent into a bigger group brings them level, and then the id decides —
+		// still a fixed order, just no longer a meaningful one.
 		if c := cmp.Compare(a.Depth, b.Depth); c != 0 {
 			return c
 		}
@@ -92,7 +94,7 @@ func RenameTopicL2(engine *core.StorageEngine, agentID uint64, topicID uint64, n
 // the summary that replaced it. A stored record that cannot be read refuses the
 // settle: writing depth 1 over a position nobody knows would put a second version
 // of that turn on the read path.
-func CreateTurnTopicL2(engine *core.StorageEngine, agentID uint64, sceneHash, topicID uint64, keywords []string, userTS, agentTS int64) error {
+func CreateTurnTopicL2(engine *core.StorageEngine, agentID uint64, sceneHash, topicID uint64, keywords []string, userTS, agentTS int64) (*core.TopicSlot, error) {
 	topic := core.TopicSlot{
 		ID:             topicID,
 		SceneID:        sceneHash,
@@ -106,14 +108,17 @@ func CreateTurnTopicL2(engine *core.StorageEngine, agentID uint64, sceneHash, to
 		// Nothing stored is this turn's first settle; a record that will not read
 		// back is a turn whose place in the tree nobody knows, and guessing it
 		// could put two versions of one turn on the read path.
-		return err
+		return nil, err
 	}
 	if stored != nil {
 		topic.Name = stored.Name
 		topic.Depth = stored.Depth
 		topic.ParentID = stored.ParentID
 	}
-	return core.WriteTopicSlot(engine, agentID, topic.ID, &topic)
+	if err := core.WriteTopicSlot(engine, agentID, topic.ID, &topic); err != nil {
+		return nil, err
+	}
+	return &topic, nil
 }
 
 // CreateFusedTopicL2 creates a compressed topic (depth 1) whose Keywords are

@@ -54,7 +54,9 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    全局串行；公共域免空闲回收）。锚点校验（`scene.Create`/
    `ResolveForRead`/`UpdateScene`）持调用方锁无锁读公共域记录，由引擎级
    互斥兜底。
-2. **缓存刷新序**：写记录帧后紧跟 `ac.SyncL2Meta`（**存储 -> l2meta**）。
+2. **缓存刷新序**：写记录帧后紧跟 `ac.SyncL2Meta`（**存储 -> l2meta**），交出去的是
+   刚写出去那条 slot——镜像不回读它刚写的那条记录：一次瞬时读失败除了把这条轮次从两份
+   场景读里摘掉之外没有别的回答方式，而那次摘除会藏起宿主已经被告知沉淀成功的一轮。
    唯一的例外是 Dream 的 L2 压缩：它改写话题的深度与父子链而不逐条 `SyncL2Meta`，
    对账靠 `dream.StructureStages` 的整表重建——所以那份重建一算出来就要装回 `ac.L2Meta`，
    不得被其后任何阶段的失败丢弃（L1 各阶段只写 L1 记录，丢不掉它的正确性）。
