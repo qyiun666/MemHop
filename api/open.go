@@ -32,8 +32,11 @@ type DB struct {
 //	file there, no profile     → seed it from profile; without one, an error
 //	no file                    → create and seed; without a profile, an error
 //
-// Both refusals happen before anything touches the filesystem, so a refused Open
-// leaves no file behind. profile is optional only in the sense that an existing
+// A refused Open never creates the file: seeding a new one is what a profile is
+// for, and without one the path is left exactly as it was found. An existing file
+// is opened before its primary profile is looked for, and opening one repairs a
+// torn tail — what a refusal guarantees is that nothing new appears on the path.
+// profile is optional only in the sense that an existing
 // file may already have settled its primary; a new file always needs one, because
 // "whose memory is this" has no other answer.
 //

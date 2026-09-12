@@ -11,7 +11,10 @@ type MemHopDefaults struct {
 	// accumulate before its Dream is scheduled (<=0 disables the trigger).
 	SceneDreamTopicThreshold int `json:"scene_dream_topic_threshold"`
 	// DreamCompressMinTopics is the smallest depth-1 topic count a Dream pass
-	// compresses; below it a scene keeps raw detail.
+	// compresses; below it a scene keeps raw detail. Unlike the two knobs beside it,
+	// 0 does not disable anything: a floor of 0 leaves no scene out of the pass, and
+	// the same number is the target the model is told to compress toward, so 0 asks
+	// it to merge as far as its own rules allow.
 	DreamCompressMinTopics int `json:"dream_compress_min_topics"`
 	// AgentIdleTTLMs reclaims an idle agent's in-memory contexts (0 disables).
 	AgentIdleTTLMs int64 `json:"agent_idle_ttl_ms"`

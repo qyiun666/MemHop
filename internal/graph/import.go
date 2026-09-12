@@ -251,7 +251,7 @@ func (b *ImportBatch) ImportRelations(item *core.L3ImportItem) {
 // Titles is the far side: one title is a binary relation, several are one
 // n-ary hyperedge over the whole set.
 func (b *ImportBatch) relationMembers(graphID uint64, source string, rel core.L3Relation, titles map[string]struct{}) ([]uint64, string) {
-	if rel.Kind > core.EdgeCustom {
+	if !rel.Kind.Valid() {
 		return nil, fmt.Sprintf("invalid edge kind %d", rel.Kind)
 	}
 	if len(rel.Titles) == 0 {

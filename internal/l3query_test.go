@@ -217,6 +217,52 @@ func TestQueryL3SubgraphDepth(t *testing.T) {
 	}
 }
 
+// TestQueryL3SubgraphEdgeKindFilter keeps the edge-kind filter honest in both
+// directions: naming kinds restricts the walk to edges of those kinds, naming none
+// walks every edge — and naming a kind the vocabulary does not define is refused,
+// because the import boundary refuses to store one. Answering that filter with an
+// empty subgraph is the report a host reads back as "this graph holds no such edges".
+func TestQueryL3SubgraphEdgeKindFilter(t *testing.T) {
+	engine := newTestEngine(t)
+	db := newTestDB(t, engine)
+	graphID := common.HashID("graph")
+	idA, idB, idC := common.HashID("a"), common.HashID("b"), common.HashID("c")
+	for _, n := range []core.HypergraphNode{
+		testNode(idA, graphID, "A", "t", "", nil),
+		testNode(idB, graphID, "B", "t", "", nil),
+		testNode(idC, graphID, "C", "t", "", nil),
+	} {
+		writeNode(t, engine, &n)
+	}
+	related := core.HypergraphEdge{IDHash: common.HashID("e1"), GraphID: graphID,
+		Kind: core.EdgeRelated, NodeIDs: []uint64{idA, idB}}
+	causal := core.HypergraphEdge{IDHash: common.HashID("e2"), GraphID: graphID,
+		Kind: core.EdgeCausal, NodeIDs: []uint64{idB, idC}}
+	writeEdge(t, engine, &related)
+	writeEdge(t, engine, &causal)
+	graphHex := common.FormatHash(graphID)
+	start := common.FormatHash(idA)
+
+	sub, err := db.QueryL3Subgraph(core.DefaultAgentID, graphHex, start, 3, []core.GraphEdgeKind{core.EdgeRelated})
+	if err != nil {
+		t.Fatalf("filter by related: %v", err)
+	}
+	if len(sub.Nodes) != 2 || len(sub.Edges) != 1 || sub.Edges[0].IDHash != related.IDHash {
+		t.Fatalf("a related-only walk must stop at B over e1, got %+v / %+v", sub.Nodes, sub.Edges)
+	}
+	sub, err = db.QueryL3Subgraph(core.DefaultAgentID, graphHex, start, 3, nil)
+	if err != nil {
+		t.Fatalf("no filter: %v", err)
+	}
+	if len(sub.Nodes) != 3 || len(sub.Edges) != 2 {
+		t.Fatalf("no filter walks the whole graph, got %d nodes / %d edges", len(sub.Nodes), len(sub.Edges))
+	}
+	if _, err := db.QueryL3Subgraph(core.DefaultAgentID, graphHex, start, 3,
+		[]core.GraphEdgeKind{core.GraphEdgeKind(9)}); common.CodeOf(err) != common.ErrInvalidQuery {
+		t.Fatalf("an undefined edge kind must be refused, got %v", err)
+	}
+}
+
 // TestQueryL3SubgraphHyperedge hyperedge: one edge linking three nodes, all reachable in 1 hop.
 func TestQueryL3SubgraphHyperedge(t *testing.T) {
 	engine := newTestEngine(t)

@@ -364,7 +364,11 @@ public call renders that derivation, so `ImportL3` reports it directly —
 `SearchQuery.L3ID` / `UpdateScene` need that id.
 
 `GetL3` / `ListL3` / `QueryL3Nodes` / `QueryL3Subgraph` / `UpdateL3` / `DeleteL3`.
-Deletion has one granularity: the whole graph.
+Deletion has one granularity: the whole graph. `QueryL3Subgraph`'s `edgeKinds`
+narrows the walk to the kinds named and leaves the condition out when the list is
+empty; a kind outside the six constants is refused with `ErrInvalidQuery`, because
+the write boundary refuses to store one and an empty subgraph is the answer a host
+reads back as "this graph holds no such edges".
 
 `QueryL3Nodes` filters AND together (`IDs` / `Keyword` / `NodeType`), so naming
 only `GraphID` lists that graph's nodes and `Keyword` is case-insensitive — like

@@ -223,7 +223,8 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    `Defaults.SceneDreamTopicThreshold` 时调度该场景 Dream；单个融合组是
    "摘要内容 → 提炼关键词 → 建父话题 → 下沉子话题"的串写，任一步
    失败都回滚本组已写的记录（`dream.discardFusedGroup` 按父话题键整删它名下的
-   内容与缓存，不需要携带任何 id 才能撤销一次写）——要么整体生效，
+   内容与缓存——本组写过的东西全在父键底下，不必去数域里别的记录；一次下沉的
+   撤回则按本组自己点名的成员做，见下文）——要么整体生效，
    要么不留孤儿记录 / 半成品父节点。一个场景落地的各组**成员互斥**：模型按对话线程
    分组，相邻两条线程可以都点名同一轮，而两组都应用等于把那一轮沉两次——第二次改父
    指向，第一个组的摘要于是管着一个不再应答它的子，那一轮也落到最深的读路径之下，
@@ -232,11 +233,17 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    宿主打时间戳粗到几轮共一时很容易发生——所以父 id 已被一个话题占用时本组同样拒（落在
    它写任何记录之前，无回滚），撞上一个不是话题的记录也拒而不覆写（一个 id 只对应一种
    记录）（`TestApplyGroupsRefusesCollidingParentID`）。
-   下沉这一步本身就是全有或全无：
-   `repo.CompressTopicsL2` 把改写攒到最后一次批写，成员读不动（`ErrNotFound`
+   下沉是一次批写，而**批写不是全有或全无**：尾界推进之后才失败（`Sync`/remap）时，
+   已经写到的成员就是活了，父链接挂在它们身上。让整组保持原子的是回滚那一步——
+   `dream.applyOneGroup` 拿本组自己点名的成员调 `repo.RestoreSunkTopicsL2`，只把
+   此刻正挂在这个父下的条目收回 depth-1（没被批写触及的成员不挂这个父，因而不被动），
+   且**先撤子再删父**：反过来若在两步之间再失败，留下的是挂在已删父下面的 depth-2
+   轮次，而 `Search` 只列 depth-1、下一趟 Dream 的挑组也只列 depth ≤ 1，那一轮从此
+   谁也合并不到它。成员读不动（`ErrNotFound`
    以外的任何错误，或索引点名却不是话题记录）就整组不动、把错误交回上面回滚，
    只有「已经不在」的成员从组里退出——吞掉一次读失败会留下父摘要与那一条自己的
-   原文同时在场景里，正是一个半成品父节点（`TestCompressTopicsL2RefusesUnreadableMember`）。
+   原文同时在场景里，正是一个半成品父节点（`TestCompressTopicsL2RefusesUnreadableMember`、
+   `TestRestoreSunkTopicsL2BringsBackOnlyThisGroupsMembers`）。
 5. **内容类型与说话者在 `AppendArchive` 逐条声明并在其边界校验**：原文侧照收
    `Role`（user/agent/system）与 `ContentType`（零值 `ContentText`，非文本侧存
    路径/URL），未定义值以 `ErrInvalidQuery` 拒绝；`RoleDream` 是库给融合摘要

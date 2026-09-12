@@ -79,3 +79,11 @@ var graphEdgeKindNames = map[GraphEdgeKind]string{
 func (k GraphEdgeKind) String() string {
 	return common.EnumString(k, graphEdgeKindNames, "GraphEdgeKind")
 }
+
+// Valid reports whether k is one of the defined edge kinds — the same question
+// the import boundary asks and the subgraph filter asks, answered from the one
+// names table.
+func (k GraphEdgeKind) Valid() bool {
+	_, ok := graphEdgeKindNames[k]
+	return ok
+}

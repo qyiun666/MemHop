@@ -72,7 +72,7 @@ func registerL4Tools(s *mcp.Server, db *memhop.Session) {
 	// lands directly in an LLM's context.
 	const archiveSearchDefaultLimit = 50
 
-	description := fmt.Sprintf("检索 L4 内容（一轮的对话原文与其操作事件同住此层）：keyword（子串，忽略大小写）/ 时间范围 [start,end]（毫秒）/ ID 列表 / topic_id / kind / node_seq / content_type 都是过滤条件，填了的全部按 AND 组合；一个都不填即全域扫描。node_seq 是轮次内的步骤序号（由 Go 侧计划写面发号），取该步及其全部子步归因的记录，必须与 topic_id 同填。顺序看查询宽度：填了 topic_id 按该轮内 Seq 升序，不带 topic_id 的跨轮读取按记录自己的时间升序、同值以记录 id 收尾；limit 保留该顺序末尾的 N 条（缺省 %d，可填更大值）。text/document/code 存原文，image/audio/video 等媒体类型的 content 为路径。返回记录里的两个数值字段自有词表：kind 0=utterance / 1=event；role 0=user / 1=agent / 2=system，而 role 3 是库盖在融合组摘要上的自有标记——写侧不接受它，它也没有宿主起的名字。", archiveSearchDefaultLimit)
+	description := fmt.Sprintf("检索 L4 内容（一轮的对话原文与其操作事件同住此层）：keyword（子串，忽略大小写）/ 时间范围 [start,end]（毫秒）/ ID 列表 / topic_id / kind / node_seq / content_type 都是过滤条件，填了的全部按 AND 组合；一个都不填即全域扫描。node_seq 是轮次内的步骤序号（由 Go 侧计划写面发号），取该步及其全部子步归因的记录，必须与 topic_id 同填。顺序看查询宽度：填了 topic_id 按该轮内 Seq 升序，不带 topic_id 的跨轮读取按记录自己的时间升序、同值以记录 id 收尾；limit 保留该顺序末尾的 N 条（缺省 %d，可填更大值）。text/document/code 存原文，image/audio/video 等媒体类型的 content 为路径。返回记录里的三个数值字段自有词表：kind 0=utterance / 1=event；role 0=user / 1=agent / 2=system，而 role 3 是库盖在融合组摘要上的自有标记——写侧不接受它，它也没有宿主起的名字；type 0=text / 1=image / 2=video / 3=document / 4=audio / 5=code / 255=other，其中 event 记录恒为 0（事件没有媒介）。", archiveSearchDefaultLimit)
 
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_archive_search",
@@ -82,7 +82,7 @@ func registerL4Tools(s *mcp.Server, db *memhop.Session) {
 			"start":        intProp("时间范围起点（毫秒）"),
 			"end":          intProp("时间范围终点（毫秒）"),
 			"ids":          arrProp("档案 ID 列表", "string"),
-			"topic_id":     strProp("限定话题 ID（16 位 hex）"),
+			"topic_id":     strProp("限定话题 ID（16 位 hex）；不填或空串即不限定，跨话题按记录时间扫全域"),
 			"kind":         strProp("内容种类过滤：utterance（对话原文）| event（操作事件）；不填或空串即两种都要"),
 			"node_seq":     intProp("只取该计划步骤及其全部子步归因的记录（轮次内步骤序号，如 1、2）；须与 topic_id 同填，不填即不加这条约束"),
 			"content_type": strProp("内容类型过滤：text | image | video | document | audio | code | other；不填或空串即不加这条约束"),
@@ -91,7 +91,9 @@ func registerL4Tools(s *mcp.Server, db *memhop.Session) {
 	}, handle[archiveSearchArgs, []memhop.ArchiveSlot](func(a archiveSearchArgs) ([]memhop.ArchiveSlot, error) {
 		// An empty optional name is no condition here. The resolvers' empty-value
 		// defaults serve the append path, where a record that names no kind is what
-		// somebody said; a search that says no kind wants both kinds.
+		// somebody said; a search that says no kind wants both kinds. The topic key
+		// follows the same rule: an empty one is not an address, and a client that
+		// sends "" means "no topic condition".
 		var ct *memhop.ContentType
 		if a.Type != nil && *a.Type != "" {
 			v, err := resolveContentType(*a.Type)
@@ -108,6 +110,10 @@ func registerL4Tools(s *mcp.Server, db *memhop.Session) {
 			}
 			kind = &v
 		}
+		var topicID *string
+		if a.TopicID != nil && *a.TopicID != "" {
+			topicID = a.TopicID
+		}
 		limit := a.Limit
 		if limit <= 0 {
 			limit = archiveSearchDefaultLimit
@@ -117,7 +123,7 @@ func registerL4Tools(s *mcp.Server, db *memhop.Session) {
 			Start:   a.Start,
 			End:     a.End,
 			IDs:     a.IDs,
-			TopicID: a.TopicID,
+			TopicID: topicID,
 			Kind:    kind,
 			NodeSeq: a.NodeSeq,
 			Type:    ct,
@@ -181,7 +187,7 @@ func registerArchiveAppendTool(s *mcp.Server, db *memhop.Session) {
 			"kind":         strProp("utterance（对话原文，缺省）| event（操作事件）"),
 			"role":         strProp("说话者：user | agent | system（kind=utterance 必填）"),
 			"content":      strProp("内容本体；媒体类型的 content 存路径"),
-			"content_type": strProp("text（缺省）| image | video | document | audio | code | other"),
+			"content_type": strProp("内容类型：text（缺省）| image | video | document | audio | code | other；仅 kind=utterance 采信，event 无媒介、恒存 text"),
 			"event_type":   strProp("事件名（kind=event 必填，任意非空宿主命名）"),
 			"node_seq":     intProp("事件绑到哪一步（仅 kind=event，轮次内步骤序号）；该步必须已由 Go 侧 PlanCreate/PlanNodeAdd 创建，本工具面不建节点"),
 			"seq":          intProp("写入的槽位；0/不填 = 库自动分配（自动分配跳过 1/2）"),

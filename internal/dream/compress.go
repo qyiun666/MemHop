@@ -134,7 +134,8 @@ func sharesMember(nodeHashes []uint64, claimed map[uint64]struct{}) bool {
 // fused topic's own content slot, extracts keywords for that topic, creates it,
 // then sinks the group nodes. Any step that cannot be applied rolls back what
 // this group already wrote and returns the reason, so a group is either fully
-// applied or leaves nothing behind.
+// applied or leaves nothing behind. The one way it leaves a trace is a rollback
+// that itself fails, and that is what its WARN exists to say out loud.
 func applyOneGroup(ctx context.Context, ac *domain.Context, sceneID uint64, g llmops.L2Group, minTS, maxTS int64) error {
 	parentID := core.ComputeTopicID(sceneID, minTS, maxTS)
 	// An empty summary is not a group the engine can fuse: it would sink the
@@ -182,6 +183,15 @@ func applyOneGroup(ctx context.Context, ac *domain.Context, sceneID uint64, g ll
 		return common.NewError(common.CodeOf(err), "dream: create fused topic", err)
 	}
 	if err := repo.CompressTopicsL2(ac.Engine, ac.ID, g.NodeHashes, parentID); err != nil {
+		// The sink is one batch, and a batch that fails partway leaves the members it
+		// reached at depth 2 under a parent this call is about to erase. Restoring them
+		// is what makes the rollback complete: depth-1 listing is what both `Search`
+		// and the next Dream's group picker read, so an unrestored member is a turn
+		// that stops being findable without ever becoming part of a summary.
+		if rerr := repo.RestoreSunkTopicsL2(ac.Engine, ac.ID, g.NodeHashes, parentID); rerr != nil {
+			slog.Warn("dream: rollback sunk topics failed",
+				"parent", common.FormatHash(parentID), "err", rerr)
+		}
 		discardFusedGroup(ac, parentID)
 		return common.NewError(common.ErrIO, "dream: compress child topics", err)
 	}

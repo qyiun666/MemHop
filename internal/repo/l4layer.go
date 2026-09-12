@@ -42,6 +42,12 @@ func AppendArchiveL4(engine *core.StorageEngine, agentID uint64, idx *index.L4In
 // with nothing indexed costs no write, and a topic being deleted never has to
 // hand over the ids it owned — the mirror is the list. The records go first, so
 // a failed pass cannot leave an entry naming a record the topic still holds.
+//
+// What the mirror cannot name, this cannot delete: a record whose payload will not
+// decode is in no mirror, and its owning topic cannot be read back out of its id,
+// which hashes (topic, Seq) without naming either. Such a record therefore survives
+// every topic deletion and the retention window alike, and what it leaves on the
+// read path is the hole its slot number opens in the Seq the topic reports.
 func DeleteTopicArchives(engine *core.StorageEngine, agentID uint64, idx *index.L4Index, topics []uint64) error {
 	var doomed []uint64
 	for _, topicID := range topics {

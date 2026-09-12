@@ -164,8 +164,11 @@ func (s *Session) ListL3() ([]HypergraphSlot, error) {
 // UpdateL3 renames a graph and returns it with hex IDs. The new label has to be
 // free: a domain label is how ImportL3 addresses a graph, so renaming onto a
 // label another graph already carries is refused with ErrInvalidQuery instead of
-// leaving that domain ambiguous. Renaming onto the name the graph already has is
-// a no-op that succeeds.
+// leaving that domain ambiguous. Renaming onto the label the graph already has
+// changes nothing but succeeds, and it still moves the graph's UpdatedAt: this
+// call stamps that clock whether or not the label moved, so a nil name is the
+// spelling of "stamp it, change nothing" and an empty one is refused rather than
+// erasing the label that addresses the graph.
 func (s *Session) UpdateL3(id string, name *string) (*L3Graph, error) {
 	g, err := s.Session.UpdateL3(id, name)
 	if err != nil {
@@ -226,9 +229,14 @@ func (s *Session) SearchL4(q L4Query) ([]ArchiveSlot, error) {
 // under a Kind condition, and the plan tree sharing the key comes back from
 // PlanState.
 //
-// What is stored is Kind, Seq, Role, ContentType, EventType, NodeSeq, Content and
+// What is stored of what you hand in is Kind, Seq, EventType, NodeSeq, Content and
 // CreatedAt; IDHash and TopicID are ignored, which is what makes the round trip
 // work — read a record back, change one field, write it to the slot it came from.
+// CreatedAt is yours to supply and the library never stamps it: a turn records when
+// things were said, not when the write happened, and a non-positive one is refused.
+// An event owns no speaker and no medium, so its Role and ContentType are the
+// library's (0 and text) whatever you set the second one to; an utterance owns
+// both. A ContentType outside the constants above is refused on either kind.
 //
 // Seq 0 allocates: the record lands one slot above everything the topic holds, and
 // above Seq 1 and 2, which belong to dialogue — so the first event of a turn is
@@ -405,11 +413,12 @@ func (s *Session) DeleteTopic(topicID string) error {
 //
 // A relation may target an item later in the same batch (edges resolve in a
 // second pass), and every item declares its edges — including one whose node
-// was skipped, because edges are deduped by their members plus kind. The
-// result reports the node ids created/updated, how many edges were created,
-// and GraphIDs: the graphs this batch wrote into, which a host needs to anchor
-// a scene on them (UpdateScene / SearchQuery.L3ID), since a graph id derives
-// from the domain name and no other public call renders that derivation.
+// was skipped, because edges are deduped by their members plus kind. The result
+// reports the node ids created and the ones updated, how many it left alone, how
+// many edges were created, and GraphIDs: every graph this batch resolved a domain
+// into, including one it added nothing new to. A host needs those ids to anchor a
+// scene on them (UpdateScene / SearchQuery.L3ID), since a graph id derives from the
+// domain name and no other public call renders that derivation.
 func (s *Session) ImportL3(items []L3ImportItem, mode L3ImportMode) (*L3ImportResult, error) {
 	return s.Session.ImportL3(items, mode)
 }

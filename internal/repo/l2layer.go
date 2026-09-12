@@ -60,6 +60,34 @@ func CompressTopicsL2(engine *core.StorageEngine, agentID uint64, ids []uint64, 
 	return nil
 }
 
+// RestoreSunkTopicsL2 undoes one sink: every listed topic that now hangs on
+// parentID comes back up a level with no parent. The parent link is the whole test,
+// so a member the failed batch never reached is left exactly as it stands rather
+// than guessed at — and a member it did reach is named by the very parent this call
+// is erasing. A rolled-back sink is the difference between a turn the next Dream can
+// pick again and one that reads as neither a turn nor a fused group.
+func RestoreSunkTopicsL2(engine *core.StorageEngine, agentID uint64, ids []uint64, parentID uint64) error {
+	for _, id := range ids {
+		topic, err := core.ReadTopicLenient(engine, agentID, id)
+		switch {
+		case err != nil && common.CodeOf(err) == common.ErrNotFound:
+			continue // this member is gone; there is nothing to bring back
+		case err != nil:
+			return common.NewError(common.ErrIO, "read topic to restore", err)
+		case topic == nil || topic.ParentID == nil || *topic.ParentID != parentID:
+			continue // never sunk under this parent: not this group's to undo
+		}
+		if topic.Depth > 1 {
+			topic.Depth--
+		}
+		topic.ParentID = nil
+		if err := core.WriteTopicSlot(engine, agentID, topic.ID, topic); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // TopicIDsBySceneL2 enumerates every topic (any depth) owned by one of the
 // given scenes. The scan is strict: the list is what a cascade tombstones
 // afterwards, and a topic that merely would not read must not be dropped from it.

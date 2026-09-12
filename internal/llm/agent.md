@@ -23,4 +23,7 @@
 
 - `normalizeBaseURL` 会补 `/v1`、剥 `/chat/completions`：go-openai 不自动补前缀，
   而 SDK 会重新拼接后缀。
-- APIKey 绝不出现在错误信息里：`httpError` 只带状态码与消息体。
+- APIKey 绝不出现在错误信息里：`httpError` 只带状态码与消息体，且消息体只留开头
+  `maxUpstreamEcho` 字节（截口按 UTF-8 收口）。那句话有两个去处——工具客户端看到的
+  错误文本、和 stderr 上的 WARN——而网关在 4xx 上回显什么不由本包决定：一页 HTML
+  逐字贴过来，一次调用失败就成了一条两万字节的日志，且有把请求内容带进日志面的路。

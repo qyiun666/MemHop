@@ -149,8 +149,8 @@ func outTypes(fn reflect.Type) []reflect.Type {
 
 // numericIDField walks a type (and every struct it can reach) looking for a
 // uint64 field named like an identifier — the shape an internal record id takes
-// before the facade renders it. Counters (a trajectory Seq) share the width and
-// are fine to hand out. seen breaks recursive types.
+// before the facade renders it. Counters (a turn's slot ordinal, a plan step's
+// Seq) share the width and are fine to hand out. seen breaks recursive types.
 func numericIDField(t reflect.Type, seen map[reflect.Type]bool) string {
 	if t == nil || seen[t] {
 		return ""

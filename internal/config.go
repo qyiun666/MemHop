@@ -97,8 +97,9 @@ func abandon(db *DB, cause error) error {
 //	file there, no profile       → seed it from the argument; without one, refuse
 //	no file                      → create and seed; without a profile, refuse
 //
-// Both refusals happen before anything touches the filesystem, so a refused open
-// leaves no file behind for the next attempt to trip over. AgentType is stamped
+// A refused open creates no file — creating one is what a profile is for. An
+// existing file is opened, and opening repairs a torn tail, before its primary
+// profile is looked for. AgentType is stamped
 // here rather than taken from the caller: the primary domain is the one a file is
 // opened on, and a profile cannot claim otherwise.
 func OpenDB(path string, llmCfg LlmConfig, defaults MemHopDefaults, primary *core.ProfileSlot) (*DB, error) {

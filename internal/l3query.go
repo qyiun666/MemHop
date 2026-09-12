@@ -75,7 +75,15 @@ func nodeFilter(q L3NodeQuery) (graph.NodeFilter, error) {
 // QueryL3Subgraph BFS from startNodeID up to maxDepth; edgeKinds restricts
 // reachable edges (maxDepth<=0 means 1). Nodes come back sorted by id, and so do
 // edges, because the listings under both are assembled from a hash-map scan.
+// A kind outside the vocabulary is refused: the import boundary refuses to store
+// one, and an empty subgraph is the answer a host reads back as "this graph holds
+// no such edges".
 func (db *DB) QueryL3Subgraph(agentID uint64, graphID, startNodeID string, maxDepth int, edgeKinds []core.GraphEdgeKind) (*L3Subgraph, error) {
+	for _, kind := range edgeKinds {
+		if !kind.Valid() {
+			return nil, common.NewError(common.ErrInvalidQuery, "unknown edge kind")
+		}
+	}
 	ac, err := db.lockSharedPool(agentID)
 	if err != nil {
 		return nil, err

@@ -95,9 +95,6 @@ func fromTopicSlot(t internal.TopicSlot) TopicSlot {
 }
 
 func fromSearchResult(r *internal.SearchResult) *SearchResult {
-	if r == nil {
-		return nil
-	}
 	topics := make([]TopicSlot, len(r.Topics))
 	for i, t := range r.Topics {
 		topics[i] = fromTopicSlot(t)
@@ -160,9 +157,6 @@ func mapL3Members(nodes []internal.HypergraphNode, edges []internal.HypergraphEd
 }
 
 func fromL3Graph(g *internal.L3Graph) *L3Graph {
-	if g == nil {
-		return nil
-	}
 	nodes, edges := mapL3Members(g.Nodes, g.Edges)
 	return &L3Graph{
 		Slot:  fromHypergraphSlot(g.Slot),
@@ -172,9 +166,6 @@ func fromL3Graph(g *internal.L3Graph) *L3Graph {
 }
 
 func fromL3Subgraph(g *internal.L3Subgraph) *L3Subgraph {
-	if g == nil {
-		return nil
-	}
 	nodes, edges := mapL3Members(g.Nodes, g.Edges)
 	return &L3Subgraph{Nodes: nodes, Edges: edges}
 }
@@ -219,9 +210,6 @@ func toCoreAppendSlot(s ArchiveSlot) internal.ArchiveSlot {
 }
 
 func fromPlanTree(t *internal.PlanTree) PlanTree {
-	if t == nil {
-		return PlanTree{}
-	}
 	roots := make([]PlanNodeView, 0, len(t.Roots))
 	for _, r := range t.Roots {
 		roots = append(roots, fromPlanNodeView(r))

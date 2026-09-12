@@ -1,8 +1,8 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// L2 topic metadata rebuild: one engine scan rebuilds the L2Meta cache. Run
-// after Open and at the end of Dream compression.
+// L2 topic metadata rebuild: one engine scan over an agent domain's topic
+// records builds the whole cache in one pass.
 package index
 
 import "github.com/qyiun666/MemHop/internal/repo/core"

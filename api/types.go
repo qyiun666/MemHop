@@ -1,9 +1,13 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// Public type surface of the MemHop facade. Response DTOs that carry record
-// IDs use 16-char hex strings (api layer) while the internal/core layers stay
-// on uint64. Input-only types remain aliases to the internal seam.
+// Public type surface of the MemHop facade. A response shape that has to render a
+// record id is a real struct here, with the id coming out as a 16-char hex string
+// while the internal and core layers stay on uint64. A shape whose ids are already
+// rendered — or that carries none — stays an alias to the internal seam, and then
+// what a host needs to know about its fields is said on the alias below: internal is
+// not a published package, so `go doc github.com/qyiun666/MemHop/api` is the only
+// place those fields are ever explained to the caller that receives them.
 
 package api
 
@@ -26,35 +30,75 @@ type (
 // value: pass it to Open as-is, or copy it and edit the copy to tune one open.
 var DefaultMemHopDefaults = internal.DefaultMemHopDefaults
 
-// ---- input / shared aliases ----
+// ---- input aliases ----
 
 type (
-	SearchQuery       = internal.SearchQuery
-	L3ImportItem      = internal.L3ImportItem
-	L3Relation        = internal.L3Relation
-	L3ImportMode      = internal.L3ImportMode
-	L3ImportResult    = internal.L3ImportResult
-	L3NodeQuery       = internal.L3NodeQuery
-	L4Query           = internal.L4Query
-	ScenePatch        = internal.ScenePatch
-	PlanStatus        = internal.PlanStatus
-	DreamReport       = internal.DreamReport
-	DreamStage        = internal.DreamStage
-	SceneContext      = internal.SceneContext
+	SearchQuery   = internal.SearchQuery
+	L3ImportItem  = internal.L3ImportItem
+	L3Relation    = internal.L3Relation
+	L3ImportMode  = internal.L3ImportMode
+	L3NodeQuery   = internal.L3NodeQuery
+	L4Query       = internal.L4Query
+	ScenePatch    = internal.ScenePatch
+	PlanStatus    = internal.PlanStatus
+	GraphEdgeKind = internal.GraphEdgeKind
+	ContentType   = internal.ContentType
+	ArchiveKind   = internal.ArchiveKind
+)
+
+// ---- response aliases ----
+//
+// These carry no id that the facade has to render, so they are the internal shape.
+// The comments below are their only published description.
+
+type (
+	// L3ImportResult reports one ImportL3 batch: the node ids it created and the
+	// ones it rewrote, how many nodes it left alone under Skip mode, how many
+	// hyperedges it built, and the per-item failures that did not stop the rest of
+	// the batch. GraphIDs names every graph the batch resolved a domain into —
+	// including one it wrote nothing new into, which is still the graph a host has
+	// to hang a scene on.
+	L3ImportResult = internal.L3ImportResult
+	// DreamReport is one consolidation pass: what it actually did, stage by stage.
+	// A pass that stopped partway returns the report filled so far beside the
+	// error, so a non-nil report is not a success. ConsolidatedScenes counts scenes
+	// where at least one merge group landed; the L1/L2 counters count records this
+	// pass added or removed.
+	DreamReport = internal.DreamReport
+	// DreamStage is one stage of that pass. Name is one of l4_prune, l5_prune,
+	// l2_compress, index_rebuild, l1_nodes, l1_hyperedges, l1_rebuild, l1_decay or
+	// l0_distill; Status is one of ok, skipped, cancelled or error. A stage the pass
+	// never reached is absent from the list rather than reported as failed.
+	DreamStage = internal.DreamStage
+	// SceneContext is one scene's whole transcript: its topics at depth 1 and 2 in
+	// user-timestamp order, each with the dialogue originals it owns.
+	//
+	// Depth 2 is included on purpose. Dream fuses a group of turns into a parent
+	// topic and sinks the originals one level under it, and `Search` lists depth 1
+	// only — so a fused group reads as its summary there, and this is the one read
+	// that still shows what those turns actually said.
+	SceneContext = internal.SceneContext
+	// SceneContextTopic is one topic of that transcript. Depth is 1 for a turn or a
+	// fused group at the surface and 2 for a turn Dream sank; ParentID is not
+	// reported, so a fused parent and its children come back as one flat list and
+	// ChildCount says how many topics in that list name this one as their parent.
+	// Keywords is the topic's distilled track.
 	SceneContextTopic = internal.SceneContextTopic
-	SceneMessage      = internal.SceneMessage
-	GraphEdgeKind     = internal.GraphEdgeKind
-	ContentType       = internal.ContentType
-	ArchiveKind       = internal.ArchiveKind
+	// SceneMessage is one line of a topic's dialogue, in the Seq order it was
+	// written to. Seq is the slot the line holds in a space its topic's events
+	// share, so the gaps in it are the slots this read did not get back — a turn
+	// keeps its own numbering and the first two slots belong to the dialogue.
+	// Content is the line itself, or a path for a non-text Type.
+	SceneMessage = internal.SceneMessage
 )
 
 // ---- response DTOs (ids are 16-char hex strings) ----
 
 // ProfileSlot is the L0 profile as the library hands it back: the host-owned
 // fields plus the ones only the library writes. The internal ID hash is hidden
-// because it is an implementation detail. Write a profile with a ProfileInput —
-// filling in one of the read-only fields here is accepted and ignored, which is
-// exactly why it is not the type a host passes in.
+// because it is an implementation detail. No call takes this type as an argument:
+// a profile is written with a ProfileInput, which has no place to put one of the
+// library-owned fields.
 type ProfileSlot struct {
 	Name         string                `json:"name"`
 	Role         string                `json:"role"`

@@ -136,7 +136,7 @@ func registerKnowledgeReadTools(s *mcp.Server, db *memhop.Session) {
 func registerKnowledgeImportTool(s *mcp.Server, db *memhop.Session) {
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_knowledge_import",
-		Description: "批量导入 L3 知识条目（按标题+领域匹配既有图）：mode=Skip 跳过已存在、Merge 合并节点、Overwrite 覆盖。source_ref 存位置引用（如 file:line）；related 在同图内按标题建边（目标可在同批后文），同一对节点可并存不同 kind 的关系，重导入同批不会重复建边。返回 graph_ids（本批写入的图，可直接用于把场景挂到图上）+ created_ids/updated_ids（**节点** ID，不是图 ID）+ edges_created/skipped_count。两层拒绝要分清：整批预校验（items 为空、某条缺 title 或 domain）不过就是整批被拒、一条不写；过了预校验之后，单条存储失败才进 errors，批次不中断。",
+		Description: "批量导入 L3 知识条目（按标题+领域匹配既有图）：mode=Skip 跳过已存在、Merge 合并节点、Overwrite 覆盖。source_ref 存位置引用（如 file:line）；related 在同图内按标题建边（目标可在同批后文），同一对节点可并存不同 kind 的关系，重导入同批不会重复建边。返回 graph_ids（本批把每个 domain 解析进了哪张图，含只读到、什么都没新写的——Skip 模式重导同样报出它；可直接用于把场景挂到图上）+ created_ids/updated_ids（**节点** ID，不是图 ID）+ edges_created/skipped_count。两层拒绝要分清：整批预校验（items 为空、某条缺 title 或 domain）不过就是整批被拒、一条不写；过了预校验之后，单条存储失败才进 errors，批次不中断。",
 		InputSchema: objSchema(map[string]any{
 			"items": map[string]any{
 				"type": "array",
@@ -263,7 +263,7 @@ func registerKnowledgeQueryTools(s *mcp.Server, db *memhop.Session) {
 
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_knowledge_subgraph",
-		Description: "从起始节点 BFS 遍历 L3 子图（max_depth<=0 表示 1 层）；edge_kinds 限制可达边类型（related/causal/part_of/sequence/dependency/custom）。",
+		Description: "从起始节点 BFS 遍历 L3 子图（max_depth<=0 表示 1 层）；edge_kinds 限制可达边类型（related/causal/part_of/sequence/dependency/custom），不填即全都要。返回的边里 kind 是数字：0=related / 1=causal / 2=part_of / 3=sequence / 4=dependency / 5=custom。",
 		InputSchema: objSchema(map[string]any{
 			"graph_id":      strProp("知识图 ID（16 位 hex），必填"),
 			"start_node_id": strProp("起始节点 ID（16 位 hex），必填"),

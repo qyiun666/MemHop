@@ -423,6 +423,92 @@ func TestCompressTopicsL2RefusesUnreadableMember(t *testing.T) {
 	}
 }
 
+// A sink that failed partway leaves the members it reached hanging on a parent the
+// rollback then erases, and the depth-1 listing is what both `Search` and the next
+// Dream's group picker read — so an unrestored member is a turn that stops being
+// findable without ever becoming part of a summary. The undo has to be as narrow as
+// the sink it reverses: a member that hangs on some other parent, or one this group
+// never named, is not its to move.
+func TestRestoreSunkTopicsL2BringsBackOnlyThisGroupsMembers(t *testing.T) {
+	engine := tempEngine(t)
+	const sceneID = uint64(7)
+	thisParent := uint64(900)
+	otherParent := uint64(901)
+	for _, tp := range []core.TopicSlot{
+		{ID: 31, SceneID: sceneID, Depth: 2, ParentID: &thisParent, FusedKeywords: []string{"k1"}, UserTimestamp: 100},
+		{ID: 32, SceneID: sceneID, Depth: 2, ParentID: &thisParent, FusedKeywords: []string{"k2"}, UserTimestamp: 200},
+		{ID: 33, SceneID: sceneID, Depth: 2, ParentID: &otherParent, FusedKeywords: []string{"k3"}, UserTimestamp: 300},
+		{ID: 34, SceneID: sceneID, Depth: 2, ParentID: &thisParent, FusedKeywords: []string{"k4"}, UserTimestamp: 400},
+		// One level from the surface yet already named by a parent: this engine never
+		// writes that shape, a file from an older one can. Undoing must not push it
+		// below the surface, where neither listing would ever show it again.
+		{ID: 35, SceneID: sceneID, Depth: 1, ParentID: &thisParent, FusedKeywords: []string{"k5"}, UserTimestamp: 500},
+	} {
+		if err := core.WriteTopicSlot(engine, core.DefaultAgentID, tp.ID, &tp); err != nil {
+			t.Fatalf("write topic %d: %v", tp.ID, err)
+		}
+	}
+	// 34 sits under the same parent but this group never named it, so the undo
+	// cannot tell it from a member of the batch that failed.
+	if err := RestoreSunkTopicsL2(engine, core.DefaultAgentID, []uint64{31, 32, 33, 35}, thisParent); err != nil {
+		t.Fatalf("restore the sunk members: %v", err)
+	}
+	surfaced, err := core.ReadTopicSlot(engine, core.DefaultAgentID, 35)
+	if err != nil {
+		t.Fatalf("read the shallow member: %v", err)
+	}
+	if surfaced.Depth != 1 || surfaced.ParentID != nil {
+		t.Fatalf("undoing a turn already at the surface must leave it there, got %+v", surfaced)
+	}
+	for _, want := range []struct {
+		id       uint64
+		keywords string
+	}{
+		{31, "k1"},
+		{32, "k2"},
+	} {
+		got, err := core.ReadTopicSlot(engine, core.DefaultAgentID, want.id)
+		if err != nil {
+			t.Fatalf("read restored topic %d: %v", want.id, err)
+		}
+		if got.Depth != 1 || got.ParentID != nil {
+			t.Fatalf("topic %d stayed sunk under a parent this rollback erases: %+v", want.id, got)
+		}
+		if !slices.Equal(got.FusedKeywords, []string{want.keywords}) {
+			t.Fatalf("restoring a turn must leave its own track alone, got %v", got.FusedKeywords)
+		}
+	}
+	for _, want := range []struct {
+		id     uint64
+		parent uint64
+	}{
+		{33, otherParent}, // another group's member
+		{34, thisParent},  // not named by this group
+	} {
+		got, err := core.ReadTopicSlot(engine, core.DefaultAgentID, want.id)
+		if err != nil {
+			t.Fatalf("read topic %d: %v", want.id, err)
+		}
+		if got.Depth != 2 || got.ParentID == nil || *got.ParentID != want.parent {
+			t.Fatalf("topic %d is not this rollback's to move, got %+v", want.id, got)
+		}
+	}
+	// Running the undo again must not sink the depth below the surface: a turn at
+	// depth 1 with no parent is the state it is restoring to, not one more step down.
+	if err := RestoreSunkTopicsL2(engine, core.DefaultAgentID, []uint64{31, 32}, thisParent); err != nil {
+		t.Fatalf("restore twice: %v", err)
+	}
+	for _, id := range []uint64{31, 32} {
+		got, err := core.ReadTopicSlot(engine, core.DefaultAgentID, id)
+		if err != nil {
+			t.Fatalf("read topic %d: %v", id, err)
+		}
+		if got.Depth != 1 {
+			t.Fatalf("topic %d went below the surface on a repeated restore: %+v", id, got)
+		}
+	}
+}
+
 // unreadableTopic writes a topic and then replaces its payload with one that will
 // not decode, which is what the enumeration passes below must refuse to be without.
 func unreadableTopic(t *testing.T, engine *core.StorageEngine, topic core.TopicSlot) {

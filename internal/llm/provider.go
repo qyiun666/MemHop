@@ -132,13 +132,26 @@ func (p *Provider) Chat(ctx context.Context, system, user string, maxTokens int)
 func httpError(err error) (int, string) {
 	var reqErr *openai.RequestError
 	if errors.As(err, &reqErr) && reqErr.HTTPStatusCode > 0 {
-		return reqErr.HTTPStatusCode, string(reqErr.Body)
+		return reqErr.HTTPStatusCode, clampEcho(reqErr.Body)
 	}
 	var apiErr *openai.APIError
 	if errors.As(err, &apiErr) && apiErr.HTTPStatusCode > 0 {
 		return apiErr.HTTPStatusCode, apiErr.Message
 	}
 	return 0, ""
+}
+
+// maxUpstreamEcho 是上游错误正文的死额度。正文原样进错误对象，而错误对象既回给
+// 工具客户端又被 WARN 到 stderr：网关与代理在 4xx 上常回显一整页 HTML，逐字贴
+// 过来会把一次调用失败变成一条巨型日志，而有诊断价值的始终是开头。
+const maxUpstreamEcho = 256
+
+// clampEcho keeps the head of a body that is not ours in length or charset.
+func clampEcho(body []byte) string {
+	if len(body) <= maxUpstreamEcho {
+		return string(body)
+	}
+	return strings.ToValidUTF8(string(body[:maxUpstreamEcho]), "") + "…"
 }
 
 // retryable 判断状态码是否属于值得重试的瞬时错误（429 与 5xx）。

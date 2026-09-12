@@ -89,7 +89,7 @@ func registerSceneListTools(s *mcp.Server, db *memhop.Session) {
 func registerSceneDetailTools(s *mcp.Server, db *memhop.Session) {
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_scene_topics",
-		Description: "读取 L2 场景上下文：场景内 depth ≤ 2 的话题元信息（不含 L4 消息）——Dream 融合出的父话题与它吞掉的轮次话题都在这份平铺清单里，父子由 parent_id 相认，每条带自己的 child_count。话题下的 L4 对话原文请用 memhop_archive_search（topic_id 参数）单独查询。未知场景返回错误。",
+		Description: "读取 L2 场景上下文：场景内 depth ≤ 2 的话题元信息（不含 L4 消息）。返回里没有 parent_id——父子由 depth 与 child_count 判定：depth 1 且 child_count>0 的那条是 Dream 融合出的父话题，depth 2 的条目就是被它吞掉的轮次。话题下的 L4 对话原文请用 memhop_archive_search（topic_id 参数）单独查询。注意代价：本工具在域锁内读回整个场景的对话原文再丢弃，是工具面最重的一次读，只要元信息也付这一份。未知场景返回错误。",
 		InputSchema: objSchema(map[string]any{
 			"scene_id": strProp("场景 ID（16 位 hex），必填"),
 		}, "scene_id"),

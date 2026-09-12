@@ -3,9 +3,10 @@
 
 // SSE transport assembly: routes each incoming MCP session to the tenant
 // identified by its URL path (/mcp/<tenant-id>). Tenant ids are validated
-// against a strict whitelist (URL-safe characters only), which both rejects
-// path-traversal attempts and guarantees every tenant maps to exactly one
-// file inside --db-dir.
+// against a strict whitelist (URL-safe characters only), which rejects
+// path-traversal attempts — the whole server holds one .meh file inside
+// --db-dir and a tenant is one agent domain inside it, so the whitelist is about
+// the name being a safe address, not about keeping tenants in separate files.
 
 package main
 
@@ -47,6 +48,12 @@ func serverForRequest(reg *tenantRegistry) func(*http.Request) *mcp.Server {
 		}
 		srv, err := reg.get(tenant)
 		if err != nil {
+			// The whitelist rejection above is the client misspelling an address;
+			// this one is the server failing to open the domain a valid name points
+			// at. Both answer 400, so only the log can tell an operator which of the
+			// two a tenant is hitting — and a domain that cannot be opened is the one
+			// they need to hear about.
+			reg.logger.Warn("tenant domain refused", "tenant", tenant, "err", err)
 			return nil
 		}
 		return srv

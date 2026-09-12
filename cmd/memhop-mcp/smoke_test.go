@@ -489,6 +489,31 @@ func TestSSETurnFlow(t *testing.T) {
 			len(slots), eventCount, both)
 	}
 
+	// The topic key is no different: an empty one is not an address, and a client
+	// that sends "" means "no topic condition". That read spans the domain, which at
+	// this point holds exactly the three records above — same counts, or the empty
+	// key became a condition of its own.
+	unscoped, err := callClient(t, alice, "memhop_archive_search", map[string]any{"topic_id": ""})
+	if err != nil {
+		t.Fatalf("archive search with an empty topic key: %v", err)
+	}
+	var wide []struct {
+		Kind int `json:"kind"`
+	}
+	if err := json.Unmarshal([]byte(unscoped), &wide); err != nil {
+		t.Fatalf("unscoped search output: %v (%s)", err, unscoped)
+	}
+	var wideEvents int
+	for _, s := range wide {
+		if s.Kind == int(memhop.KindEvent) {
+			wideEvents++
+		}
+	}
+	if len(wide) != len(slots) || wideEvents != eventCount {
+		t.Fatalf(`"topic_id": "" must read like no topic condition at all: %d records / %d events vs %d / %d`,
+			len(wide), wideEvents, len(slots), eventCount)
+	}
+
 	settled, err := callClient(t, alice, "memhop_update", map[string]any{
 		"scene_id": turn.Scene.SceneID, "topic_id": turn.NewTopicID,
 	})

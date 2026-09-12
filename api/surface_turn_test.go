@@ -1,7 +1,8 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// Turn-keyed surface: event enumeration, crystallize, and the plan tree.
+// Turn-keyed surface: one key's content writes and event read-back, its plan tree,
+// and the retention window that empties it.
 
 package api
 
@@ -209,9 +210,11 @@ func TestSurfaceUpdateSceneAnchor(t *testing.T) {
 	}
 }
 
-// TestSurfaceReservedTopicID locks the all-zero guard: 0 is the value every
-// record leaves its turn key unset with, so no entry point that addresses a turn —
-// write or read — may accept it.
+// TestSurfaceReservedTopicID locks the all-zero guard. Nothing in the library ever
+// mints that key, while it is exactly what an unfilled one decodes to — so any entry
+// point that addressed a turn had to accept it could not tell a host that means a
+// real key from one that forgot to fill the field, and what it stored would hang on
+// an address nobody can ask for again. Write and read alike refuse it.
 func TestSurfaceReservedTopicID(t *testing.T) {
 	db := openSurfaceDB(t)
 	const zero = "0000000000000000"
@@ -232,7 +235,7 @@ func TestSurfaceReservedTopicID(t *testing.T) {
 		"PlanState":      func() error { _, err := db.PlanState(zero); return err },
 	}
 	for name, call := range calls {
-		if err := call(); common.CodeOf(err) != common.ErrInvalidQuery {
+		if err := call(); CodeOf(err) != ErrInvalidQuery {
 			t.Fatalf("%s(zero topic id): err=%v, want ErrInvalidQuery", name, err)
 		}
 	}

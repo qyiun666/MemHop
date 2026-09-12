@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/config"
@@ -96,5 +97,39 @@ func TestCallAbandonedDuringTheBackoffCarriesTheCancellationCode(t *testing.T) {
 	if common.CodeOf(err) != common.ErrCancelled {
 		t.Fatalf("a call abandoned in its backoff must report ErrCancelled, got %d (%v)",
 			common.CodeOf(err), err)
+	}
+}
+
+// A gateway that refuses with a whole HTML page is not a reason to paste that page
+// into an error the tool client sees and the log line carries. The head is what has
+// the diagnosis in it, and a cut that lands inside a multi-byte character would
+// otherwise turn a Chinese gateway message into replacement noise.
+func TestUpstreamErrorBodyIsEchoedBounded(t *testing.T) {
+	page := strings.Repeat("<html><body>请求被网关拒绝：", 600)
+	srv := answerWith(t, http.StatusBadRequest, page, nil)
+
+	_, err := testProvider(srv.URL).Chat(context.Background(), "sys", "user", 512)
+	if common.CodeOf(err) != common.ErrLLM {
+		t.Fatalf("an endpoint that refused must report ErrLLM, got %d (%v)", common.CodeOf(err), err)
+	}
+	if !strings.Contains(err.Error(), "400") {
+		t.Fatalf("the status must survive the clamp, got %q", err.Error())
+	}
+	if len(err.Error()) > 2*maxUpstreamEcho {
+		t.Fatalf("a %d-byte refusal page must not be echoed whole: %d bytes of error text",
+			len(page), len(err.Error()))
+	}
+	if !utf8.ValidString(err.Error()) {
+		t.Fatalf("clamping must not cut a multi-byte message into invalid UTF-8: %q", err.Error())
+	}
+
+	// Inside the budget the message is the endpoint's own words, untouched. A JSON
+	// body would be parsed rather than echoed, so this checks the pass-through with
+	// the same shape the oversized one above had.
+	short := "<html><body>额度不足</body></html>"
+	smallSrv := answerWith(t, http.StatusBadRequest, short, nil)
+	_, err = testProvider(smallSrv.URL).Chat(context.Background(), "sys", "user", 512)
+	if err == nil || !strings.Contains(err.Error(), short) {
+		t.Fatalf("a body within the budget must come back verbatim, got %v", err)
 	}
 }

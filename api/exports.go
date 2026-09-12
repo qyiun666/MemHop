@@ -67,9 +67,11 @@ const (
 
 // ---- L4 content type constants ----
 
-// These are the only valid ContentType values. A value outside them is refused
-// where content is appended (Session.AppendArchive and the plan-step writes), which
-// is the only path that stores one.
+// These are the only valid ContentType values. A value outside them is refused where
+// content is appended (Session.AppendArchive — the only write path that stores one)
+// and where a read filters on one (SearchL4's Type condition): the write boundary
+// would not store it, so a filter matching one would be answered as "this turn holds
+// no such medium".
 const (
 	ContentText     = internal.ContentText
 	ContentImage    = internal.ContentImage
