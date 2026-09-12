@@ -29,7 +29,7 @@ func TestRemoveNodeFromEdgeReportsUnreadableEdge(t *testing.T) {
 		otherID  = uint64(2)
 	)
 	edge := &core.SceneEdge{
-		IDHash: edgeID, Kind: core.HyperCoOccurrence, NodeIDs: []uint64{victimID, otherID},
+		IDHash: edgeID, NodeIDs: []uint64{victimID, otherID},
 		Weight: 0.9, CreatedAt: 1,
 	}
 	if err := core.WriteSceneEdge(engine, core.DefaultAgentID, edgeID, edge); err != nil {
@@ -146,7 +146,7 @@ func TestDecayOneEdgeDropsAMemberThatIsGone(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("write the surviving node: %v", err)
 	}
-	edge := &core.SceneEdge{IDHash: edgeID, Kind: core.HyperCoOccurrence,
+	edge := &core.SceneEdge{IDHash: edgeID,
 		NodeIDs: []uint64{goneID, liveID}, Weight: 0.9, CreatedAt: 1000}
 	if err := core.WriteSceneEdge(engine, core.DefaultAgentID, edgeID, edge); err != nil {
 		t.Fatalf("write the edge: %v", err)

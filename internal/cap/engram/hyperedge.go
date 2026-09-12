@@ -128,7 +128,6 @@ func upsertSceneEdge(engine *core.StorageEngine, agentID uint64, nodeA, nodeB ui
 	case err != nil:
 		edge = &core.SceneEdge{
 			IDHash:    edgeID,
-			Kind:      core.HyperCoOccurrence,
 			NodeIDs:   []uint64{lo, hi},
 			CreatedAt: now,
 		}

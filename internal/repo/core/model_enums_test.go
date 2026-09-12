@@ -37,21 +37,6 @@ func TestContentTypeValues(t *testing.T) {
 	}
 }
 
-func TestHyperedgeKindValues(t *testing.T) {
-	kinds := []struct {
-		k   HyperedgeKind
-		val uint8
-	}{
-		{HyperCoOccurrence, 0}, {HyperCausal, 1}, {HyperSemantic, 2},
-		{HyperTemporal, 3}, {HyperHierarchical, 4}, {HyperSequence, 5},
-	}
-	for _, tt := range kinds {
-		if uint8(tt.k) != tt.val {
-			t.Fatalf("want %d got %d", tt.val, uint8(tt.k))
-		}
-	}
-}
-
 func TestGraphEdgeKindValues(t *testing.T) {
 	kinds := []struct {
 		k   GraphEdgeKind

@@ -68,8 +68,8 @@ func TestBuildHyperedges(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read edge: %v", err)
 	}
-	if edge.Kind != core.HyperCoOccurrence || len(edge.NodeIDs) != 2 {
-		t.Fatalf("edge kind/nodes mismatch: %+v", edge)
+	if len(edge.NodeIDs) != 2 {
+		t.Fatalf("nodes mismatch: %+v", edge)
 	}
 	if math.Abs(float64(edge.Weight)-1.0/3.0) > 1e-4 {
 		t.Fatalf("weight = %.4f, want 0.3333", edge.Weight)

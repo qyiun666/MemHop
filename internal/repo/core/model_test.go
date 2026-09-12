@@ -83,12 +83,13 @@ func TestSceneNodeRoundtrip(t *testing.T) {
 
 func TestSceneEdgeRoundtrip(t *testing.T) {
 	e := SceneEdge{
-		IDHash: 999, Kind: HyperCausal,
-		NodeIDs: []uint64{10, 20}, Weight: 0.5, CreatedAt: 5000,
+		IDHash: 999, NodeIDs: []uint64{10, 20},
+		Weight: 0.5, CreatedAt: 5000, LastDecayAt: 6000,
 	}
 	var got SceneEdge
 	jsonRoundtrip(t, e, &got)
-	if got.Kind != HyperCausal || len(got.NodeIDs) != 2 {
+	if got.IDHash != 999 || got.Weight != 0.5 || got.CreatedAt != 5000 ||
+		got.LastDecayAt != 6000 || len(got.NodeIDs) != 2 {
 		t.Fatalf("mismatch: %+v", got)
 	}
 }

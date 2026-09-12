@@ -72,6 +72,8 @@ README 的版本表与 git log。
     - 门面按 go doc 读会读错的四处：`DeleteScene`/`DeleteTopic` 只承诺删「原文」，级联实际删的是该轮全部 L4 内容（事件同层）加计划树，且 `DeleteTopic` 还在教一份已不存在的「父话题的子清单」；`DeleteScene` 把共现边的收尾归给「下一次 Dream 的 L1 rebuild」，实际是 `decayOneEdge` 按成员还在不在本域来剪；`PlanNodeView.ParentSeq` 写「0 即根」，而 `BuildTree` 会把父不在本次清单里的那一步提为它自己的根并保留原 `ParentSeq`，按 0 认根就漏节点。另有三处补边界：`PlanState` 对没有树的键给空树而非报错，`PlanNodeUpdate` 的「零留痕」限的是被拒的重述本身、回填发生在它落盘之后（失败只欠一份父摘要），`SearchL4` 的 `NodeSeq` 拒因从「never created」改成「不在这轮的树上」（被保留窗扫掉的步骤撞的是同一句）。`core.L4Query` 末尾残留的「most recent matches」与同段已统一的「该序末尾」并成一句。
     - 两处判定与一处族系说法随之改准：`internal/cap` 第 5 条把 depth≥3 的记录归给「收敛之前写成的文件」，那在打不开的版本里（`0x0012` 由 `d7837e7` 落下，成员互斥由 `d859f08` 修好，隔一天），真实来源是这中间那批构建把同一轮沉了两次；共现边「只有新证据才抬权」在两份 README、`internal/cap`、`internal/repo` 与 `l1layer_sync.go` 五处都写成「端点的关键词变了」，而 `touched` 记的是**端点名下的轮次清单变了**——同一批轮次被重新蒸馏一次换了措辞不算新证据，五处按判据改写。`internal/domain` 那句「镜像缺席只影响读」随 L4 分配一处不再成立，改成分别说清两份镜像各自怎么兜。
 
+32. **L1 边上那格恒为常量的 `kind` 与它的六值词表删除**：`SceneEdge.Kind` 只有一个写入点、写的就是 `HyperCoOccurrence`（边的身份本就由两端派生，一个节点对只有一条边），全仓没有任何一处读它——不进 DTO、不进 MCP、不进日志，那张名字表与它的 `String()` 也没有调用者。旧文件里多出的 `kind` 键在解码时本来就被跳过，所以**帧布局与 `FormatVersion` 一律不动**（与 L3 那三个无读者字段同一判据）；随它删掉的还有一条只重述常量取值的枚举测试。其余三份词表**留下**：`ContentType`/`ArchiveKind`/`GraphEdgeKind` 的取值由宿主写入决定、被边界校验与对外名表读着，那三个 `String()` 是未知取值的唯一渲染口。`repo.MaxDepth` 那条「沉到第 4 级就删」的分支同样**留**——它现在够不着（要够得着，得有一条 depth≥3 的话题出现在 depth-1 清单里），但 depth≥3 的存量记录真实存在，留着它是给折叠计数兜底的止损，`internal/dream` 已写明它永不触发。
+
 ## v1.6.3 — 2026-09-10 — L4 是一轮唯一的内容层，L5 只剩计划树，`Update` 只蒸馏
 
 一轮发生过什么，此前被劈在两层：L4 存两条对话原文，轨迹层存事件与计划节点。两层早就共用

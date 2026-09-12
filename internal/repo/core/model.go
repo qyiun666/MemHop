@@ -54,11 +54,10 @@ type SceneNode struct {
 // SceneEdge is an L1 hyperedge over a set of member nodes, carrying a weight
 // that decays over time.
 type SceneEdge struct {
-	IDHash    uint64        `json:"id_hash"`
-	Kind      HyperedgeKind `json:"kind"`
-	NodeIDs   []uint64      `json:"node_ids"`
-	Weight    float32       `json:"weight"`
-	CreatedAt int64         `json:"created_at"`
+	IDHash    uint64   `json:"id_hash"`
+	NodeIDs   []uint64 `json:"node_ids"`
+	Weight    float32  `json:"weight"`
+	CreatedAt int64    `json:"created_at"`
 	// LastDecayAt: last decay time (ms); 0 = never decayed, first decay starts from CreatedAt.
 	LastDecayAt int64 `json:"last_decay_at"`
 }

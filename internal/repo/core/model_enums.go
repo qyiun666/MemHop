@@ -58,28 +58,6 @@ func (k ArchiveKind) Valid() bool {
 	return ok
 }
 
-// HyperedgeKind classifies L1 hyperedges in the hypergraph skeleton.
-type HyperedgeKind uint8
-
-const (
-	HyperCoOccurrence HyperedgeKind = 0
-	HyperCausal       HyperedgeKind = 1
-	HyperSemantic     HyperedgeKind = 2
-	HyperTemporal     HyperedgeKind = 3
-	HyperHierarchical HyperedgeKind = 4
-	HyperSequence     HyperedgeKind = 5
-)
-
-var hyperedgeKindNames = map[HyperedgeKind]string{
-	HyperCoOccurrence: "co_occurrence", HyperCausal: "causal",
-	HyperSemantic: "semantic", HyperTemporal: "temporal",
-	HyperHierarchical: "hierarchical", HyperSequence: "sequence",
-}
-
-func (k HyperedgeKind) String() string {
-	return common.EnumString(k, hyperedgeKindNames, "HyperedgeKind")
-}
-
 // GraphEdgeKind classifies edges within an L3 hypergraph.
 type GraphEdgeKind uint8
 
