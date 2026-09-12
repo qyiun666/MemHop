@@ -9,23 +9,37 @@ package core
 import (
 	"errors"
 	"io"
+	"log/slog"
 
 	"github.com/qyiun666/MemHop/internal/common"
 )
 
 // scanRecords scans from offset, merging records into the per-agent index
-// (a later same-(agent,idHash) overrides; a tombstone deletes). Stops at
-// the first truncated or CRC-failed frame (crash residue) and reports
-// whether it must be truncated.
+// (a later same-(agent,idHash) overrides; a tombstone deletes). Two failures mean
+// two different things: a frame that does not fit the file is the torn tail a
+// crash left mid-write, and the caller truncates from there; a frame whose
+// checksum disagrees is one damaged record whose bytes are all present, so the
+// scan steps over it and keeps every record after it. Losing one record to rot and
+// losing the whole rest of the log are not the same accident, and the second one
+// becomes permanent at the next checkpoint.
 func (e *StorageEngine) scanRecords(start uint64) (end uint64, truncate bool, err error) {
 	offset := start
+	skipped, firstSkipped := 0, uint64(0)
 	for {
 		_, flags, data, agentID, idHash, err := RecordData(e.mmap, offset)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				break
 			}
-			if c := common.CodeOf(err); c == common.ErrCRCMismatch || c == common.ErrCorruption {
+			if common.CodeOf(err) == common.ErrCRCMismatch {
+				if skipped == 0 {
+					firstSkipped = offset
+				}
+				skipped++
+				offset += frameSpanOf(e.mmap, offset)
+				continue
+			}
+			if c := common.CodeOf(err); c == common.ErrCorruption {
 				return offset, true, nil
 			}
 			return 0, false, err
@@ -39,6 +53,10 @@ func (e *StorageEngine) scanRecords(start uint64) (end uint64, truncate bool, er
 			e.index[agentID][idHash] = offset
 		}
 		offset += uint64(RecordHeaderSize) + uint64(len(data))
+	}
+	if skipped > 0 {
+		slog.Warn("engine: records failed their checksum at open and were left out of the index",
+			"count", skipped, "first_offset", firstSkipped)
 	}
 	return offset, false, nil
 }

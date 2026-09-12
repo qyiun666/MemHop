@@ -122,16 +122,17 @@ func sortedIDs(set map[uint64]struct{}) []uint64 {
 
 // BackfillL1Emotions stamps the emotion signals a distillation computed onto the
 // nodes that carry none yet and leaves a node that already has them alone, so a
-// later pass never overwrites what an earlier one settled. It returns how many
-// nodes it wrote. A node it cannot read aborts the pass with that cause: an absent
-// node and an unreadable one both stop the backfill, but they are not the same
-// fact to report.
-func BackfillL1Emotions(engine *core.StorageEngine, agentID uint64, perNode map[uint64]core.NodeEmotion) (int, error) {
-	written := 0
+// later pass never overwrites what an earlier one settled. A node it cannot read
+// aborts the pass with that cause: an absent node and an unreadable one both stop
+// the backfill, but they are not the same fact to report.
+func BackfillL1Emotions(engine *core.StorageEngine, agentID uint64, perNode map[uint64]core.NodeEmotion) error {
 	for id, em := range perNode {
 		node, err := core.ReadSceneNode(engine, agentID, id)
 		if err != nil {
-			return written, fmt.Errorf("backfill L1 emotions: node %s: %w", common.FormatHash(id), err)
+			return fmt.Errorf("backfill L1 emotions: node %s: %w", common.FormatHash(id), err)
+		}
+		if node.Valence == em.Valence && node.Arousal == em.Arousal {
+			continue // nothing to backfill: rewriting it would reset the clock this node decays on
 		}
 		if node.Valence != 0 || node.Arousal != 0 {
 			continue
@@ -140,9 +141,8 @@ func BackfillL1Emotions(engine *core.StorageEngine, agentID uint64, perNode map[
 		node.Arousal = em.Arousal
 		node.UpdatedAt = time.Now().UnixMilli()
 		if err := core.WriteSceneNode(engine, agentID, id, node); err != nil {
-			return written, err
+			return fmt.Errorf("backfill L1 emotions: node %s: %w", common.FormatHash(id), err)
 		}
-		written++
 	}
-	return written, nil
+	return nil
 }

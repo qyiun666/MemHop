@@ -5,6 +5,7 @@ package llmops
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -104,14 +105,32 @@ func TestParseDistillResponseRefusesAReplyWithNoContract(t *testing.T) {
 			t.Fatalf("%q: want ErrLLM, got %v", reply, err)
 		}
 	}
-	// Both blocks present and quiet is a real answer: nothing to merge, nothing
-	// to invent — the caller decides what to do with a neutral reading.
+	// Both blocks present and quiet is a real answer about the emotion; the four
+	// silent dimensions answer nothing, so no type word is claimed for them.
 	out, err := parseDistillResponse(`{"emotion":{},"mbti":{},"personality":""}`, nil)
 	if err != nil {
 		t.Fatalf("an in-contract neutral reply was refused: %v", err)
 	}
-	if out.MBTI.Type != "ESFP" {
-		t.Fatalf("type = %q, want the four zero dimensions read as their positive side", out.MBTI.Type)
+	if out.MBTI.Type != "" {
+		t.Fatalf("type = %q, want no type word derived from four silent dimensions", out.MBTI.Type)
+	}
+	partial, err := parseDistillResponse(`{"emotion":{},"mbti":{"i_e":0,"n_s":-0.2,"t_f":0.3,"j_p":0}}`, nil)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if partial.MBTI.Type != "XNFX" {
+		t.Fatalf("type = %q, want the two answered axes and X on the two silent ones", partial.MBTI.Type)
+	}
+}
+
+// The personality budget is one number with two consumers: the prompt that asks
+// the model for it and the parser that cuts to it. Stating it twice let them drift,
+// and a reply written to a length the parser then cuts reads as a truncated
+// sentence in every later prompt.
+func TestSystemDistillStatesTheBudgetTheParserEnforces(t *testing.T) {
+	want := fmt.Sprintf("at most %d characters", distillPersonalityMaxRunes)
+	if !strings.Contains(systemDistill, want) {
+		t.Fatalf("the prompt never states %q, so the cap and the ask are two facts again", want)
 	}
 }
 
@@ -143,8 +162,11 @@ func TestParseDistillResponseKeepsOnlySampledNodeRows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if len(out.PerNode) != 1 || out.PerNode[0].IDHex != "0000000000000001" {
+	if len(out.PerNode) != 1 {
 		t.Fatalf("per_node = %+v, want only the row naming a sampled node", out.PerNode)
+	}
+	if em, ok := out.PerNode[1]; !ok || em.Valence != 0.5 || em.Arousal != 0.5 {
+		t.Fatalf("per_node[1] = %+v (present: %v), want the sampled node's own row", em, ok)
 	}
 }
 

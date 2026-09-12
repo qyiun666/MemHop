@@ -3,19 +3,24 @@
 
 // Distillation shapes shared by the LLM capability that produces them, the
 // profile capability that consumes them and the record layer that stores
-// them. Pure data, no behavior (G-01 bottom layer).
+// them. Pure data, no behavior.
 
 package core
 
-// EmotionScore is the VAD emotion estimate of one distillation round.
+// EmotionScore is the VAD emotion estimate of one distillation round. Each signal
+// runs 0..1 with both ends meaningful: valence 0 = very negative, 0.5 = neutral,
+// 1 = very positive; arousal 0 = calm, 1 = highly excited; dominance
+// 0 = submissive, 1 = dominant.
 type EmotionScore struct {
 	Valence   float64 `json:"valence"`
 	Arousal   float64 `json:"arousal"`
 	Dominance float64 `json:"dominance"`
 }
 
-// MBTIScore holds four MBTI dimensions in [-1,1]; Type is derived from the
-// dimensions.
+// MBTIScore holds four MBTI dimensions in [-1,1] — negative = I/N/T/J,
+// positive = E/S/F/P, magnitude = strength. Type is derived from those four:
+// an axis answered 0 carries no strength and reads as X, and four silent axes
+// derive no type word at all.
 type MBTIScore struct {
 	IE   float64 `json:"i_e"`
 	NS   float64 `json:"n_s"`

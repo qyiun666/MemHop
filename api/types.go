@@ -99,6 +99,15 @@ type (
 // because it is an implementation detail. No call takes this type as an argument:
 // a profile is written with a ProfileInput, which has no place to put one of the
 // library-owned fields.
+//
+// The two distilled fields carry the library's own vocabularies. EmotionState's
+// three signals each run 0..1: valence 0 = very negative → 0.5 = neutral →
+// 1 = very positive, arousal 0 = calm → 1 = highly excited, dominance
+// 0 = submissive → 1 = dominant, so a 0 is an extreme reading rather than a
+// missing one. MBTI holds four dimensions in [-1,1] (negative = I/N/T/J,
+// positive = E/S/F/P, magnitude = strength) and Type is those four read as one
+// word; an axis answered exactly 0 carries no strength and shows as X, and a
+// blank Type means no distillation has run on this domain yet.
 type ProfileSlot struct {
 	Name         string                `json:"name"`
 	Role         string                `json:"role"`
@@ -136,9 +145,13 @@ type ProfileInput struct {
 
 // SceneNodeView is one L1 scene node as a host reads it. Every value is Dream's:
 // Importance and the two emotion signals are what consolidation computed, and
-// the pipeline is the only writer. EdgeIDs name the co-occurrence edges incident
-// on the node. An edge has no read of its own, so those ids are useful exactly
-// one way — two nodes sharing one are a pair Dream judged related.
+// the pipeline is the only writer. Importance starts at 1.0 when the scene gains
+// its first turn and only falls from there; Valence runs 0 = very negative →
+// 0.5 = neutral → 1 = very positive and Arousal 0 = calm → 1 = highly excited, so
+// a 0 here is an extreme reading, not a missing one. EdgeIDs name the
+// co-occurrence edges incident on the node. An edge has no read of its own, so
+// those ids are useful exactly one way — two nodes sharing one are a pair Dream
+// judged related.
 type SceneNodeView struct {
 	IDHash     string   `json:"id_hash"`
 	SceneID    string   `json:"scene_id"`

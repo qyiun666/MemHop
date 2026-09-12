@@ -11,7 +11,6 @@ import (
 	"github.com/qyiun666/MemHop/internal/cap/engram"
 	"github.com/qyiun666/MemHop/internal/cap/llmops"
 	"github.com/qyiun666/MemHop/internal/cap/profile"
-	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/domain"
 	"github.com/qyiun666/MemHop/internal/repo"
 	"github.com/qyiun666/MemHop/internal/repo/core"
@@ -159,20 +158,10 @@ func DistillL0Stage(ctx context.Context, ac *domain.Context, agentID uint64) (bo
 	if err != nil {
 		return false, err
 	}
-	emo := core.EmotionScore{Valence: out.Emotion.Valence, Arousal: out.Emotion.Arousal, Dominance: out.Emotion.Dominance}
-	mbti := core.MBTIScore{IE: out.MBTI.IE, NS: out.MBTI.NS, TF: out.MBTI.TF, JP: out.MBTI.JP, Type: out.MBTI.Type}
-	if err := profile.MergeDistill(ac.Engine, agentID, emo, mbti, out.Personality); err != nil {
+	if err := profile.MergeDistill(ac.Engine, agentID, out.Emotion, out.MBTI, out.Personality); err != nil {
 		return false, err
 	}
-	perNode := make(map[uint64]core.NodeEmotion, len(out.PerNode))
-	for _, n := range out.PerNode {
-		id, err := common.ParseID(n.IDHex)
-		if err != nil {
-			continue
-		}
-		perNode[id] = core.NodeEmotion{Valence: n.Valence, Arousal: n.Arousal}
-	}
-	if _, err := repo.BackfillL1Emotions(ac.Engine, agentID, perNode); err != nil {
+	if err := repo.BackfillL1Emotions(ac.Engine, agentID, out.PerNode); err != nil {
 		return false, fmt.Errorf("distill l0: backfill l1 emotions: %w", err)
 	}
 	return true, nil

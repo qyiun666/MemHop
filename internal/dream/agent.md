@@ -13,7 +13,9 @@
 - `StructureStages`：L2Meta 重建并即刻装回 → L1 同步/建边/重建/衰减（用装回那份）→ L0 蒸馏。
   同步那一步交回的是**它本轮写过哪些节点**，这份集合原样递给建边：一条已存在的边只允许在
   某个端点的证据本轮真的动过时抬权，否则每轮重算同一份关键词就等于把衰减抹平。
-- `DistillL0Stage`：L0 蒸馏，只被本包的 `StructureStages` 调用。
+- `DistillL0Stage`：L0 蒸馏，只被本包的 `StructureStages` 调用。它交回的每节点情感表
+  已经按节点 id 索引，本包原样递给回灌——键不在这条管道里换第二遍，换一遍就是持着域锁
+  多做 N 次 hex 解析，而那份表除了回灌没有第二个读者。
 - 阶段报告：`AppendStage`/`StageCancelled`/`stageStatus`。`StageCancelled` 交出的是
   带码的 `ErrCancelled`，cause 留着 `ctx.Err()`，所以 `stageStatus` 仍按 `errors.Is`
   把它分类成 `cancelled` 而不是 `error`。

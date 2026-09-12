@@ -7,6 +7,7 @@
 package core
 
 import (
+	"errors"
 	"io"
 
 	"github.com/qyiun666/MemHop/internal/common"
@@ -67,22 +68,40 @@ func (e *StorageEngine) writeRecordBatch(records []RecordEntry) ([]uint64, error
 	return offsets, nil
 }
 
-// appendFrames encodes each record and appends it at end of file,
-// returning the frame offsets; index state is untouched until success.
+// appendFrames encodes each record and appends it at end of file, returning the
+// frame offsets; index state is untouched until success, and a batch that fails
+// half-way is undone — see undoAppend.
 func (e *StorageEngine) appendFrames(records []RecordEntry) ([]uint64, error) {
+	start, err := e.file.Seek(0, io.SeekEnd)
+	if err != nil {
+		return nil, common.NewError(common.ErrIO, "seek end", err)
+	}
 	offsets := make([]uint64, 0, len(records))
 	for _, rec := range records {
 		encoded := EncodeRecord(rec.AgentID, rec.RecordType, 0, rec.IDHash, rec.Data)
 		offset, err := e.file.Seek(0, io.SeekEnd)
 		if err != nil {
-			return nil, common.NewError(common.ErrIO, "seek end", err)
+			return nil, e.undoAppend(start, common.NewError(common.ErrIO, "seek end", err))
 		}
 		if _, err := e.file.Write(encoded); err != nil {
-			return nil, common.NewError(common.ErrIO, "write record", err)
+			return nil, e.undoAppend(start, common.NewError(common.ErrIO, "write record", err))
 		}
 		offsets = append(offsets, uint64(offset))
 	}
 	return offsets, nil
+}
+
+// undoAppend cuts the file back to the offset a failed append batch began at.
+// Left in place, a frame the disk took only part of sits between valid records,
+// past the reach of the tail recovery Open runs, and its declared length points
+// into the record written after it. The caller is told the batch stored nothing,
+// so nothing may be left; when the cut itself fails both causes are worth
+// reporting, because that one means the log holds a partial frame.
+func (e *StorageEngine) undoAppend(start int64, cause error) error {
+	// ponytail: a truncateTail that itself fails leaves the mapping dropped. That is
+	// the recovery primitive's known ceiling, shared with the trim step every batch
+	// already runs, and no test here can provoke a failed ftruncate.
+	return errors.Join(cause, e.truncateTail(start))
 }
 
 // updateIndexAfterWrite merges freshly appended frames into the per-agent

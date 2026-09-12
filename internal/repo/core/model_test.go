@@ -67,7 +67,7 @@ func TestSceneNodeRoundtrip(t *testing.T) {
 	n := SceneNode{
 		IDHash: 100, SceneID: 200, TopicIDs: []uint64{1, 2, 3},
 		Importance: 0.9,
-		Valence:    -0.3, Arousal: 0.7,
+		Valence:    0.2, Arousal: 0.7,
 		CreatedAt: 1000, UpdatedAt: 2000,
 		EdgeIDs: []uint64{10, 20},
 	}

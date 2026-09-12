@@ -61,7 +61,7 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    对账靠 `dream.StructureStages` 的整表重建——所以那份重建一算出来就要装回 `ac.L2Meta`，
    不得被其后任何阶段的失败丢弃（L1 各阶段只写 L1 记录，丢不掉它的正确性）。
    **禁止在域锁内取 `db.agentsMu`**（锁序环：sweep 走 agentsMu -> ac.Mu），
-   域内簿记（如 `lastDreamAt`）直接写 atomic 字段。
+   域内簿记里不受本域锁保护的那两个（`ac.LastActiveAt`、`ac.Reclaimed`）是 atomic 字段。
 3. **Dream 域化**：`RunDream` 全程持本域锁；后台触发经
    `triggerSceneDream(ac, sceneID)`（调用方持 `ac.Mu`，留在根里因为它管理
    goroutine 生命周期），goroutine 运行在 `ac.OpCtx` 下——
@@ -70,7 +70,7 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    `ac.OpCtx`，避免生命周期屏障被一次完整往返阻塞。
 4. **空闲回收**：无后台定时器；`contextFor` 顺带清扫超
    `Defaults.AgentIdleTTLMs` 未访问的域（默认域与共享 L3 域豁免），回收前先对域锁
-   `TryLock`：锁被占用（在飞操作）或 `dreamInFlight` 非空则跳过，留待下轮。
+   `TryLock`：锁被占用（在飞操作）或 `ac.DreamInFlight` 非空则跳过，留待下轮。
    摘除与 `ac.Reclaimed` 打标在**同一个持锁区间内**完成：调用方可能已经取到上下文、
    却在取锁前被调度出去，超过 TTL 后回收就会插进这两步之间——没有这个标记，那次操作
    会写在一份已作废的缓存上，而 `lockAgent` 复检到标记就重取域。回收时不快照任何东西：

@@ -1,7 +1,7 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// Numeric error code system (G-01): 0=success | 1001-1999 parameter |
+// Numeric error code system: 0=success | 1001-1999 parameter |
 // 2001-2999 auth | 3001-3999 resource | 4001-4999 business | 5001-5999
 // system | 9001-9999 third-party.
 package common

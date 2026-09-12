@@ -182,3 +182,64 @@ func TestSyncL1NodesFromL2StopsOnUnreadableTopic(t *testing.T) {
 		t.Fatalf("a pass that could not enumerate must write no node: %v", err)
 	}
 }
+
+// Both ends of the valence/arousal scale are readings a distillation can answer
+// with, so (0,0) is a settled node rather than an unstamped one. Treating it as
+// unstamped rewrites that node on every Dream pass, and each rewrite refreshes the
+// UpdatedAt node decay is measured from — a memory the model called "very negative
+// and calm" would then never fade.
+func TestBackfillL1EmotionsLeavesASettledNodeAlone(t *testing.T) {
+	engine := tempEngine(t)
+	sceneID := common.HashID("sceneA")
+	nodeID := core.SceneNodeID(sceneID)
+	const unstamped = int64(1000)
+
+	seed := func(valence, arousal float64) {
+		t.Helper()
+		node := core.SceneNode{
+			IDHash: nodeID, SceneID: sceneID, TopicIDs: []uint64{1},
+			Importance: 1.0, Valence: valence, Arousal: arousal,
+			CreatedAt: unstamped, UpdatedAt: unstamped,
+		}
+		if err := core.WriteSceneNode(engine, core.DefaultAgentID, nodeID, &node); err != nil {
+			t.Fatalf("seed node: %v", err)
+		}
+	}
+	read := func() *core.SceneNode {
+		t.Helper()
+		node, err := core.ReadSceneNode(engine, core.DefaultAgentID, nodeID)
+		if err != nil {
+			t.Fatalf("read node: %v", err)
+		}
+		return node
+	}
+	perNode := func(valence, arousal float64) map[uint64]core.NodeEmotion {
+		return map[uint64]core.NodeEmotion{nodeID: {Valence: valence, Arousal: arousal}}
+	}
+
+	seed(0, 0)
+	if err := BackfillL1Emotions(engine, core.DefaultAgentID, perNode(0, 0)); err != nil {
+		t.Fatalf("backfill: %v", err)
+	}
+	if got := read(); got.UpdatedAt != unstamped {
+		t.Fatalf("a re-stamp restarts this node's decay clock: UpdatedAt = %d, want %d", got.UpdatedAt, unstamped)
+	}
+
+	// A node nobody has distilled yet still takes the extreme reading.
+	seed(0, 0)
+	if err := BackfillL1Emotions(engine, core.DefaultAgentID, perNode(0.4, 0.2)); err != nil {
+		t.Fatalf("backfill: %v", err)
+	}
+	if got := read(); got.Valence != 0.4 || got.Arousal != 0.2 {
+		t.Fatalf("an unstamped node must take the distilled emotion: %+v", got)
+	}
+
+	// What an earlier pass settled, a later one does not overwrite.
+	seed(0.9, 0.9)
+	if err := BackfillL1Emotions(engine, core.DefaultAgentID, perNode(0.1, 0.1)); err != nil {
+		t.Fatalf("backfill: %v", err)
+	}
+	if got := read(); got.Valence != 0.9 || got.Arousal != 0.9 {
+		t.Fatalf("an existing emotion was overwritten: %+v", got)
+	}
+}

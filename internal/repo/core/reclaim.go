@@ -5,6 +5,7 @@ package core
 
 import (
 	"encoding/binary"
+	"fmt"
 
 	"github.com/qyiun666/MemHop/internal/common"
 )
@@ -110,7 +111,16 @@ func (e *StorageEngine) Compact(newPath string) error {
 		for idHash, offset := range m {
 			rt, _, data, _, _, readErr := RecordData(e.mmap, offset)
 			if readErr != nil {
-				return common.NewError(common.ErrCorruption, "compact: read live record", readErr)
+				// Which half of the file is damaged decides what to do about it, so
+				// the read keeps its own code — and the record is named, because a
+				// compaction that refused has to say what it refused to move.
+				code := common.CodeOf(readErr)
+				if code != common.ErrCRCMismatch && code != common.ErrCorruption {
+					code = common.ErrCorruption
+				}
+				return common.NewError(code,
+					fmt.Sprintf("compact: record %s at offset %d will not read", common.FormatHash(idHash), offset),
+					readErr)
 			}
 			batch = append(batch, RecordEntry{AgentID: agentID, RecordType: rt, IDHash: idHash, Data: data})
 			if len(batch) == chunk {

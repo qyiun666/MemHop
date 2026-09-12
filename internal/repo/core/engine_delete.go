@@ -52,7 +52,7 @@ func (e *StorageEngine) deleteRecordBatchLocked(agentID uint64, idHashes []uint6
 		return 0, common.NewError(common.ErrIO, "seek end", err)
 	}
 	if _, err := e.file.Write(tombstones); err != nil {
-		return 0, common.NewError(common.ErrIO, "write tombstones", err)
+		return 0, e.undoAppend(end, common.NewError(common.ErrIO, "write tombstones", err))
 	}
 	// The tombstones are in the file from here on, so the record-area end
 	// moves before the flush is attempted: a Sync or remap that fails must not

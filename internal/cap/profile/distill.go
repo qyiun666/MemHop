@@ -30,9 +30,9 @@ const maxDistillKeywordsPerSample = 20
 // decoupled from the LambdaNode decay config).
 const distillSampleLambda = 0.01
 
-// Default builds the first profile of a domain: a neutral assistant identity
-// with nothing distilled onto it yet.
-func Default() *core.ProfileSlot {
+// defaultProfile builds the first profile of a domain: a neutral assistant
+// identity with nothing distilled onto it yet.
+func defaultProfile() *core.ProfileSlot {
 	return &core.ProfileSlot{
 		Name:        "Agent",
 		Role:        "assistant",
@@ -41,30 +41,34 @@ func Default() *core.ProfileSlot {
 }
 
 // Samples ranks L1 nodes by Importance×exp(-lambda×age) and returns the top
-// maxDistillSamples for distillation.
+// maxDistillSamples for distillation. Ranking runs on the node fields alone: the
+// keywords a sample carries come from its topics, one record read each, so
+// collecting them before the cut would price the whole L1 set for the 200 rows
+// that survive it.
 func Samples(engine *core.StorageEngine, agentID uint64) []core.DistillSample {
 	nowMs := time.Now().UnixMilli()
-	candidates := make([]core.DistillSample, 0)
-	for _, node := range core.CollectAllSceneNodes(engine, agentID) {
-		candidates = append(candidates, core.DistillSample{
-			IDHash:     node.IDHash,
-			Keywords:   sampleKeywords(engine, agentID, node.TopicIDs),
-			Importance: node.Importance,
-			UpdatedAt:  node.UpdatedAt,
+	nodes := core.CollectAllSceneNodes(engine, agentID)
+	slices.SortFunc(nodes, func(a, b core.SceneNode) int {
+		return cmp.Compare(sampleRank(&b, nowMs), sampleRank(&a, nowMs))
+	})
+	if len(nodes) > maxDistillSamples {
+		nodes = nodes[:maxDistillSamples]
+	}
+	samples := make([]core.DistillSample, 0, len(nodes))
+	for i := range nodes {
+		samples = append(samples, core.DistillSample{
+			IDHash:     nodes[i].IDHash,
+			Keywords:   sampleKeywords(engine, agentID, nodes[i].TopicIDs),
+			Importance: nodes[i].Importance,
+			UpdatedAt:  nodes[i].UpdatedAt,
 		})
 	}
-	slices.SortFunc(candidates, func(a, b core.DistillSample) int {
-		return cmp.Compare(SampleRank(b, nowMs), SampleRank(a, nowMs))
-	})
-	if len(candidates) > maxDistillSamples {
-		candidates = candidates[:maxDistillSamples]
-	}
-	return candidates
+	return samples
 }
 
-// SampleRank is the recency-weighted importance of one distillation sample.
-func SampleRank(s core.DistillSample, nowMs int64) float64 {
-	return float64(s.Importance) * math.Exp(-distillSampleLambda*common.ElapsedHours(nowMs, s.UpdatedAt))
+// sampleRank is the recency-weighted importance of one candidate node.
+func sampleRank(node *core.SceneNode, nowMs int64) float64 {
+	return float64(node.Importance) * math.Exp(-distillSampleLambda*common.ElapsedHours(nowMs, node.UpdatedAt))
 }
 
 // MergeDistill writes the distilled emotion, MBTI and personality summary into
@@ -79,7 +83,7 @@ func MergeDistill(engine *core.StorageEngine, agentID uint64, emo core.EmotionSc
 		if common.CodeOf(err) != common.ErrNotFound {
 			return err
 		}
-		slot = Default()
+		slot = defaultProfile()
 	}
 	slot.EmotionState = emo
 	slot.MBTI = mbti

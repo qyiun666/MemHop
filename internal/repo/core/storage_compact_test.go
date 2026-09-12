@@ -4,7 +4,10 @@
 package core
 
 import (
+	"strings"
 	"testing"
+
+	"github.com/qyiun666/MemHop/internal/common"
 )
 
 func TestCompact(t *testing.T) {
@@ -64,5 +67,37 @@ func TestCompact(t *testing.T) {
 	compactSize := fileSize(t, compactPath)
 	if compactSize >= origSize {
 		t.Fatalf("compact not smaller: orig=%d compact=%d", origSize, compactSize)
+	}
+}
+
+// A compaction refuses to rewrite a file it cannot read whole, and the refusal is
+// the only place a host learns which record is damaged: the engine has no read face
+// that shows one. A checksum failure and a frame that does not fit the file are
+// different repairs, so the read's own code is what comes back.
+func TestCompactRefusalNamesTheRecordItCannotRead(t *testing.T) {
+	p := tempPath(t, "compact_rot")
+	eng, err := Create(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
+	victim, err := eng.WriteRecord(DefaultAgentID, RecL1SceneNode, 7, []byte("this one rots"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.WriteRecord(DefaultAgentID, RecL2Topic, 8, []byte("fine")); err != nil {
+		t.Fatal(err)
+	}
+	flipByteAt(t, p, victim+RecordHeaderSize)
+
+	err = eng.Compact(tempPath(t, "compact_dst"))
+	if err == nil {
+		t.Fatal("a compaction over a record it cannot read must refuse")
+	}
+	if common.CodeOf(err) != common.ErrCRCMismatch {
+		t.Fatalf("want the read's own classification, got %v", err)
+	}
+	if !strings.Contains(err.Error(), common.FormatHash(7)) {
+		t.Fatalf("the refusal must name the record, got %v", err)
 	}
 }

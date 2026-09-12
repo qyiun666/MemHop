@@ -169,3 +169,41 @@ func TestDecayOneEdgeDropsAMemberThatIsGone(t *testing.T) {
 		t.Fatalf("an edge that kept a member is not a removed edge: %+v", rep)
 	}
 }
+
+// Valence arrives on [0,1] with 0 = very negative and 1 = very positive, so the
+// emotion a memory carries is how far it sits from neutral. Measuring it from zero
+// instead says how positive it is — which would freeze a mildly positive memory's
+// decay (a lambda of 0 makes a node uncollectable for good, since deletion only
+// happens through decay) while letting the most painful ones fade at full speed.
+func TestEmotionalBoostMeasuresDistanceFromNeutral(t *testing.T) {
+	const base = 0.01
+	neutral := applyEmotionalBoost(base, neutralValence, 1.0)
+	if neutral != base {
+		t.Fatalf("a neutral memory gets no protection however aroused: want %v, got %v", base, neutral)
+	}
+	dark := applyEmotionalBoost(base, 0.0, 1.0)
+	bright := applyEmotionalBoost(base, 1.0, 1.0)
+	if dark != bright {
+		t.Fatalf("the two ends of the scale are equally emotional, so they must fade alike: %v vs %v", dark, bright)
+	}
+	if dark >= base {
+		t.Fatalf("the most intense memory must fade slower than a neutral one: %v vs %v", dark, base)
+	}
+	const floor = base * (1 - maxEmotionalSlowdown)
+	if dark <= 0 || dark < floor*(1-1e-9) {
+		t.Fatalf("emotion may slow decay to a ceiling, never freeze it: %v below the %v floor", dark, floor)
+	}
+	// Arousal scales it: the same valence answered calmly keeps the base rate.
+	if got := applyEmotionalBoost(base, 0.0, 0.0); got != base {
+		t.Fatalf("an unaroused memory carries no emotional weight: want %v, got %v", base, got)
+	}
+	// A record is whatever the file says: outside the band the factor must stay
+	// inside [0,1], or a negative lambda would grow importance every pass.
+	for _, v := range []float64{-3, 4, 50} {
+		for _, a := range []float64{-1, 9} {
+			if got := applyEmotionalBoost(base, v, a); got <= 0 || got > base {
+				t.Fatalf("valence %v arousal %v escaped the band: lambda %v not in (0, %v]", v, a, got, base)
+			}
+		}
+	}
+}

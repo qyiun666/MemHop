@@ -301,12 +301,30 @@ func removeEdgeFromNode(engine *core.StorageEngine, agentID uint64, nodeID, edge
 	return core.WriteSceneNode(engine, agentID, nodeID, node)
 }
 
-// applyEmotionalBoost: stronger emotions (|valence|×arousal) decay slower;
-// the result is never negative.
+// neutralValence is the midpoint of the scale the distillation answers on: the
+// model reports valence on [0,1] with 0 = very negative and 1 = very positive, so how
+// emotional a memory reads is its distance from this point — its distance from zero
+// says how positive it is, which is a different fact and one that must not decide
+// what gets collected.
+const neutralValence = 0.5
+
+// maxEmotionalSlowdown caps the protection: at its ceiling the most intense memory
+// still fades at a tenth of the base rate. Lambda may not reach zero — the only path
+// to the threshold that deletes a node runs through decay, so a frozen lambda makes a
+// node uncollectable for as long as the file lives.
+const maxEmotionalSlowdown = 0.9
+
+// applyEmotionalBoost returns the node's decay rate: the more emotional it is — how
+// far its valence sits from neutral, scaled by how aroused it was — the slower it
+// fades, and the same in either direction. Both inputs arrive on [0,1].
 func applyEmotionalBoost(baseLambda float64, valence, arousal float64) float64 {
-	result := baseLambda - math.Abs(valence)*arousal*2.0
-	if result < 0 {
-		return 0
+	strength := math.Abs(valence-neutralValence) * 2.0
+	// A record is whatever the file says it is: the writer clamps, but an out-of-band
+	// value must not push the factor past 1, because a negative lambda would make a
+	// node gain importance on every pass instead of losing it.
+	if strength > 1.0 {
+		strength = 1.0
 	}
-	return result
+	arousal = math.Min(math.Max(arousal, 0), 1.0)
+	return baseLambda * (1.0 - maxEmotionalSlowdown*strength*arousal)
 }

@@ -4,9 +4,13 @@
 package core
 
 import (
+	"errors"
+	"io"
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/qyiun666/MemHop/internal/common"
 )
 
 // A delete must survive a crash (no checkpoint): the tombstone is replayed
@@ -75,7 +79,8 @@ func TestTombstoneReplayOverridesSnapshot(t *testing.T) {
 	}
 }
 
-// A torn tail frame (crash mid-append) must be truncated on Open, not fail it.
+// A crash mid-append leaves the file ending inside a frame. That residue is the
+// tail of the log, so Open must cut it and keep appending from a clean end.
 func TestTornTailFrameTruncatedOnOpen(t *testing.T) {
 	p := tempPath(t, "torn")
 	eng, err := Create(p)
@@ -88,11 +93,9 @@ func TestTornTailFrameTruncatedOnOpen(t *testing.T) {
 	}
 	cleanSize := fileSize(t, p)
 
-	// Append a full frame with a flipped data byte (CRC mismatch) — the
-	// classic torn write.
+	// Half of a frame: the header claims more payload than the file holds.
 	frame := EncodeRecord(DefaultAgentID, RecL2Topic, 0, 2, []byte("torn victim"))
-	frame[len(frame)-1] ^= 0xFF
-	appendBytes(t, p, frame)
+	appendBytes(t, p, frame[:RecordHeaderSize+len("torn victim")/2])
 
 	eng2, err := Open(p)
 	if err != nil {
@@ -115,7 +118,7 @@ func TestTornTailFrameTruncatedOnOpen(t *testing.T) {
 		t.Fatalf("residue not truncated: size=%d cleanSize=%d", got, cleanSize)
 	}
 
-	// A partially written frame (file ends mid-header) recovers the same way.
+	// A file ending inside the header itself recovers the same way.
 	appendBytes(t, p, []byte{0xAB, 0xCD, 0xEF})
 	eng3, err := Open(p)
 	if err != nil {
@@ -124,6 +127,102 @@ func TestTornTailFrameTruncatedOnOpen(t *testing.T) {
 	defer eng3.Close()
 	if !eng3.Contains(DefaultAgentID, 1) || !eng3.Contains(DefaultAgentID, 3) {
 		t.Fatal("live records lost after partial-frame recovery")
+	}
+}
+
+// Two frame failures are two different accidents. A frame that does not fit the
+// file is the log's own tail, cut short: everything the scan reached is intact and
+// the residue is garbage. A frame whose bytes disagree with their checksum is
+// whole — its header says exactly where the next frame begins — so only that one
+// record is lost, and the records written after it are still addressable. Cutting
+// the log at a checksum failure deletes them too, and the next checkpoint makes
+// that permanent.
+func TestChecksumFailedFrameKeepsTheRestOfTheLog(t *testing.T) {
+	p := tempPath(t, "rot")
+	eng, err := Create(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.WriteRecord(DefaultAgentID, RecL0Profile, 1, []byte("one")); err != nil {
+		t.Fatal(err)
+	}
+	middle, err := eng.WriteRecord(DefaultAgentID, RecL1SceneNode, 2, []byte("the damaged one"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.WriteRecord(DefaultAgentID, RecL2Topic, 3, []byte("three")); err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.closeNoCheckpoint(); err != nil {
+		t.Fatal(err)
+	}
+	flipByteAt(t, p, middle+RecordHeaderSize)
+	before := fileSize(t, p)
+
+	eng2, err := Open(p)
+	if err != nil {
+		t.Fatalf("a damaged record must not refuse the file: %v", err)
+	}
+	defer eng2.Close()
+	if eng2.Contains(DefaultAgentID, 2) {
+		t.Fatal("the checksum-failed record must stay out of the index")
+	}
+	for _, live := range []uint64{1, 3} {
+		if !eng2.Contains(DefaultAgentID, live) {
+			t.Fatalf("record %d was taken with the damaged one", live)
+		}
+	}
+	if _, data, err := eng2.ReadRecord(DefaultAgentID, 3); err != nil || string(data) != "three" {
+		t.Fatalf("record 3: data=%q err=%v", data, err)
+	}
+	// The scan walked the whole log, so the append point is past every frame
+	// the file holds — including the damaged one, whose bytes stay until a
+	// compaction rewrites the record area.
+	if _, err := eng2.WriteRecord(DefaultAgentID, RecL2Topic, 4, []byte("four")); err != nil {
+		t.Fatal(err)
+	}
+	if got := fileSize(t, p); got <= before {
+		t.Fatalf("append after a skipped frame must grow the log from its real end: %d <= %d", got, before)
+	}
+}
+
+// The undo half of a failed append. A write the kernel refuses cannot be provoked
+// from a test, but what must be true afterwards can: the file is cut back to where
+// the batch began, the caller's own cause is still what it reports, and the log
+// keeps working from that point.
+func TestUndoAppendCutsBackToTheBatchStart(t *testing.T) {
+	p := tempPath(t, "undo")
+	eng, err := Create(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.WriteRecord(DefaultAgentID, RecL0Profile, 1, []byte("one")); err != nil {
+		t.Fatal(err)
+	}
+	start := fileSize(t, p)
+	// What a refused write leaves behind: a frame the file only partly holds.
+	appendBytes(t, p, EncodeRecord(DefaultAgentID, RecL2Topic, 0, 2, []byte("half an attempt"))[:RecordHeaderSize+3])
+
+	cause := common.NewError(common.ErrIO, "write record", io.ErrShortWrite)
+	if err := eng.undoAppend(start, cause); !errors.Is(err, cause) {
+		t.Fatalf("undo must report the failure that triggered it, got %v", err)
+	}
+	if got := fileSize(t, p); got != start {
+		t.Fatalf("the refused batch is still in the file: size=%d want=%d", got, start)
+	}
+	if _, err := eng.WriteRecord(DefaultAgentID, RecL2Topic, 3, []byte("three")); err != nil {
+		t.Fatalf("the engine must keep appending from the cut: %v", err)
+	}
+	if err := eng.closeNoCheckpoint(); err != nil {
+		t.Fatal(err)
+	}
+	eng2, err := Open(p)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer eng2.Close()
+	if eng2.Contains(DefaultAgentID, 2) || !eng2.Contains(DefaultAgentID, 1) || !eng2.Contains(DefaultAgentID, 3) {
+		t.Fatal("records after the undone batch did not survive")
 	}
 }
 
@@ -199,5 +298,24 @@ func appendBytes(t *testing.T, path string, b []byte) {
 	}
 	if err := f.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// flipByteAt rewrites one stored byte, which is what rot inside a frame's payload
+// looks like to its checksum: the frame stays the size its header declares.
+func flipByteAt(t *testing.T, path string, offset uint64) {
+	t.Helper()
+	f, err := os.OpenFile(path, os.O_RDWR, 0644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	b := make([]byte, 1)
+	if _, err := f.ReadAt(b, int64(offset)); err != nil {
+		t.Fatalf("read at %d: %v", offset, err)
+	}
+	b[0] ^= 0xFF
+	if _, err := f.WriteAt(b, int64(offset)); err != nil {
+		t.Fatalf("write at %d: %v", offset, err)
 	}
 }

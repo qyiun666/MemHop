@@ -673,6 +673,8 @@ func main() {
    ever reissues an id already given out.
 9. **`SceneDreamTopicThreshold` defaults to 24**: a partial `MemHopDefaults`
     literal leaves it 0, which **disables** automatic consolidation — assign
-    `api.DefaultMemHopDefaults` first, then override. Context size stays
-    bounded only because Dream compresses each scene to ≤20 topics, so
-    switching it off lets the injected context grow without limit.
+    `api.DefaultMemHopDefaults` first, then override. Context size is held in
+    check only by Dream converging each scene towards `DreamCompressMinTopics`
+    (default 20) — a target a pass aims at, not a ceiling a scene is kept under
+    — so switching automatic consolidation off lets the injected context grow
+    without limit.

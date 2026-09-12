@@ -40,8 +40,19 @@ func TestBriefRendersEveryTrack(t *testing.T) {
 
 func TestBriefTruncatesLongValues(t *testing.T) {
 	long := strings.Repeat("字", 200)
-	got := Brief(core.ProfileSlot{Preferences: map[string]string{"k": long}})
-	if !strings.Contains(got, "…") || strings.Contains(got, long) {
-		t.Fatalf("long value must be rune-truncated with ellipsis:\n%.200s", got)
+	for _, tc := range []struct {
+		name string
+		slot core.ProfileSlot
+	}{
+		{"preference value", core.ProfileSlot{Preferences: map[string]string{"k": long}}},
+		{"preference key", core.ProfileSlot{Preferences: map[string]string{long: "v"}}},
+		{"name", core.ProfileSlot{Name: long}},
+		{"role", core.ProfileSlot{Role: long}},
+		{"personality", core.ProfileSlot{Personality: long}},
+	} {
+		got := Brief(tc.slot)
+		if !strings.Contains(got, "…") || strings.Contains(got, long) {
+			t.Fatalf("%s: long text must be rune-truncated with ellipsis:\n%.200s", tc.name, got)
+		}
 	}
 }

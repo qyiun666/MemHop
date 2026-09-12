@@ -18,13 +18,18 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
+// L2Group is one merge the model proposed: the topics it claims share a thread and
+// the text reconstructed from their keywords. The wire shape is the anonymous
+// decode struct in parseConsolidateResponse, which is where a quoted node_hash
+// still parses.
 type L2Group struct {
-	NodeHashes    []uint64 `json:"node_hashes"`
-	MergedSummary string   `json:"merged_summary"`
+	NodeHashes    []uint64
+	MergedSummary string
 }
 
+// ConsolidationOutput is one consolidation pass's groups.
 type ConsolidationOutput struct {
-	L2Groups []L2Group `json:"l2_groups"`
+	L2Groups []L2Group
 }
 
 // systemConsolidate states the contract for one pass. The topic count it aims at
@@ -65,7 +70,7 @@ func Consolidate(ctx context.Context, chat Chat, topics []core.TopicSlot, floor 
 		return &ConsolidationOutput{L2Groups: []L2Group{}}, nil
 	}
 	system := systemConsolidate(floor)
-	user := BuildConsolidatePrompt(topics)
+	user := buildConsolidatePrompt(topics)
 	// Two-budget attempt: the first pass uses the configured ceiling; when
 	// the response is truncated (finish_reason=length, common with reasoning
 	// models), retry once at the endpoint's own ceiling so merged summaries are
@@ -97,9 +102,9 @@ const consolidateFormatRetry = `
 
 Output ONLY valid JSON in the exact shape from the system prompt. No markdown, no code fences, no commentary.`
 
-// BuildConsolidatePrompt lists topics grouped by scene, sorted by user turn
+// buildConsolidatePrompt lists topics grouped by scene, sorted by user turn
 // time (adjacency matters for merge judgment).
-func BuildConsolidatePrompt(topics []core.TopicSlot) string {
+func buildConsolidatePrompt(topics []core.TopicSlot) string {
 	byScene := make(map[uint64][]core.TopicSlot)
 	for _, t := range topics {
 		byScene[t.SceneID] = append(byScene[t.SceneID], t)

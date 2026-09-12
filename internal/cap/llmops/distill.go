@@ -35,23 +35,19 @@ type EmotionScore = core.EmotionScore
 
 type MBTIScore = core.MBTIScore
 
-// NodeEmotion is one per-node emotion row of the distill reply. Only rows naming a
-// node this pass actually sampled survive parsing: an id is the caller's address for
-// a backfill, and one it never offered has nothing to backfill into.
-type NodeEmotion struct {
-	IDHex   string  `json:"id_hex"`
-	Valence float64 `json:"valence"`
-	Arousal float64 `json:"arousal"`
-}
-
 type DistillOutput struct {
 	Emotion     EmotionScore
 	MBTI        MBTIScore
 	Personality string
-	PerNode     []NodeEmotion
+	// PerNode is addressed by node id, so a caller never re-parses what the
+	// parser already resolved to decide a row was one of ours.
+	PerNode map[uint64]core.NodeEmotion
 }
 
-const systemDistill = `You analyze an AI agent's L1 associative memory samples and derive its current emotional state, MBTI-style personality dimensions, and a short personality summary.
+// systemDistill states the reply contract. The personality budget it quotes is the
+// one the parser enforces: a target here that the engine does not apply would let
+// the model write to a length the reply is then cut at mid-sentence.
+var systemDistill = fmt.Sprintf(`You analyze an AI agent's L1 associative memory samples and derive its current emotional state, MBTI-style personality dimensions, and a short personality summary.
 
 Output ONLY a JSON object:
 {
@@ -62,13 +58,13 @@ Output ONLY a JSON object:
 }
 
 Rules:
-- valence: 0=very negative, 1=very positive
+- valence: 0=very negative, 0.5=neutral, 1=very positive
 - arousal: 0=calm, 1=highly excited
 - dominance: 0=submissive, 1=dominant
-- MBTI dimensions: negative = I/N/T/J, positive = E/S/F/P; magnitude = strength
-- personality: at most 160 characters, third person; describe the durable character traits these samples reveal — base it strictly on the samples, never invent
+- MBTI dimensions: negative = I/N/T/J, positive = E/S/F/P; magnitude = strength, so answer 0 only when the samples truly say nothing about that axis
+- personality: at most %d characters, third person; describe the durable character traits these samples reveal — base it strictly on the samples, never invent
 - per_node: at most 20 rows, only the nodes with the strongest emotional signal (skip neutral ones)
-- No markdown, no code fences, no commentary — JSON only`
+- No markdown, no code fences, no commentary — JSON only`, distillPersonalityMaxRunes)
 
 // distillFormatRetry is appended to the user prompt for the
 // format-constrained retry (same self-healing pattern as keyword
@@ -136,8 +132,12 @@ func parseDistillResponse(response string, known map[uint64]struct{}) (*DistillO
 			TF float64 `json:"t_f"`
 			JP float64 `json:"j_p"`
 		} `json:"mbti"`
-		Personality string        `json:"personality"`
-		PerNode     []NodeEmotion `json:"per_node"`
+		Personality string `json:"personality"`
+		PerNode     []struct {
+			IDHex   string  `json:"id_hex"`
+			Valence float64 `json:"valence"`
+			Arousal float64 `json:"arousal"`
+		} `json:"per_node"`
 	}
 	if err := json.Unmarshal([]byte(cleaned), &raw); err != nil {
 		return nil, common.NewError(common.ErrLLM, "distill response parse failed", err)
@@ -165,7 +165,7 @@ func parseDistillResponse(response string, known map[uint64]struct{}) (*DistillO
 			JP: clampSigned(raw.MBTI.JP),
 		},
 		Personality: personality,
-		PerNode:     make([]NodeEmotion, 0, len(raw.PerNode)),
+		PerNode:     make(map[uint64]core.NodeEmotion, len(raw.PerNode)),
 	}
 	// Type re-derived from the four dimensions (never trusted from the LLM).
 	out.MBTI.Type = deriveMBTIType(out.MBTI)
@@ -175,11 +175,11 @@ func parseDistillResponse(response string, known map[uint64]struct{}) (*DistillO
 			continue // skip rows with unparsable ids
 		}
 		if _, ok := known[id]; !ok {
-			continue // skip a node this pass never sampled
+			continue // a node this pass never sampled has nothing to backfill into it
 		}
-		out.PerNode = append(out.PerNode, NodeEmotion{
-			IDHex: n.IDHex, Valence: clampUnit(n.Valence), Arousal: clampUnit(n.Arousal),
-		})
+		out.PerNode[id] = core.NodeEmotion{
+			Valence: clampUnit(n.Valence), Arousal: clampUnit(n.Arousal),
+		}
 	}
 	return out, nil
 }
@@ -207,17 +207,29 @@ func clampSigned(v float64) float64 {
 	return v
 }
 
+// deriveMBTIType reads the four dimensions as one type. A dimension answered with
+// exactly 0 carries no strength — the prompt's own rule says magnitude is strength —
+// so it gets 'X' rather than being resolved by sign: four silent dimensions derive
+// no type word at all, which is what a profile nobody has distilled already
+// carries.
 func deriveMBTIType(m MBTIScore) string {
-	pick := func(v float64, neg, pos byte) byte {
-		if v < 0 {
+	if m.IE == 0 && m.NS == 0 && m.TF == 0 && m.JP == 0 {
+		return ""
+	}
+	letter := func(v float64, neg, pos byte) byte {
+		switch {
+		case v == 0:
+			return 'X'
+		case v < 0:
 			return neg
+		default:
+			return pos
 		}
-		return pos
 	}
 	return string([]byte{
-		pick(m.IE, 'I', 'E'),
-		pick(m.NS, 'N', 'S'),
-		pick(m.TF, 'T', 'F'),
-		pick(m.JP, 'J', 'P'),
+		letter(m.IE, 'I', 'E'),
+		letter(m.NS, 'N', 'S'),
+		letter(m.TF, 'T', 'F'),
+		letter(m.JP, 'J', 'P'),
 	})
 }

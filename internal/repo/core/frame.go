@@ -67,7 +67,7 @@ func EncodeRecord(agentID uint64, recordType, flags uint8, idHash uint64, data [
 
 // RecordData decodes a record at offset into a GC-safe data copy. io.EOF at
 // region end or zero-filled space; ErrCorruption on truncated header/body;
-// ErrCRCMismatch on bad CRC (torn write).
+// ErrCRCMismatch on a whole frame whose content disagrees with its checksum.
 func RecordData(mmap []byte, offset uint64) (recordType, flags uint8, data []byte, agentID, idHash uint64, err error) {
 	off := int(offset)
 	if off == len(mmap) {
@@ -106,4 +106,13 @@ func RecordData(mmap []byte, offset uint64) (recordType, flags uint8, data []byt
 	data = make([]byte, dataLen)
 	copy(data, mmap[off+RecordHeaderSize:dataEnd])
 	return
+}
+
+// frameSpanOf is the total size of the frame at offset, read from its own header.
+// RecordData reports a checksum failure only after it has read a whole header and
+// confirmed the declared length fits the file, so this is what lets recovery step
+// over one damaged frame and keep the records after it.
+func frameSpanOf(mmap []byte, offset uint64) uint64 {
+	off := int(offset)
+	return uint64(RecordHeaderSize) + uint64(binary.LittleEndian.Uint32(mmap[off+2:off+6]))
 }
