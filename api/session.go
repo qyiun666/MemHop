@@ -269,7 +269,11 @@ func (s *Session) AppendArchive(topicID string, slot ArchiveSlot) error {
 // first appears under a turn.
 //
 // The returned ordinal is the library's to hand out and the host's to keep: it is
-// never derived from a title, and two steps of one turn never share one.
+// never derived from a title, and no two steps of one turn are ever live at the
+// same ordinal. It is not permanently unique — a retention sweep frees the
+// ordinals it removed, and an event that outlived the step it names keeps that
+// number — so a host returning to a turn older than the retention window treats
+// an ordinal it held before as a new step's address, not as the same step.
 func (s *Session) PlanCreate(topicID string, title string) (uint32, error) {
 	return s.Session.PlanCreate(topicID, title)
 }

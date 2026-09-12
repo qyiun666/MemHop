@@ -75,6 +75,30 @@ func stepEvents(t *testing.T, db *DB, topicID uint64, seq uint32) []core.Archive
 	return out
 }
 
+// A step's ordinal is handed out from the plan mirror, and that mirror is built from
+// the records which still decode — so a plan node whose payload does not is invisible
+// to it while its ordinal lives on in the address it was stored at. Creating there
+// would replace a step this engine cannot read, and the events bound to that ordinal
+// would then read as the new step's work, so the create path asks the disk first.
+func TestPlanCreateRefusesAnAddressItCannotRead(t *testing.T) {
+	db := newTestDB(t, newTestEngine(t))
+	const topic = uint64(99)
+	topicID := common.FormatHash(topic)
+	address := core.HashPlanNode(topic, 1)
+	const corrupt = `{"id":`
+	if _, err := db.engine.WriteRecord(core.DefaultAgentID, core.RecL5PlanNode, address,
+		[]byte(corrupt)); err != nil {
+		t.Fatalf("write the step no mirror can list: %v", err)
+	}
+
+	if _, err := db.PlanCreate(core.DefaultAgentID, topicID, "重铸的一步"); common.CodeOf(err) != common.ErrDeserialization {
+		t.Fatalf("creating at an address that does not decode must report its own code, got %v", err)
+	}
+	if _, data, err := db.engine.ReadRecord(core.DefaultAgentID, address); err != nil || string(data) != corrupt {
+		t.Fatalf("the refused create overwrote the record it could not read: %q err=%v", data, err)
+	}
+}
+
 func TestAppendArchiveAllocatesAboveDialogueSlots(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	session := common.FormatHash(99)

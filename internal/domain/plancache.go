@@ -21,8 +21,10 @@ type PlanCache struct {
 }
 
 func buildPlanCache(engine *core.StorageEngine, agentID uint64) *PlanCache {
-	// Rebuilt from what still reads: an unreadable node is absent from the mirror in
-	// exactly the shape an expired one has, and this cache decides nothing to delete.
+	// Rebuilt from what still decodes: an unreadable node is absent from the mirror in
+	// exactly the shape an expired one has. What that costs is a tree read and one
+	// offered ordinal — the create path will not write where its read of that address
+	// fails with anything but "absent", so an invisible step is never overwritten here.
 	pc := &PlanCache{plans: make(map[uint64]*repo.PlanAggregate)}
 	for _, agg := range repo.GroupPlanNodes(core.CollectAllPlanNodes(engine, agentID)) {
 		a := agg
@@ -81,9 +83,12 @@ func (pc *PlanCache) Subtree(topicID uint64, root uint32) []uint32 {
 }
 
 // NextSeq hands out the next ordinal of one topic's tree.
-// ponytail: derived from the live nodes, so a retention sweep that drops the
-// highest step lets that ordinal be handed out again; the upgrade path is a
-// persisted per-topic high-water record. Callers hold Context.Mu.
+// ponytail: derived from the live nodes, so any removal frees an ordinal — the
+// sweep that drops the highest step, and the sweep that empties a tree (its key
+// goes with it, so that turn starts again at 1). An event ages on its own clock
+// and can outlive the step it names, so a host that writes into an old turn key
+// after that tree was swept can meet an ordinal an event still points at. The
+// upgrade path is a persisted per-topic high-water record. Callers hold Context.Mu.
 func (pc *PlanCache) NextSeq(topicID uint64) uint32 {
 	agg := pc.plans[topicID]
 	if agg == nil {

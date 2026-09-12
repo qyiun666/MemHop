@@ -27,8 +27,17 @@ func CreateNode(ac *domain.Context, agentID uint64, spec NodeSpec) (uint32, erro
 	}
 	now := time.Now().UnixMilli()
 	seq := ac.Plans.NextSeq(spec.TopicID)
+	idHash := core.HashPlanNode(spec.TopicID, seq)
+	// The offered ordinal comes from the mirror, and a record the mirror's collection
+	// could not decode is missing from it in exactly the shape a free ordinal has —
+	// the address is derived from (topic, seq), so the number survives a payload that
+	// does not. A read that fails for any reason but "absent" therefore stops the
+	// create: a slot this call cannot prove empty is not a slot it overwrites.
+	if _, err := core.ReadPlanNode(ac.Engine, agentID, idHash); err != nil && common.CodeOf(err) != common.ErrNotFound {
+		return 0, common.NewError(common.CodeOf(err), "read the address of the new plan step", err)
+	}
 	node := &core.PlanNode{
-		IDHash:    core.HashPlanNode(spec.TopicID, seq),
+		IDHash:    idHash,
 		TopicID:   spec.TopicID,
 		Seq:       seq,
 		ParentSeq: spec.ParentSeq,
