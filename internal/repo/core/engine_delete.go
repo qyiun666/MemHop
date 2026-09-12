@@ -54,10 +54,8 @@ func (e *StorageEngine) deleteRecordBatchLocked(agentID uint64, idHashes []uint6
 	if _, err := e.file.Write(tombstones); err != nil {
 		return 0, e.undoAppend(end, common.NewError(common.ErrIO, "write tombstones", err))
 	}
-	// The tombstones are in the file from here on, so the record-area end
-	// moves before the flush is attempted: a Sync or remap that fails must not
-	// leave nextOffset behind the log, because the checkpoint header writes
-	// RecordEnd from it and a compact truncates at it.
+	// The same ordering rule appendFrames states: the tombstones are in the file from
+	// here on, so the record-area end moves before the flush is attempted.
 	e.nextOffset = uint64(end) + uint64(len(tombstones))
 	if err := e.file.Sync(); err != nil {
 		return 0, common.NewError(common.ErrIO, "sync tombstones", err)

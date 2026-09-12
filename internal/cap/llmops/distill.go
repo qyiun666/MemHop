@@ -9,6 +9,7 @@ package llmops
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -100,7 +101,11 @@ func Distill(ctx context.Context, chat Chat, samples []L1Sample) (*DistillOutput
 	// One format-constrained retry before failing the call.
 	retry, rerr := chat.Chat(ctx, systemDistill, user+distillFormatRetry, budget)
 	if rerr != nil {
-		return nil, perr
+		// The retry's own failure is the answer: it may be a cancellation or an
+		// endpoint that refused, and reporting the first reply's parse failure
+		// instead would send the host to look for a model that never refused it.
+		return nil, common.NewError(common.CodeOf(rerr),
+			"distill format retry after an off-contract reply", errors.Join(perr, rerr))
 	}
 	if out, perr = parseDistillResponse(retry, known); perr != nil {
 		return nil, perr

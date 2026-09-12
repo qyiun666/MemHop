@@ -50,30 +50,6 @@ func (e *StorageEngine) Contains(agentID, idHash uint64) bool {
 	return ok
 }
 
-// allEntries iterates over all (idHash, offset) pairs of one agent domain. The
-// index is copied first and the yield runs lock-free so engine methods may
-// be called; iteration sees a snapshot. Returning false from yield stops
-// iteration.
-func (e *StorageEngine) allEntries(agentID uint64) iter.Seq2[uint64, uint64] {
-	return func(yield func(uint64, uint64) bool) {
-		e.mu.RLock()
-		if e.closed {
-			e.mu.RUnlock()
-			return
-		}
-		pairs := make([]uint64, 0, len(e.index[agentID])*2)
-		for id, off := range e.index[agentID] {
-			pairs = append(pairs, id, off)
-		}
-		e.mu.RUnlock()
-		for i := 0; i < len(pairs); i += 2 {
-			if !yield(pairs[i], pairs[i+1]) {
-				return
-			}
-		}
-	}
-}
-
 // IndexByType iterates all idHashes of a record type inside one agent
 // domain over a snapshot; the yield runs lock-free. A closed engine yields
 // nothing.

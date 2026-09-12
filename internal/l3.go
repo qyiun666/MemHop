@@ -107,15 +107,11 @@ func (db *DB) ImportL3(agentID uint64, items []L3ImportItem, mode L3ImportMode) 
 				fmt.Sprintf("import: item %q has no domain", items[i].Title))
 		}
 	}
-	switch mode {
-	case L3ImportSkip, L3ImportMerge, L3ImportOverwrite:
-	default:
-		return nil, common.NewError(common.ErrInvalidQuery,
-			"import mode must be Skip, Merge or Overwrite")
-	}
 	batch, err := graph.NewImportBatch(db.engine, core.SharedPoolAgentID, mode)
 	if err != nil {
-		return nil, common.NewError(common.CodeOf(err), "import: read the pool", err)
+		// The mode is judged there, ahead of any read or write, so a batch refused for
+		// an undefined one leaves nothing behind — same as a malformed item.
+		return nil, common.NewError(common.CodeOf(err), "import", err)
 	}
 	for i := range items {
 		if err := batch.ImportNode(&items[i]); err != nil {

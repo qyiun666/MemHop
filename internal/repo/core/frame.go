@@ -81,19 +81,23 @@ func RecordData(mmap []byte, offset uint64) (recordType, flags uint8, data []byt
 	}
 	recordType = mmap[off]
 	flags = mmap[off+1]
-	dataLen := int(binary.LittleEndian.Uint32(mmap[off+2 : off+6]))
+	dataLen := binary.LittleEndian.Uint32(mmap[off+2 : off+6])
 	agentID = binary.LittleEndian.Uint64(mmap[off+6 : off+14])
 	idHash = binary.LittleEndian.Uint64(mmap[off+14 : off+22])
 	if recordType == 0 && flags == 0 && dataLen == 0 && agentID == 0 && idHash == 0 {
 		return 0, 0, nil, 0, 0, io.EOF
 	}
-	dataEnd := off + RecordHeaderSize + dataLen
-	if dataEnd > len(mmap) {
+	// The declared length comes out of the file, so it is compared in unsigned
+	// arithmetic against what actually remains: narrowed to an int first on a 32-bit
+	// build, a rotted 4 GiB-sized value would flip sign and slice past this frame.
+	frameStart := uint64(off) + RecordHeaderSize
+	if uint64(dataLen) > uint64(len(mmap))-frameStart {
 		return 0, 0, nil, 0, 0, common.NewError(
 			common.ErrCorruption,
 			fmt.Sprintf("record at offset %d claims length %d but file ends at %d", offset, dataLen, len(mmap)),
 		)
 	}
+	dataEnd := int(frameStart + uint64(dataLen))
 	storedCRC := binary.LittleEndian.Uint32(mmap[off+22 : off+26])
 	crc := crc32.ChecksumIEEE(mmap[off : off+22])
 	crc = crc32.Update(crc, crc32.IEEETable, mmap[off+RecordHeaderSize:dataEnd])
@@ -106,13 +110,4 @@ func RecordData(mmap []byte, offset uint64) (recordType, flags uint8, data []byt
 	data = make([]byte, dataLen)
 	copy(data, mmap[off+RecordHeaderSize:dataEnd])
 	return
-}
-
-// frameSpanOf is the total size of the frame at offset, read from its own header.
-// RecordData reports a checksum failure only after it has read a whole header and
-// confirmed the declared length fits the file, so this is what lets recovery step
-// over one damaged frame and keep the records after it.
-func frameSpanOf(mmap []byte, offset uint64) uint64 {
-	off := int(offset)
-	return uint64(RecordHeaderSize) + uint64(binary.LittleEndian.Uint32(mmap[off+2:off+6]))
 }

@@ -72,13 +72,14 @@ func newRegistry(llm memhop.LlmConfig, defaults memhop.MemHopDefaults, dbDir str
 }
 
 // get returns the tenant's MCP server, creating its agent domain on first
-// access. The registry lock guards the map alone: opening a domain takes that
-// domain's lock inside the engine, and a busy tenant holds that one for the length
-// of an LLM round-trip. Since every request resolves its tenant here, a registry
-// held across that call would put one tenant's work in front of all the others.
-// Two concurrent first requests for one name may therefore both open the domain —
-// registration is serialized by the engine and idempotent by name, so they land on
-// the same domain and the later server is dropped.
+// access. The registry lock covers the entry map, the whitelist and the one-time
+// lazy open of the shared database. What it never covers is opening a tenant's own
+// domain: that takes the domain lock inside the engine, and a busy tenant holds it
+// for the length of an LLM round-trip. Since every request resolves its tenant
+// here, a registry held across that call would put one tenant's work in front of
+// all the others. Two concurrent first requests for one name may therefore both
+// open the domain — registration is serialized by the engine and idempotent by
+// name, so they land on the same domain and the later server is dropped.
 func (r *tenantRegistry) get(tenant string) (*mcp.Server, error) {
 	if !tenantIDRe.MatchString(tenant) {
 		return nil, fmt.Errorf("invalid tenant id %q", tenant)

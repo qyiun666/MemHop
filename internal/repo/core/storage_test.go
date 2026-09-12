@@ -291,7 +291,7 @@ func TestContainsAndIndex(t *testing.T) {
 		t.Fatal("should not contain 99")
 	}
 	count := 0
-	for range eng.allEntries(DefaultAgentID) {
+	for range eng.IndexByType(DefaultAgentID, RecL0Profile) {
 		count++
 	}
 	if count != 1 {

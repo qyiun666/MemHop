@@ -924,3 +924,36 @@ func TestDeleteL3RefusesUnreadableNode(t *testing.T) {
 		t.Fatalf("nor the graph slot itself: %v", err)
 	}
 }
+
+// Every L3 id derives from text the host supplies and the whole pool shares one id
+// space, so a domain written as "<graph hex>:<title>" hashes to exactly the address of
+// that title's node in that graph. The graph read the create path performs answers
+// such a collision with "no such graph", and taking that as permission stores a graph
+// slot over somebody's node — which then answers to neither kind: the node listing
+// stops naming it, and the record reports a type it never was.
+func TestImportL3RefusesADomainNamingANodeAddress(t *testing.T) {
+	db := newL3TestDB(t)
+	graphHash := importOne(t, db, "go", "escape-analysis")
+	nodeAddress := common.FormatHash(graphHash) + ":escape-analysis"
+	if common.HashID(nodeAddress) != repo.NodeIDL3(graphHash, "escape-analysis") {
+		t.Fatalf("the fixture no longer names a node address: %x", nodeAddress)
+	}
+
+	res, err := db.ImportL3(core.DefaultAgentID, []L3ImportItem{
+		{Title: "other", Domain: nodeAddress, Content: "clobber"},
+	}, L3ImportSkip)
+	if err != nil {
+		t.Fatalf("the batch itself is not the refusal: %v", err)
+	}
+	if len(res.Errors) != 1 || !strings.Contains(res.Errors[0], "already holds this address") {
+		t.Fatalf("the colliding domain must be refused by name, got %+v", res.Errors)
+	}
+	graph := l3TestGraph(t, db)
+	if len(graph.Nodes) != 1 || graph.Nodes[0].Title != "escape-analysis" ||
+		graph.Nodes[0].Content != "escape-analysis" {
+		t.Fatalf("the refused import rewrote the node: %+v", graph.Nodes)
+	}
+	if n := countRecords(db.engine, core.SharedPoolAgentID, core.RecL3GraphSlot); n != 1 {
+		t.Fatalf("the pool holds %d graph slots after a refused create, want 1", n)
+	}
+}

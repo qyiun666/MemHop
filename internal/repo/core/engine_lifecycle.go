@@ -16,7 +16,11 @@ import (
 )
 
 func Create(path string) (*StorageEngine, error) {
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
+	// No O_TRUNC here: the file may not change until the exclusive lock says nobody
+	// else is reading it. A create refused by the lock would otherwise have already
+	// emptied a live database on its way out — the truncation below clears the record
+	// area once the lock is held, and that is the only kind of create that may.
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0644)
 	if err != nil {
 		return nil, common.NewError(common.ErrIO, "create file", err)
 	}

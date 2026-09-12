@@ -18,47 +18,90 @@ import (
 // (a later same-(agent,idHash) overrides; a tombstone deletes). Two failures mean
 // two different things: a frame that does not fit the file is the torn tail a
 // crash left mid-write, and the caller truncates from there; a frame whose
-// checksum disagrees is one damaged record whose bytes are all present, so the
-// scan steps over it and keeps every record after it. Losing one record to rot and
-// losing the whole rest of the log are not the same accident, and the second one
-// becomes permanent at the next checkpoint.
+// checksum disagrees is one damaged record, so the scan leaves it out and keeps
+// every record after it. Losing one record to rot and losing the whole rest of the
+// log are not the same accident, and the second one becomes permanent at the next
+// checkpoint.
+//
+// Advancing past a damaged frame cannot use that frame's length: the length bytes
+// are inside what its checksum just disbelieved, so they may point anywhere — one
+// byte off lands the scan inside the next record, whose then-garbage header usually
+// reads as "does not fit", and truncating on that signal deletes records that were
+// never damaged. So the scan searches forward for the next offset whose frame
+// actually reads clean, which costs a pass over the residue and is exactly what the
+// residue is for: nothing in it can be indexed until some offset proves itself.
 func (e *StorageEngine) scanRecords(start uint64) (end uint64, truncate bool, err error) {
 	offset := start
 	skipped, firstSkipped := 0, uint64(0)
+	// Reported on every exit, including the ones that stop early: a recovery that
+	// quietly dropped records is the one an operator never hears about.
+	defer func() {
+		if skipped > 0 {
+			slog.Warn("engine: frames failed to decode at open and were stepped past",
+				"count", skipped, "first_offset", firstSkipped, "scan_end", end, "truncated", truncate)
+		}
+	}()
 	for {
 		_, flags, data, agentID, idHash, err := RecordData(e.mmap, offset)
-		if err != nil {
-			if errors.Is(err, io.EOF) {
-				break
-			}
-			if common.CodeOf(err) == common.ErrCRCMismatch {
-				if skipped == 0 {
-					firstSkipped = offset
+		if err == nil {
+			if flags&FlagDeleted != 0 {
+				e.dropFromIndexLocked(agentID, idHash)
+			} else {
+				if e.index[agentID] == nil {
+					e.index[agentID] = make(map[uint64]uint64)
 				}
-				skipped++
-				offset += frameSpanOf(e.mmap, offset)
-				continue
+				e.index[agentID][idHash] = offset
 			}
-			if c := common.CodeOf(err); c == common.ErrCorruption {
-				return offset, true, nil
-			}
+			offset += uint64(RecordHeaderSize) + uint64(len(data))
+			continue
+		}
+		if errors.Is(err, io.EOF) {
+			// End of the log, or the zero-filled space an append will overwrite.
+			return offset, false, nil
+		}
+		if c := common.CodeOf(err); c != common.ErrCRCMismatch && c != common.ErrCorruption {
 			return 0, false, err
 		}
-		if flags&FlagDeleted != 0 {
-			e.dropFromIndexLocked(agentID, idHash)
-		} else {
-			if e.index[agentID] == nil {
-				e.index[agentID] = make(map[uint64]uint64)
-			}
-			e.index[agentID][idHash] = offset
+		if skipped == 0 {
+			firstSkipped = offset
 		}
-		offset += uint64(RecordHeaderSize) + uint64(len(data))
+		skipped++
+		if e.cursorInSnapshotArea(offset) {
+			// The bytes here are a snapshot blob the active header already named,
+			// not a record whose header rotted: the record area ends here.
+			return offset, true, nil
+		}
+		next, ok := resyncScan(e.mmap, offset+1)
+		if !ok {
+			// Nothing after the cursor reads as a record either, so the rest of the
+			// file holds nothing the index could ever name; cutting it off leaves the
+			// append point where the log last proved itself.
+			return offset, true, nil
+		}
+		offset = next
 	}
-	if skipped > 0 {
-		slog.Warn("engine: records failed their checksum at open and were left out of the index",
-			"count", skipped, "first_offset", firstSkipped)
+}
+
+// cursorInSnapshotArea reports whether offset lands in the snapshot area the
+// active header names (0 when the file carries none). The scan asks this before it
+// searches for the next record, because a committed snapshot tail is residue to cut
+// and not rot to walk past, and byte-scanning an index blob the size of the log
+// would charge every Open for a case the header already answers.
+func (e *StorageEngine) cursorInSnapshotArea(offset uint64) bool {
+	snapshotOffset := e.activeHeaderRef().SnapshotOffset
+	return snapshotOffset != 0 && offset >= snapshotOffset
+}
+
+// resyncScan finds the first offset at or after from where a frame reads clean,
+// or false when the rest of the file holds none. A candidate must satisfy its own
+// checksum, so a byte-aligned guess cannot resurrect garbage as a record.
+func resyncScan(mmap []byte, from uint64) (uint64, bool) {
+	for off := from; off < uint64(len(mmap)); off++ {
+		if _, _, _, _, _, err := RecordData(mmap, off); err == nil {
+			return off, true
+		}
 	}
-	return offset, false, nil
+	return 0, false
 }
 
 // dropFromIndexLocked removes one idHash from the per-agent primary index

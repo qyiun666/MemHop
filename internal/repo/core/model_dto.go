@@ -185,3 +185,14 @@ const (
 	L3ImportMerge     L3ImportMode = "Merge"
 	L3ImportOverwrite L3ImportMode = "Overwrite"
 )
+
+// Valid reports whether m is one of the three defined modes. The vocabulary lives
+// here so a caller asks the type instead of listing the values again; a host may
+// send any string, and an unnamed mode has no policy to run.
+func (m L3ImportMode) Valid() bool {
+	switch m {
+	case L3ImportSkip, L3ImportMerge, L3ImportOverwrite:
+		return true
+	}
+	return false
+}

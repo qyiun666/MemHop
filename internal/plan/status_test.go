@@ -40,8 +40,8 @@ func TestStatusRoundTrip(t *testing.T) {
 	if _, err := StatusToString(9); err == nil {
 		t.Fatal("an undefined stored status must be reported, not defaulted")
 	}
-	// 3 is where failed sat before this table cut pending out and moved every value
-	// down one: a file from that era must not read as a live status.
+	// 3 is the nearest number outside the table: the read side answers for every
+	// undefined stored value, whatever it once meant.
 	if _, err := StatusToString(3); err == nil {
 		t.Fatal("a retired stored value must be reported as an undefined stored status")
 	}

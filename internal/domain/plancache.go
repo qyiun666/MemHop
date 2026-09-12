@@ -23,8 +23,7 @@ type PlanCache struct {
 func buildPlanCache(engine *core.StorageEngine, agentID uint64) *PlanCache {
 	// Rebuilt from what still decodes: an unreadable node is absent from the mirror in
 	// exactly the shape an expired one has. What that costs is a tree read and one
-	// offered ordinal — the create path will not write where its read of that address
-	// fails with anything but "absent", so an invisible step is never overwritten here.
+	// offered ordinal, and the mirror cannot tell the two apart from here.
 	pc := &PlanCache{plans: make(map[uint64]*repo.PlanAggregate)}
 	for _, agg := range repo.GroupPlanNodes(core.CollectAllPlanNodes(engine, agentID)) {
 		a := agg

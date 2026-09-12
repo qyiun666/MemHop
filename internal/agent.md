@@ -72,7 +72,9 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    goroutine 生命周期），goroutine 运行在 `ac.OpCtx` 下——
    `Close` 与空闲回收取消它，任何在飞 Dream 在下一阶段边界退出，
    不会把生命周期屏障堵在一次完整 LLM 往返上。域锁内的前台 LLM 调用（`Update` 的轮次提炼）同样挂
-   `ac.OpCtx`，避免生命周期屏障被一次完整往返阻塞。
+   `ac.OpCtx`，避免生命周期屏障被一次完整往返阻塞。一次提炼要串多少次往返不在本契约里限定：长输入
+   在 `llmops` 里按块走，块数随这一轮转录的长度增长，所以退出点是一块而不是一整轮，而一轮能在锁内
+   串起任意多块——内容侧那两条上限量的是单条记录，不量一轮。
 4. **空闲回收**：无后台定时器；`contextFor` 顺带清扫超
    `Defaults.AgentIdleTTLMs` 未访问的域（默认域与共享 L3 域豁免），回收前先对域锁
    `TryLock`：锁被占用（在飞操作）或 `ac.DreamInFlight` 非空则跳过，留待下轮。
@@ -366,6 +368,6 @@ internal/{domain,scene,turn,dream,graph,plan,content}
 自己的 `agent.md`。
 
 - 关键词提炼无本地兜底：LLM 输出不可解析即 `ErrLLM`（这一轮不产生话题），`internal` 根不初始化任何分词器。一轮的提炼与 Dream 的融合提炼共用 `llmops.ExtractKeywords`——它只吃一段文本，不认识记录结构。
-- L0 蒸馏同样无兜底，且**「答非所问」与「答得少」分开判**：回包里 `emotion`/`mbti` 缺整块即 `ErrLLM`（这一轮不动画像），解码出的零值不去盖库里已蒸馏的那半；`per_node` 只认本次样本集里的 id，认不出的行在 `llmops` 内丢掉——带下去只会让一次抄错的 hex 被 L1 回填报成「一条记录读不回」，从此每次 Dream 都停在最后一步。三类调用（关键词、巩固、蒸馏）要多少输出都不越 `LlmConfig.MaxOutputTokens` 声明的端点上限（越过去是一次被端点直接拒掉的请求），而截断升级正好把那份余量花掉；巩固 prompt 里的目标条数就是 `Defaults.DreamCompressMinTopics`，并且任何数字都排在「不同主题禁并」这条规则之后。
-- `ImportL3` 的批校验在 composition root 完成（Title/Domain 必填、mode 不接受空值），批次创建时又把整池的三张索引一次读全（图槽 name→id、每图标题集、每图边键）——三者中任何一条记录读不回都让**整批**在第一个写入之前被拒、错误带着那条记录的 id；拒批即一字节不写。`result.Errors` 只表示单条存储失败。
+- L0 蒸馏同样无兜底，且**「答非所问」与「答得少」分开判**：回包里 `emotion`/`mbti` 缺整块即 `ErrLLM`（这一轮不动画像），解码出的零值不去盖库里已蒸馏的那半；`per_node` 只认本次样本集里的 id，认不出的行在 `llmops` 内丢掉——带下去只会让一次抄错的 hex 被 L1 回填报成「一条记录读不回」，从此每次 Dream 都停在最后一步。三类调用（关键词、巩固、蒸馏）要多少输出都不越 `LlmConfig.MaxOutputTokens` 声明的端点上限（越过去是一次被端点直接拒掉的请求），截断升级花的是「端点上限减去 `llmops.ConsolidationMaxTokens`」那一段——宿主没抬过 `MaxOutputTokens` 时那一段是零，此时一条装不下的融合摘要就是该场景这次巩固的 `ErrLLM`（上限与升级路径写在 `llmops` 那一条上）；巩固 prompt 里的目标条数就是 `Defaults.DreamCompressMinTopics`，并且任何数字都排在「不同主题禁并」这条规则之后。
+- `ImportL3` 的批校验：Title/Domain 必填在 composition root 判，导入模式在批次构造处判（`core.L3ImportMode.Valid()` 是唯一列词表的地方）——两者都排在任何读与写之前，拒批即一字节不写。批次创建时又把整池的三张索引一次读全（图槽 name→id、每图标题集、每图边键）——三者中任何一条记录读不回都让**整批**在第一个写入之前被拒、错误带着那条记录的 id。一个派生地址已被别的记录占着的条目（标签正好拼出某节点 id 那一类）是**单条**拒绝，走 `result.Errors`，同批其余照旧落地。
 - 宿主面测试覆盖 26 个会话方法 + 6 个 `DB` 方法，按层分文件：`test/api_interface_scene_test.go`（L2 场景生命周期）、`api_interface_plan_test.go`（L5 按步骤逐个建的树、Model A 折叠与节点字段回读、事件键到自己那一轮、重开后读回）、`api_interface_turn_test.go`（一轮之下原文与事件各归各的读法）、`api_interface_multi_test.go`（租户隔离与 `CompactTo`）。这些用例只使用库铸造并回传给宿主的 id。

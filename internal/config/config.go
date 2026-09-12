@@ -1,9 +1,10 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// Package config holds the configuration a caller supplies: the database path,
-// the LLM endpoint and the tuning defaults. Validation lives on the type that
-// owns the rule, so no knob is declared twice.
+// Package config holds the types that describe how a database is set up: the LLM
+// endpoint and the tuning defaults a host hands to Open, and the bundle the
+// composition root assembles out of them. Validation lives on the type that owns
+// the rule, so no knob is declared twice.
 
 package config
 
@@ -11,9 +12,10 @@ import (
 	"github.com/qyiun666/MemHop/internal/common"
 )
 
-// MemHopConfig configures a MemHop database. The LLM endpoint is the only
-// external service the engine contacts, so the struct carries no retrieval or
-// embedding settings.
+// MemHopConfig is one database's assembled configuration: where the file lives,
+// which endpoint answers, which tuning applies. The composition root builds it out
+// of Open's arguments; the LLM endpoint is the only external service the engine
+// contacts, so there are no retrieval or embedding settings to carry.
 type MemHopConfig struct {
 	DBPath   string         `json:"db_path"`
 	LLM      LlmConfig      `json:"llm"`

@@ -10,6 +10,7 @@ package llmops
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -88,7 +89,11 @@ func Consolidate(ctx context.Context, chat Chat, topics []core.TopicSlot, floor 
 	// applies the same self-healing pattern.
 	retry, rerr := chat.Chat(ctx, system, user+consolidateFormatRetry, primary)
 	if rerr != nil {
-		return nil, perr
+		// The retry's failure is the answer, with the first reply's parse error kept
+		// as context: a cancelled or refused retry reported as an off-contract answer
+		// sends the host to debug a model that never refused it.
+		return nil, common.NewError(common.CodeOf(rerr),
+			"consolidate format retry after an off-contract reply", errors.Join(perr, rerr))
 	}
 	if out, perr = parseConsolidateResponse(retry); perr != nil {
 		return nil, perr

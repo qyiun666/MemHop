@@ -108,6 +108,16 @@ README 的版本表与 git log。
     - **对外文本的过度承诺收回**：门面管理面自称「这几口在 MCP 都有对应工具」，而两个记忆纠错口只在 Go 侧；`tools.go` 头注释声称「每个公开 DB 方法一个工具」；`OpenShared` 把 `os.Root` 说成所有文件操作都经它解析——文件名是常量，唯一能让路径走出 db-dir 的是被人放在那里的 symlink，`os.Root` 检出的正是它，真正的 open 走的是拼接路径；`api/types.go` 里 11 个入参别名一个字都没写（`SearchQuery`/`L4Query`/`ScenePatch`/`PlanStatus` 恰恰是宿主点进去要找契约的地方），`LlmConfig` 那两个 0 值默认（120 秒 / 8192）也没落在宿主读得到的位置；`memhop_trajectory_read` 的 `session_id` 没写明它是 `Search` 带回的那个场景 id、填错只会静默给一份空清单。
     - **本轮偏离批准计划之处（命名）**：计划写了「不改函数命名」，这里改了三个且都有理由——`CreateSceneL2WithID` → `CreateSceneL2`（签名换成收 slot 之后 `WithID` 已无所指），`scene.Create` 与 `scene.FreshID` 转私（各自只有本包读者，转私是本包的边界声明，不是风格偏好）。
 
+37. **第 14 轮审查（内核的销毁路径 / L3 地址占用 / LLM 失败的归类）**：
+    - **一次被锁拒掉的 `Create` 会清空一份完好的库**：`O_TRUNC` 由 `os.OpenFile` 自己执行，排在排他锁回答「有没有别人正读着这个文件」之前——失败的一方什么也没拿到，被它清掉的那一方还在 mmap 上读它已经不存在的内容。创建现在只 `O_RDWR|O_CREATE`，清空记录区是拿到锁之后那一次 `Truncate(DataStart)` 的事（`TestCreateRefusesAFileAnotherInstanceHolds`）。
+    - **一个 rot 掉的长度字段此前会带走它后面的整段日志**：声明长度大到装不进文件时 `RecordData` 报 `ErrCorruption`，而 Open 恢复把它和撕裂尾帧当成同一件事，从那个偏移截断——坏记录之后的每一条都被砍掉，下一次 checkpoint 把这件事变成永久的。现在两种校验和/长度都不符的帧走同一条损坏分支：向前找第一个「自己的校验和过得去」的偏移（不能照这一帧自己声明的长度走，那 4 个字节正处在刚被它自己的校验和否定过的那段里，差一字节就落进下一条记录中间，而它读出来的坏头通常又报「装不进文件」，于是截断信号被一条 rot 骗出来）；只有游标之后再也读不出任何记录时才截断；每一次跨过的退出都落一条 WARN，包括提前停止的那些（`TestRottedLengthFieldKeepsTheRecordsAfterIt`）。
+    - **长度的算术按无符号做**：声明长度此前先窄成 `int` 再与剩余字节比，32 位构建上一个 rot 成 4 GiB 的值会翻过符号、把这一帧切到映射之外；随它删掉的还有 `frameSpanOf`——恢复不再需要照 rot 的长度算宽度，它就没有读者了。
+    - **L3 的三个建记录原语会把别的种类的记录就地改写**：图槽/节点/边的 id 全部由宿主给的文本派生，而整个公共池共用一个 id 空间，所以一张图的标签可以正好拼出一个节点的地址；typed reader 对这种碰撞答的是 `ErrNotFound`，「没有」于是成了唯一能允许落笔的答案——三个 create 现在先问 `Contains`（它不看种类，而这道闸要拦的恰恰是「任何种类正占着」），占着就带 `ErrInvalidQuery` 拒掉，而不是把那条记录改写成图槽还报告成功（`TestImportL3RefusesADomainNamingANodeAddress`）。
+    - **一个枚举的词表只列一处**：`L3ImportMode.Valid()` 是唯一的取值列举，`NewImportBatch` 在建批时就拒未定义的 mode（把策略函数连同 mode 一起收进批次，未定义 mode 因此永远走不到某个 `default`），根里那份 `switch mode` 随之删掉。
+    - **两处「模型答非所问」其实是被取消的重试**：巩固与蒸馏的格式化重试在第二次调用失败时交回的是**第一次**那份解析错误——一次取消或一个拒了的端点因此被报成模型给过一份不合契约的回答，宿主去查的是从没拒绝过它的东西。现在带重试自己那一档码上抛，两份失败一起留在因果里（`TestFormatRetryFailureKeepsItsOwnCode`）。
+    - **一处永不带码的退出被删成可达的那一条**：传输层的 `attempt == len(delays)` 让循环末尾的 `return "", lastErr` 成为死路，而「最后一次尝试的失败就是要给的答案」本来就只该由那一条来说；其余死码与不实文本一并清账：索引的第三份枚举 `allEntries`（零调用者，测试改走 `IndexByType`）、一处把机器本地测量写进注释、`config` 与 README/AGENTS 把 `MemHopConfig` 说成宿主入参（它是组合根拼出的装配视图），以及 plan/graph/domain/engram/repo 五份 `agent.md` 里的主语越界与同一事实的第三份副本。
+    - **本轮记下但没有动的两件事**：`llmops.ConsolidationMaxTokens` 与库默认的 `MaxOutputTokens` 相等，所以宿主没抬过那个字段时截断升级没有更宽的一档可用——一条装不下的融合摘要就是该场景这次巩固的 `ErrLLM`。这是记忆质量的真实取舍（抬那个数会同时收窄关键词阶梯最宽的一档），已按 `ponytail:` 写进常量旁，等用户裁定；一轮转录的总量没有预算（单条 64 KiB 只量一条记录），锁内停留由取消而不是由条数上限管着，这一条已写进 `internal/agent.md` 第 3 项。
+
 ## v1.6.3 — 2026-09-10 — L4 是一轮唯一的内容层，L5 只剩计划树，`Update` 只蒸馏
 
 一轮发生过什么，此前被劈在两层：L4 存两条对话原文，轨迹层存事件与计划节点。两层早就共用

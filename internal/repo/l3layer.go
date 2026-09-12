@@ -31,6 +31,9 @@ func ReadSharedGraphL3(engine *core.StorageEngine, hexID string) (*core.Hypergra
 // once — hashing the pair alone made "a part of b" overwrite "a related to b".
 func CreateEdgeL3(engine *core.StorageEngine, agentID uint64, graphID uint64, kind core.GraphEdgeKind, nodeIDs []uint64) (uint64, error) {
 	edgeID := common.HashID(fmt.Sprintf("%s:%v:%d", common.FormatHash(graphID), nodeIDs, kind))
+	if err := l3AddressFree(engine, agentID, edgeID); err != nil {
+		return 0, err
+	}
 	edge := &core.HypergraphEdge{
 		IDHash:    edgeID,
 		GraphID:   graphID,
@@ -69,11 +72,14 @@ func ListEdgeL3(engine *core.StorageEngine, agentID uint64, graphID uint64) []co
 	return out
 }
 
-// CreateGraphL3 imports/creates a hypergraph; ID = hash(name). It writes the
-// slot unconditionally, so it is only for a graph the caller has confirmed
-// does not exist yet — see EnsureGraphL3 for the import path.
+// CreateGraphL3 imports/creates a hypergraph; ID = hash(name). An address some other
+// record already holds is refused rather than rewritten — see l3AddressFree — so this
+// is safe to call without a prior existence check.
 func CreateGraphL3(engine *core.StorageEngine, agentID uint64, name string) (uint64, error) {
 	graphID := common.HashID(name)
+	if err := l3AddressFree(engine, agentID, graphID); err != nil {
+		return 0, err
+	}
 	now := time.Now().UnixMilli()
 	slot := &core.HypergraphSlot{
 		IDHash:    graphID,
@@ -87,8 +93,8 @@ func CreateGraphL3(engine *core.StorageEngine, agentID uint64, name string) (uin
 	return graphID, nil
 }
 
-// EnsureGraphL3 returns the graph of a domain name, creating its slot only
-// when no record with that id exists. The id derives from the name it was
+// EnsureGraphL3 returns the graph of a domain name, creating its slot only when the
+// address holds nothing at all. The id derives from the name it was
 // asked for, but the stored Name is a label of its own that may have been
 // renamed since. Reusing an existing slot therefore keeps that name and its
 // CreatedAt intact, instead of a repeated call silently undoing the rename.
@@ -154,6 +160,9 @@ func UpdateGraphL3(engine *core.StorageEngine, agentID uint64, id uint64, name *
 // non-empty sourceRef lands on the node's SourceRef.
 func CreateNodeL3(engine *core.StorageEngine, agentID uint64, graphID uint64, title, nodeType, content string, keywords []string, sourceRef string) (uint64, error) {
 	nodeID := NodeIDL3(graphID, title)
+	if err := l3AddressFree(engine, agentID, nodeID); err != nil {
+		return 0, err
+	}
 	now := time.Now().UnixMilli()
 	node := &core.HypergraphNode{
 		IDHash:    nodeID,
@@ -211,4 +220,19 @@ func MutateNodeL3(engine *core.StorageEngine, agentID uint64, graphID uint64, ti
 		return 0, err
 	}
 	return nodeID, nil
+}
+
+// l3AddressFree refuses a create whose derived id already holds a record. Every L3
+// id comes out of host-supplied text — a graph from its label, a node from
+// "<graph hex>:<title>", an edge from its members and kind — and the whole pool
+// shares one id space, so a label can literally spell another kind's derived form.
+// The typed readers answer such a collision with ErrNotFound, which is the one
+// answer that must not license a write: the record would come back as a type it
+// never was, and the listing of its own kind would stop seeing it entirely.
+func l3AddressFree(engine *core.StorageEngine, agentID uint64, id uint64) error {
+	if engine.Contains(agentID, id) {
+		return common.NewError(common.ErrInvalidQuery,
+			"record "+common.FormatHash(id)+" already holds this address: a domain label or node title may not name another record's id")
+	}
+	return nil
 }

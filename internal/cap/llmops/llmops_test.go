@@ -5,6 +5,7 @@ package llmops
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -196,6 +197,61 @@ func (s *budgetSpy) ChatWithRetry(_ context.Context, _, _ string, primaryMax, re
 }
 
 func (s *budgetSpy) MaxOutputTokens() int { return s.ceiling }
+
+// retryFailsOnce answers the first attempt with something no parser can use and fails
+// every later call — the shape of a format-constrained retry that gets cancelled, or
+// refused by the endpoint.
+type retryFailsOnce struct {
+	budgetSpy
+	attempts int
+	failWith error
+}
+
+func (s *retryFailsOnce) Chat(_ context.Context, _, _ string, _ int) (string, error) {
+	s.attempts++
+	if s.attempts == 1 {
+		return "not json at all", nil
+	}
+	return "", s.failWith
+}
+
+// Both call points make their first attempt through ChatWithRetry, so the two-budget
+// route has to run through the same counting Chat — otherwise the injected failure
+// never reaches the format retry and the test asserts on a call that did not happen.
+func (s *retryFailsOnce) ChatWithRetry(ctx context.Context, system, user string, primaryMax, _ int) (string, error) {
+	return s.Chat(ctx, system, user, primaryMax)
+}
+
+// The retry's own failure is what the host has to hear: an off-contract first reply
+// followed by a cancelled retry is a client that walked away, and reporting the parse
+// error instead sends the host to debug a model that never refused anything.
+func TestFormatRetryFailureKeepsItsOwnCode(t *testing.T) {
+	for _, fail := range []error{
+		common.NewError(common.ErrCancelled, "llm call cancelled", context.Canceled),
+		common.NewError(common.ErrLLM, "llm api: 503 - busy"),
+	} {
+		spy := &retryFailsOnce{budgetSpy: budgetSpy{ceiling: 8192}, failWith: fail}
+		_, err := Distill(context.Background(), spy,
+			[]L1Sample{{IDHash: 1, Keywords: []string{"a"}, Importance: 1, UpdatedAt: 1}})
+		if common.CodeOf(err) != common.CodeOf(fail) {
+			t.Fatalf("distill over a %v retry: code=%d err=%v", fail, common.CodeOf(err), err)
+		}
+		// The two cases share code 9002, so the code alone would pass on the parse
+		// error: the retry's own failure has to be reachable in the chain.
+		if !errors.Is(err, fail) {
+			t.Fatalf("distill dropped the retry's failure from the chain: %v", err)
+		}
+		spy.attempts = 0
+		_, err = Consolidate(context.Background(), spy,
+			[]core.TopicSlot{{ID: 1, UserTimestamp: 1}, {ID: 2, UserTimestamp: 2}}, 1)
+		if common.CodeOf(err) != common.CodeOf(fail) {
+			t.Fatalf("consolidate over a %v retry: code=%d err=%v", fail, common.CodeOf(err), err)
+		}
+		if !errors.Is(err, fail) {
+			t.Fatalf("consolidate dropped the retry's failure from the chain: %v", err)
+		}
+	}
+}
 
 // An endpoint configured for 64 output tokens refuses a request for 8192 outright,
 // so no rung of any ladder may ask above the ceiling — the ladder that used to end

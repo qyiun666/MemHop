@@ -25,6 +25,10 @@ type L2Meta struct {
 	AgentTimestamp int64
 }
 
+// L2MetaIndex caches one row per topic. Its own lock guards the two tables —
+// nothing else. The rows a read hands out are the stored ones, not copies, so a
+// caller that keeps a row across a write needs the serialisation every user of this
+// cache already has: callers hold the domain lock.
 type L2MetaIndex struct {
 	mu      sync.RWMutex
 	entries map[uint64]*L2Meta

@@ -286,6 +286,90 @@ func TestSecondInstanceRejectedByLock(t *testing.T) {
 	eng2.Close()
 }
 
+// Rotted payload and a rotted length field are two different accidents. A frame
+// whose payload disagrees with its checksum still says exactly where the next frame
+// begins; a frame whose own length bytes rotted says the wrong thing, so stepping
+// over it by that length lands wherever but the next record. The scan then reads
+// "this frame does not fit the file" — which is the torn-tail signal — and truncates
+// from a point that is not the tail at all, deleting records that were never damaged
+// and making the loss permanent at the next checkpoint.
+func TestRottedLengthFieldKeepsTheRecordsAfterIt(t *testing.T) {
+	p := tempPath(t, "rotlen")
+	eng, err := Create(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.WriteRecord(DefaultAgentID, RecL0Profile, 1, []byte("one")); err != nil {
+		t.Fatal(err)
+	}
+	middle, err := eng.WriteRecord(DefaultAgentID, RecL1SceneNode, 2, []byte("the damaged one"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.WriteRecord(DefaultAgentID, RecL2Topic, 3, []byte("three")); err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.closeNoCheckpoint(); err != nil {
+		t.Fatal(err)
+	}
+	// Byte 2 of the frame is the low byte of its 4-byte length field.
+	flipByteAt(t, p, middle+2)
+	before := fileSize(t, p)
+
+	eng2, err := Open(p)
+	if err != nil {
+		t.Fatalf("a rotted length must not refuse the file: %v", err)
+	}
+	defer eng2.Close()
+	if eng2.Contains(DefaultAgentID, 2) {
+		t.Fatal("the frame whose checksum failed must stay out of the index")
+	}
+	for _, live := range []uint64{1, 3} {
+		if !eng2.Contains(DefaultAgentID, live) {
+			t.Fatalf("record %d was taken with the damaged one", live)
+		}
+	}
+	if _, data, err := eng2.ReadRecord(DefaultAgentID, 3); err != nil || string(data) != "three" {
+		t.Fatalf("record 3: data=%q err=%v", data, err)
+	}
+	// The damaged frame's declared length is a lie of unknown direction, so the
+	// scan may not move the append point by it: neither truncating the log nor
+	// extending it with a sparse hole is a legal answer here.
+	if got := fileSize(t, p); got != before {
+		t.Fatalf("file resized by recovery of a rotted length: want %d, got %d", before, got)
+	}
+}
+
+// A create that cannot take the exclusive lock has to stay away from the file:
+// truncating before the lock is taken empties a database another instance is
+// reading, and its holder then faults on a mapped page that no longer exists.
+func TestCreateRefusesAFileAnotherInstanceHolds(t *testing.T) {
+	p := tempPath(t, "create-lock")
+	eng, err := Create(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.WriteRecord(DefaultAgentID, RecL0Profile, 1, []byte("held")); err != nil {
+		t.Fatal(err)
+	}
+	held := fileSize(t, p)
+
+	if _, err := Create(p); err == nil {
+		t.Fatal("create on a locked file must be refused")
+	} else if !strings.Contains(err.Error(), "already open") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := fileSize(t, p); got != held {
+		t.Fatalf("a refused create changed the file: want %d bytes, got %d", held, got)
+	}
+	if _, data, err := eng.ReadRecord(DefaultAgentID, 1); err != nil || string(data) != "held" {
+		t.Fatalf("the holder lost its record: data=%q err=%v", data, err)
+	}
+	if err := eng.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // appendBytes appends raw bytes to the file, simulating crash residue.
 func appendBytes(t *testing.T, path string, b []byte) {
 	t.Helper()

@@ -99,6 +99,10 @@ func TestCloseNoCheckpointPreservesDiskState(t *testing.T) {
 	}
 }
 
+// Snapshot iteration has to stay callable: a scan that yielded with the read lock
+// held would deadlock the moment the body called another engine method, because a
+// waiting writer blocks further RLocks. The id list is copied under the lock and the
+// iteration runs lock-free, which is what every CollectAll* read path relies on.
 func TestIndexCallbackMayReadRecord(t *testing.T) {
 	p := tempPath(t, "iterlock")
 	eng, err := Create(p)
@@ -108,13 +112,11 @@ func TestIndexCallbackMayReadRecord(t *testing.T) {
 	for i := range uint64(10) {
 		eng.WriteRecord(DefaultAgentID, RecL0Profile, i, fmt.Appendf(nil, "v%d", i))
 	}
-	// Queue a writer during iteration. Under the old callback-based
-	// implementation (fn invoked with RLock held) the waiting writer would
-	// make fn's recursive RLock deadlock; the iterator copies the index
-	// under RLock and yields lock-free, so engine methods stay callable.
+	// Queue a writer while the iteration is in progress, then keep calling engine
+	// methods from inside it.
 	writerDone := make(chan struct{})
 	first := true
-	for idHash := range eng.allEntries(DefaultAgentID) {
+	for idHash := range eng.IndexByType(DefaultAgentID, RecL0Profile) {
 		if first {
 			first = false
 			go func() {
@@ -131,9 +133,9 @@ func TestIndexCallbackMayReadRecord(t *testing.T) {
 	if !eng.Contains(DefaultAgentID, 999) {
 		t.Fatal("queued writer record missing")
 	}
-	// yield returning false stops iteration.
+	// Breaking out of the range stops iteration.
 	count := 0
-	for range eng.allEntries(DefaultAgentID) {
+	for range eng.IndexByType(DefaultAgentID, RecL0Profile) {
 		count++
 		if count >= 3 {
 			break

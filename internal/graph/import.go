@@ -19,20 +19,41 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
-// ImportBatch carries one import: its conflict mode and result plus the three
-// indexes built once up front — domain → graph id, graph → node titles,
-// graph → edge keys — so applying an item never re-reads the pool. Callers hold
-// the domain lock.
+// ImportBatch carries one import: its policy for a node the graph already holds,
+// its result plus the three indexes built once up front — domain → graph id,
+// graph → node titles, graph → edge keys — so applying an item never re-reads the
+// pool. Callers hold the domain lock.
 type ImportBatch struct {
 	engine     *core.StorageEngine
 	agentID    uint64
-	mode       core.L3ImportMode
+	merge      mergeFn
 	result     *core.L3ImportResult
 	graphIDs   map[string]uint64
 	touched    map[uint64]struct{}
 	changed    map[uint64]struct{}
 	nodeTitles map[uint64]map[string]struct{}
 	edgeKeys   map[uint64]map[string]struct{}
+}
+
+// mergeFn is one field-merge policy applied to a node the graph already holds.
+type mergeFn func(*core.HypergraphNode, string, string, []string, string, int64)
+
+// mergePolicy resolves the host's mode into that policy once, where the batch is
+// built. A nil policy is Skip mode: a node the graph holds is left exactly as
+// stored. An undefined mode is refused here rather than answered per item, so no
+// import path carries a fourth case that cannot happen.
+func mergePolicy(mode core.L3ImportMode) (mergeFn, error) {
+	if !mode.Valid() {
+		return nil, common.NewError(common.ErrInvalidQuery,
+			"mode must be Skip, Merge or Overwrite")
+	}
+	switch mode {
+	case core.L3ImportMerge:
+		return knowledge.MergeFields, nil
+	case core.L3ImportOverwrite:
+		return knowledge.OverwriteFields, nil
+	}
+	return nil, nil
 }
 
 // NewImportBatch seeds a batch with the domain's existing graph names, so a
@@ -43,6 +64,10 @@ type ImportBatch struct {
 // a node id derives from its graph and title — and the graph the host named first
 // keeps whatever it already held, unreachable by label.
 func NewImportBatch(engine *core.StorageEngine, agentID uint64, mode core.L3ImportMode) (*ImportBatch, error) {
+	merge, err := mergePolicy(mode)
+	if err != nil {
+		return nil, err
+	}
 	slots, err := core.CollectAllGraphSlotsStrict(engine, agentID)
 	if err != nil {
 		return nil, err
@@ -50,7 +75,7 @@ func NewImportBatch(engine *core.StorageEngine, agentID uint64, mode core.L3Impo
 	b := &ImportBatch{
 		engine:     engine,
 		agentID:    agentID,
-		mode:       mode,
+		merge:      merge,
 		result:     &core.L3ImportResult{CreatedIDs: []string{}, UpdatedIDs: []string{}},
 		graphIDs:   make(map[string]uint64),
 		touched:    make(map[uint64]struct{}),
@@ -169,8 +194,8 @@ func (b *ImportBatch) StampChanged() error {
 	return errors.Join(errs...)
 }
 
-// ImportNode applies one item's node: graph slot create/reuse, then node
-// create/merge/overwrite per mode with its SourceRef.
+// ImportNode applies one item's node: graph slot create/reuse, then the batch's
+// policy for a node the graph already holds.
 func (b *ImportBatch) ImportNode(item *core.L3ImportItem) error {
 	graphID, err := b.graphFor(item.Domain)
 	if err != nil {
@@ -178,25 +203,17 @@ func (b *ImportBatch) ImportNode(item *core.L3ImportItem) error {
 	}
 	titles := b.titles(graphID)
 	if _, exists := titles[item.Title]; exists {
-		var merge func(*core.HypergraphNode, string, string, []string, string, int64)
-		switch b.mode {
-		case core.L3ImportSkip:
+		if b.merge == nil {
+			// Skip mode: a node the graph holds is left exactly as stored.
 			b.result.SkippedCount++
 			return nil
-		case core.L3ImportMerge:
-			merge = knowledge.MergeFields
-		case core.L3ImportOverwrite:
-			merge = knowledge.OverwriteFields
-		default:
-			return common.NewError(common.ErrInvalidQuery,
-				fmt.Sprintf("import mode %q is not supported", b.mode))
 		}
-		if err := b.mutateNode(graphID, *item, merge); err != nil {
+		id, err := b.mutateNode(graphID, *item)
+		if err != nil {
 			return err
 		}
 		b.changed[graphID] = struct{}{}
-		b.result.UpdatedIDs = append(b.result.UpdatedIDs,
-			common.FormatHash(repo.NodeIDL3(graphID, item.Title)))
+		b.result.UpdatedIDs = append(b.result.UpdatedIDs, common.FormatHash(id))
 		return nil
 	}
 	id, err := repo.CreateNodeL3(b.engine, b.agentID, graphID, item.Title, item.NodeType, item.Content, item.Keywords, item.SourceRef)
@@ -318,13 +335,12 @@ func (b *ImportBatch) edges(graphID uint64) map[string]struct{} {
 	return set
 }
 
-// mutateNode applies one knowledge field-merge policy to the stored node of an
-// import item.
-func (b *ImportBatch) mutateNode(graphID uint64, item core.L3ImportItem,
-	merge func(*core.HypergraphNode, string, string, []string, string, int64)) error {
+// mutateNode applies the batch's field-merge policy to the stored node of one item
+// and reports that node's id — the write already derived it, so naming the node back
+// to the caller is not a second hash of the same pair.
+func (b *ImportBatch) mutateNode(graphID uint64, item core.L3ImportItem) (uint64, error) {
 	now := time.Now().UnixMilli()
-	_, err := repo.MutateNodeL3(b.engine, b.agentID, graphID, item.Title, func(n *core.HypergraphNode) {
-		merge(n, item.NodeType, item.Content, item.Keywords, item.SourceRef, now)
+	return repo.MutateNodeL3(b.engine, b.agentID, graphID, item.Title, func(n *core.HypergraphNode) {
+		b.merge(n, item.NodeType, item.Content, item.Keywords, item.SourceRef, now)
 	})
-	return err
 }

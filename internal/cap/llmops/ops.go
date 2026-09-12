@@ -33,6 +33,11 @@ type Chat interface {
 // ConsolidationMaxTokens is the L2 consolidation output ceiling and the widest
 // budget keyword extraction ever asks for. A truncation retry goes past it only as
 // far as the endpoint's own configured ceiling allows.
+//
+// ponytail: the library's default output ceiling equals this constant, so a host
+// that leaves `LlmConfig.MaxOutputTokens` unset has no wider rung to escalate to —
+// a consolidated summary that does not fit here ends that scene's compression as
+// `ErrLLM` rather than retrying. Raising that one field is the upgrade path.
 const ConsolidationMaxTokens = 8192
 
 // escalationCeiling is the widest output budget a retry may ask for: what the

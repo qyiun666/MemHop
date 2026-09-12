@@ -106,7 +106,7 @@ func (p *Provider) Chat(ctx context.Context, system, user string, maxTokens int)
 			status, msg := httpError(err)
 			if status > 0 {
 				lastErr = common.NewError(common.ErrLLM, fmt.Sprintf("llm api: %d - %s", status, msg))
-				if !retryable(status) || attempt == len(delays) {
+				if !retryable(status) {
 					return "", lastErr
 				}
 				continue
@@ -123,6 +123,10 @@ func (p *Provider) Chat(ctx context.Context, system, user string, maxTokens int)
 		}
 		return resp.Choices[0].Message.Content, nil
 	}
+	// The last attempt's failure is what the caller gets: the loop only ends here
+	// when that attempt failed on a status it was willing to retry, so lastErr holds
+	// it. Every way out of this function carries a code — a bare error would read as
+	// code 0, which is the success code.
 	return "", lastErr
 }
 
