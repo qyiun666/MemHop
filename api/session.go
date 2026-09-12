@@ -30,7 +30,11 @@ type Session struct {
 
 // Search reads one scene — the host's session: its record plus its depth-1
 // topics in turn order, and the topic id this read opened for the turn the
-// host is about to run. An empty SearchQuery.SceneID allocates a fresh scene.
+// host is about to run. An empty SearchQuery.SceneID allocates a fresh scene, which
+// SearchQuery.L3ID may anchor to an L3 project domain; naming a scene that already
+// exists together with an L3ID is refused (ErrInvalidQuery) instead of leaving that
+// anchor where the host cannot see it did nothing; UpdateScene moves the anchor of a
+// scene that exists.
 func (s *Session) Search(q SearchQuery) (*SearchResult, error) {
 	res, err := s.Session.Search(q)
 	if err != nil {

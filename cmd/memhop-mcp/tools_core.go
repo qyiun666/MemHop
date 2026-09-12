@@ -49,7 +49,7 @@ func registerCoreTools(s *mcp.Server, m *memhop.DB, db *memhop.Session) {
 func registerSearchTool(s *mcp.Server, db *memhop.Session) {
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_search",
-		Description: "读取一个场景（= 宿主会话）的记忆并开启本轮：返回 L0 画像、该场景 depth-1 话题集（每个话题带提炼关键词、两个时间界和宿主给它起的名字，即宿主本轮的上下文；话题记录上不挂原文 id，说了什么按话题 id 用 memhop_archive_search 取回），以及 new_topic_id —— 本次读取为即将进行的这一轮铸出的话题 ID，memhop_update、事件追加与计划写入都按它落笔。scene_id 为空时新建场景并返回其 id（16 位 hex，名字由库生成）；非空时必须已存在。l3_id 只在新建时生效。",
+		Description: "读取一个场景（= 宿主会话）的记忆并开启本轮：返回 L0 画像、该场景 depth-1 话题集（每个话题带提炼关键词、两个时间界和宿主给它起的名字，即宿主本轮的上下文；话题记录上不挂原文 id，说了什么按话题 id 用 memhop_archive_search 取回），以及 new_topic_id —— 本次读取为即将进行的这一轮铸出的话题 ID，memhop_update、事件追加与计划写入都按它落笔。scene_id 为空时新建场景并返回其 id（16 位 hex，名字由库生成）；非空时必须已存在。l3_id 只在新建场景时生效：scene_id 非空又填了 l3_id 直接拒（ErrInvalidQuery），不是悄悄忽略——已存在场景的锚不在本工具改，MCP 工具面也没有改锚的口。",
 		InputSchema: objSchema(map[string]any{
 			"scene_id": strProp("场景 ID（16 位 hex），可选；留空 = 新建场景"),
 			"l3_id":    strProp("新建场景挂靠的 L3 项目域 ID（16 位 hex，可选）"),

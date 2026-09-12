@@ -217,8 +217,8 @@ func TestSceneAnchorAgreesWithTheGraphSurface(t *testing.T) {
 		t.Fatalf("new scene should carry the anchor, got %q", sr.Scene.L3ID)
 	}
 	// the same anchor on an existing scene is a request conflict, not a no-op
-	if _, err := sess.Search(SearchQuery{SceneID: sr.Scene.SceneID, L3ID: gid}); err == nil {
-		t.Fatal("Search must refuse an L3ID for an existing scene instead of ignoring it")
+	if _, err := sess.Search(SearchQuery{SceneID: sr.Scene.SceneID, L3ID: gid}); CodeOf(err) != ErrInvalidQuery {
+		t.Fatalf("Search must refuse an L3ID for an existing scene instead of ignoring it, got %v", err)
 	}
 	// an anchor naming a graph that does not exist is refused on creation too
 	if _, err := sess.Search(SearchQuery{L3ID: "ffffffffffffffff"}); err == nil {

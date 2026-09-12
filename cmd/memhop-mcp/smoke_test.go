@@ -108,7 +108,8 @@ func TestSSEMultiTenantIsolation(t *testing.T) {
 		t.Errorf("bob sees alice's profile: %+v", p)
 	}
 
-	// memhop_scene_list returns scene slots with topic counts on a fresh db.
+	// memhop_scene_list answers an empty list on a fresh db (a scene slot carries
+	// no topic count).
 	scenes, err := callClient(t, alice, "memhop_scene_list", map[string]any{})
 	if err != nil {
 		t.Fatalf("memhop_scene_list: %v", err)

@@ -79,7 +79,7 @@ import "github.com/qyiun666/MemHop/api"
 
 ### `MemHopDefaults` 常用覆盖项
 
-`MemHopDefaults` 只暴露三个业务开关。其余调优常量（巩固 prompt 上限、衰减速率、L1 建边阈值）已内部化为 `internal/tuning.go` 包级常量，不再可配置——宿主不应需要调整；如有调整诉求请提 issue。
+`MemHopDefaults` 只暴露三个业务开关。其余调优常量住在读它的那一段旁边，不再可配置：L1 的衰减速率与共现相似度下限随 Dream 的阶段放在 `internal/dream`，各次调用的输出预算放在 `internal/cap/llmops`，蒸馏的样本预算放在 `internal/cap/profile`。宿主不应需要调整；如有调整诉求请提 issue。
 
 | 字段 | 默认 | 含义 |
 |---|---|---|
@@ -145,7 +145,8 @@ worker, err := lib.SubAgent(workerLLM, api.ProfileInput{Name: "worker"}) // 按�
 ```go
 res, err := db.Search(api.SearchQuery{
     SceneID:   sceneIDHex,  // 空 = 请库新建场景（宿主会话首次进入）；非空必须已存在
-    L3ID:      graphIDHex,  // 可选：仅在新建场景时挂到某个 L3 项目域
+    L3ID:      graphIDHex,  // 只给新建的场景挂 L3 项目域；scene_id 非空又填它即拒
+                          // （ErrInvalidQuery），不是忽略
 })
 ```
 
@@ -318,7 +319,7 @@ arcs, err := db.SearchL4(api.L4Query{
     // TopicID: &topicHex,  // 只查该主题的存档
     // NodeSeq: 2,              // 只取归因到该步骤或其任一子步的记录（须与 TopicID 同填）
     // Type: &api.ContentImage, // 只查该内容类型
-    // Limit: 50,           // 只保留最新 N 条命中（<=0 为全部）
+    // Limit: 50,           // 保留该次定序末尾的 N 条（<=0 为全部）
 })
 ```
 
@@ -366,7 +367,7 @@ err := db.AppendArchive(turnIDHex, api.ArchiveSlot{
 
 状态只有三个值，各一种字符串写法：`api.PlanStatusInProgress`（`in_progress`）、`api.PlanStatusDone`（`done`）、`api.PlanStatusFailed`（`failed`）。引擎不保留「已计划、未开始」这一态——一步存在是因为宿主建了它，而它一存在就在进行中。
 
-计划的写读面只在 Go 侧：任务面那 20 个方法包含它们，MCP 工具面则一个计划工具都没有——建树要由持有本轮的调用来做。
+计划的写读面只在 Go 侧：任务面那 19 个方法包含它们，MCP 工具面则一个计划工具都没有——建树要由持有本轮的调用来做。
 
 `0000000000000000` 是保留值（记录未赋键时的值），L5 的读写入口一律拒绝它。
 

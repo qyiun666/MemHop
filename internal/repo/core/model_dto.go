@@ -8,9 +8,10 @@
 package core
 
 // SearchQuery is one scene-scoped read. An empty SceneID asks for a fresh scene;
-// a non-empty one must already exist. L3ID optionally anchors a newly created
-// scene to a project domain and is read on creation only — an existing scene
-// keeps the anchor it has.
+// a non-empty one must already exist. L3ID anchors a scene to a project domain and
+// is a creation-time field: naming an existing scene together with one is refused
+// rather than ignored, because a dropped anchor makes an anchoring attempt look
+// like it worked. UpdateScene moves the anchor of a scene that exists.
 type SearchQuery struct {
 	SceneID string `json:"scene_id,omitempty"`
 	L3ID    string `json:"l3_id,omitempty"`
@@ -141,7 +142,7 @@ type L4Query struct {
 	Type    *ContentType `json:"type,omitempty"`     // only archives of this content type
 	Kind    *ArchiveKind `json:"kind,omitempty"`     // utterance or event; unset selects both
 	NodeSeq uint32       `json:"node_seq,omitempty"` // this step and every step under it; needs TopicID
-	Limit   int          `json:"limit,omitempty"`    // keep the newest N matches; <=0 means every match
+	Limit   int          `json:"limit,omitempty"`    // keep the tail of the read's order; <=0 means every match
 }
 
 // ScenePatch is the partial-update payload of UpdateScene; nil fields are left

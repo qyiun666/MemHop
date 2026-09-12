@@ -243,11 +243,11 @@ func registerKnowledgeWriteTools(s *mcp.Server, db *memhop.Session) {
 func registerKnowledgeQueryTools(s *mcp.Server, db *memhop.Session) {
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_knowledge_nodes",
-		Description: "按条件查询 L3 节点：ID 列表、关键词（模糊匹配标题）、节点类型；limit<=0 表示不限制。",
+		Description: "按条件查询 L3 节点：ID 列表、关键词、节点类型，填了的条件全部按 AND 组合；关键词对标题、正文与关键词轨做子串匹配（忽略大小写），limit<=0 表示不限制，结果按节点 id 升序，limit 取该序前 N 条。",
 		InputSchema: objSchema(map[string]any{
 			"graph_id":  strProp("知识图 ID（16 位 hex），必填"),
 			"ids":       arrProp("节点 ID 列表（16 位 hex，可选）", "string"),
-			"keyword":   strProp("关键词（模糊匹配标题，可选）"),
+			"keyword":   strProp("关键词（子串匹配标题/正文/关键词轨，忽略大小写，可选）"),
 			"node_type": strProp("节点类型过滤（可选）"),
 			"limit":     intProp("返回上限（<=0 不限制）"),
 		}, "graph_id"),

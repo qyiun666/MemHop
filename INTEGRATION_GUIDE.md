@@ -87,10 +87,12 @@ endpoint is checked before the path is touched).
 
 ### `MemHopDefaults` — common overrides
 
-`MemHopDefaults` exposes exactly three business knobs. Everything else
-(consolidation prompt limits, decay lambdas, L1 edge thresholds) is
-package-private in `internal/tuning.go` and no longer configurable — hosts
-should not need to tune them; if you think you do, open an issue.
+`MemHopDefaults` exposes exactly three business knobs. Everything else lives with
+the stage that reads it and is not configurable: the L1 decay lambdas and edge
+similarity floor sit beside the Dream stages, the prompt output budgets beside the
+LLM calls in `internal/cap/llmops`, the distillation sample limits in
+`internal/cap/profile`. Hosts should not need to tune them; if you think you do,
+open an issue.
 
 | Field | Default | Meaning |
 |---|---|---|
@@ -164,7 +166,9 @@ The host drives per turn: **turn start `Search` (read this session's memory and 
 ```go
 res, err := db.Search(api.SearchQuery{
     SceneID: sceneIDHex,  // empty = ask the library for a fresh scene (first turn of a session)
-    L3ID:    graphIDHex,  // optional: anchors a *newly created* scene to an L3 project domain
+    L3ID:    graphIDHex,  // anchors a *newly created* scene to an L3 project domain;
+                          // naming an existing scene together with it is refused
+                          // (ErrInvalidQuery), not ignored
 })
 ```
 
@@ -387,7 +391,7 @@ arcs, err := db.SearchL4(api.L4Query{
     // NodeSeq: 2,               // only records attributed to this step or any step under it
     //                             // (needs TopicID: a step is addressed inside a turn)
     // Type: &api.ContentImage,  // only this content type
-    // Limit: 50,                // keep the newest N matches (<=0: every match)
+    // Limit: 50,                // keep the tail of the read's order (<=0: every match)
 })
 ```
 

@@ -222,19 +222,24 @@ MemHop 的测试套件只驱动公开 `api` 表面——即宿主（如 MeowAgen
 ## 项目结构
 
 ```
-api/                         ← 公开门面：openmulti（入口 + 租户管理）/ session（唯一业务句柄，hex ID 面）
-                               / types / mapping / ids / errors / exports
-internal/                    ← 业务装配层：config / db / session / defaults / tuning /
-                               l0 / l2 / l3 / l3query / l4 / l6 / agents / agentctx /
-                               search / update / dream / plancache / llm_client / llm_ops / models / exports
+api/                         ← 对外门面：open（唯一入口）/ session（唯一的业务句柄，hex id 面）/
+                               types / mapping / errors / exports
+cmd/memhop-mcp/              ← MCP server 二进制：24 个工具，只建在 api 包上
+internal/ 根                 ← 大方法 + 组合根：config / db / session / models / exports +
+                               agents / l0…l5 / l3query / search / update / dream
+internal/scene|turn|dream|graph|content|plan
+                             ← 第 3 层小方法包，一个认知面一个包：都不自己拿域锁，也互不 import
+internal/domain              ← 域状态容器：Context（域锁、三份缓存、OpCtx）、计划缓存、
+                               L2Meta 镜像维护
+internal/config              ← 宿主侧配置类型（MemHopConfig / MemHopDefaults / LlmConfig）
+internal/llm                 ← OpenAI 兼容传输：Chat 与截断升级重试
+internal/cap/                ← 第 4 层能力包，身份中立、依赖注入：engram / llmops / profile / knowledge
 internal/repo/               ← 数据层：l0layer–l5layer + agentlayer（记录读写）
-internal/repo/index/         ← 索引层：l2meta（场景读回的唯一支撑）/ rebuild（单遍重建）/
-                               l4（一个话题拥有哪些内容）
+internal/repo/index/         ← 索引层：l2meta / rebuild（单遍扫描）/ l4（一个话题名下的内容）
 internal/repo/core/          ← .meh 引擎：engine / frame / header / snapshot / reclaim /
                                record / model / mmap / filelock
-internal/common/             ← 最底层工具：enum / errors / hash /
-                               sliceutil / strutil / timeutil
-test/                         ← 集成测试（build tag：integration）
+internal/common/             ← 最底层工具：enum / errors / hash / sliceutil / timeutil
+test/                         ← 集成测试（integration build tag）：离线宿主面那一半与真实 LLM 那一半
 benches/fixtures/             ← 基准数据集（locomo10、locomo_smoke、longmemeval_smoke）
 ```
 

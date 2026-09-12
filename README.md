@@ -1,7 +1,7 @@
 <p align="center">
   <h1 align="center">MemHop</h1>
   <p align="center">
-    <strong>Long-term memory for AI agents — a seven-layer cognitive memory database in a single embedded file. Pure Go, zero infrastructure.</strong>
+    <strong>Long-term memory for AI agents — a six-layer cognitive memory database in a single embedded file. Pure Go, zero infrastructure.</strong>
   </p>
   <p align="center">
     <a href="README.zh.md">中文</a>
@@ -228,19 +228,28 @@ Public memory benchmarks (LoCoMo, LongMemEval) evaluate "retrieval → LLM-judge
 ## Project Structure
 
 ```
-api/                         ← Public facade: openmulti (entry + tenant management) / session (the only
-                               business handle, hex-id surface) / types / mapping / ids / errors / exports
-internal/                    ← Business assembly: config / db / session / defaults / tuning /
-                               l0 / l2 / l3 / l3query / l4 / l6 / agents / agentctx /
-                               search / update / dream / plancache / llm_client / llm_ops / models / exports
+api/                         ← Public facade: open (the one entry) / session (the only
+                               business handle, hex-id surface) / types / mapping / errors / exports
+cmd/memhop-mcp/              ← MCP server binary: 24 tools, built on the api package alone
+internal/ (root)             ← Big methods + composition root: config / db / session / models /
+                               exports + agents / l0…l5 / l3query / search / update / dream
+internal/scene|turn|dream|graph|content|plan
+                             ← Layer-3 small methods, one package per cognitive face: none of them
+                               takes the domain lock and none imports a sibling
+internal/domain              ← Per-agent state: Context (domain lock, the three caches, OpCtx),
+                               plan cache, L2Meta mirror maintenance
+internal/config              ← Host-facing config types (MemHopConfig / MemHopDefaults / LlmConfig)
+internal/llm                 ← OpenAI-compatible transport: Chat + the truncation-escalating retry
+internal/cap/                ← Layer-4 capabilities, identity-neutral, dependencies injected:
+                               engram / llmops / profile / knowledge
 internal/repo/               ← Data layer: l0layer–l5layer + agentlayer (record read/write)
 internal/repo/index/         ← Index layer: l2meta / rebuild (single-pass scan) /
                                l4 (the content each topic owns)
 internal/repo/core/          ← .meh engine: engine / frame / header / snapshot / reclaim /
                                record / model / mmap / filelock
-internal/common/             ← Bottom-layer utilities: enum / errors / hash /
-                               sliceutil / strutil / timeutil
-test/                         ← Integration tests (build tag: integration)
+internal/common/             ← Bottom-layer utilities: enum / errors / hash / sliceutil / timeutil
+test/                         ← Integration tests (build tag: integration): the offline host-face
+                               suite and the real-LLM half
 benches/fixtures/             ← Benchmark datasets (locomo10, locomo_smoke, longmemeval_smoke)
 ```
 
