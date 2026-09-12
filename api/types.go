@@ -69,9 +69,11 @@ type (
 	// is a condition like any other and leaving it unset asks for both. Every field
 	// is optional and the set ones AND. Order is what the query spans: Seq within
 	// one topic, creation time across topics, and Limit keeps the tail of whichever
-	// order applies. NodeSeq keeps one plan step and its whole subtree, and is
-	// refused without TopicID because a step is addressed inside a turn. A Kind or
-	// Type outside the defined vocabulary is refused rather than answered with an
+	// order applies. Start and End filter that creation time in milliseconds since
+	// the epoch, the unit a stored record's CreatedAt carries. NodeSeq keeps one plan
+	// step and its whole subtree, and is refused without TopicID because a step is
+	// addressed inside a turn. A Kind or Type outside the defined vocabulary is
+	// refused rather than answered with an
 	// empty set — a filter that can match nothing is indistinguishable from a turn
 	// that holds nothing.
 	L4Query = internal.L4Query
@@ -309,9 +311,14 @@ type L3Subgraph struct {
 // AppendArchive takes, where IDHash and TopicID are ignored and a Seq of 0 asks
 // the library for a slot. TopicID is the topic that owns a stored record and Seq
 // the slot it owns there, so (TopicID, Seq) is the address a replay rewrites.
-// Role is one of RoleUser / RoleAgent / RoleSystem and qualifies utterances only:
-// an event leaves it 0. ContentType says whether Content is prose or a reference to
-// media; EventType names an event and is the host's own word for it.
+// Role is what a host declares when it appends — RoleUser / RoleAgent / RoleSystem,
+// and an event leaves it 0. A read can hand back one more value: 3, the library's own
+// mark on a fused group's summary, which has no exported name on purpose. ContentType
+// says whether Content is prose or a reference to media; EventType names an event and
+// is the host's own word for it. CreatedAt is milliseconds since the epoch — the unit
+// the retention window and every time filter measure — so a stamp in the seconds or
+// microsecond band is refused rather than stored: the first would be swept as already
+// expired, the second would never expire.
 type ArchiveSlot struct {
 	IDHash      string      `json:"id_hash"`
 	Kind        ArchiveKind `json:"kind"`

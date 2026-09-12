@@ -76,7 +76,7 @@ func NewImportBatch(engine *core.StorageEngine, agentID uint64, mode core.L3Impo
 		engine:     engine,
 		agentID:    agentID,
 		merge:      merge,
-		result:     &core.L3ImportResult{CreatedIDs: []string{}, UpdatedIDs: []string{}},
+		result:     &core.L3ImportResult{CreatedIDs: []string{}, UpdatedIDs: []string{}, Errors: []string{}},
 		graphIDs:   make(map[string]uint64),
 		touched:    make(map[uint64]struct{}),
 		changed:    make(map[uint64]struct{}),

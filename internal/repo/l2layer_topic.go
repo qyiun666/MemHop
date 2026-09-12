@@ -26,7 +26,7 @@ type TopicListQuery struct {
 }
 
 // ListTopicsL2 lists one scene's topics up to depth. depth is clamped to
-// [1, MaxDepth]; results sorted by UserTimestamp.
+// [1, MaxDepth]; results are sorted by UserTimestamp, then depth, then id.
 func ListTopicsL2(q TopicListQuery) []core.TopicSlot {
 	depth := q.Depth
 	if depth == 0 {

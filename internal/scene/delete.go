@@ -4,6 +4,8 @@
 package scene
 
 import (
+	"errors"
+
 	"github.com/qyiun666/MemHop/internal/domain"
 	"github.com/qyiun666/MemHop/internal/repo"
 	"github.com/qyiun666/MemHop/internal/repo/core"
@@ -47,20 +49,24 @@ func DeleteCascade(ac *domain.Context, agentID uint64, scenes, topics []uint64) 
 // the domain because anchors live only on scenes — a graph slot keeps no reverse
 // list. The scan is the one that decides which scenes get rewritten, so a scene
 // that will not read back stops the pass rather than keeping an anchor nobody will
-// ever clear again. Callers hold the domain lock.
+// ever clear again. A scene whose rewrite fails does not stop it: the caller has
+// already deleted the graph and has no retry that reaches this pass, so stopping
+// would strand every later scene on an anchor to a graph that is gone. Each failure
+// is collected and reported together instead. Callers hold the domain lock.
 func DetachGraph(engine *core.StorageEngine, agentID uint64, graphID uint64) error {
 	scenes, err := repo.CollectAllScenesL2(engine, agentID)
 	if err != nil {
 		return err
 	}
+	var errs []error
 	for _, slot := range scenes {
 		if slot.L3ID != graphID {
 			continue
 		}
 		slot.L3ID = 0
 		if err := core.WriteSceneSlot(engine, agentID, slot.SceneID, &slot); err != nil {
-			return err
+			errs = append(errs, err)
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }

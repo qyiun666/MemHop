@@ -243,27 +243,47 @@ func TestInterfaceSceneContextReadsThroughFusion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SceneContext after Dream: %v", err)
 	}
-	if len(ctx2.Topics) <= len(fused.Topics) {
-		t.Fatalf("SceneContext returned %d entries, want more than the %d depth-1 topics it flattens", len(ctx2.Topics), len(fused.Topics))
+	if len(ctx2.Topics) != 3 {
+		t.Fatalf("SceneContext returned %d entries, want the fused parent over the %d turns it swallowed",
+			len(ctx2.Topics), len(fused.Topics))
 	}
-	// The fused parent is Dream's summary; the originals survive on its
-	// children, which is the whole reason this read exists.
+	// The parent comes first: it shares its earliest child's timestamp, so the
+	// listing's depth key is what puts a group's summary above the originals it
+	// introduces instead of in the middle of them.
 	parent := ctx2.Topics[0]
-	if parent.Depth != 1 || parent.ChildCount == 0 {
-		t.Fatalf("first entry after fusion = %+v, want the fused parent", parent)
+	if parent.Depth != 1 || parent.ChildCount != 2 {
+		t.Fatalf("first entry after fusion = %+v, want the fused parent owning both turns", parent)
 	}
 	if parent.TopicID != fused.Topics[0].ID {
 		t.Fatalf("the root the ordinary read shows (%s) is not the parent this read expands (%s)",
 			fused.Topics[0].ID, parent.TopicID)
 	}
-	sunk := 0
-	for _, e := range ctx2.Topics[1:] {
-		if e.Depth == 2 && len(e.Messages) == 2 {
-			sunk++
-		}
+	// The summary is the parent's own single line, under the role Dream owns — 3,
+	// which the public surface deliberately leaves unnamed.
+	if len(parent.Messages) != 1 || parent.Messages[0].Content != "合并摘要保留全部细节" || parent.Messages[0].Role != 3 {
+		t.Fatalf("the fused parent carries %+v, want the group's summary alone under role 3", parent.Messages)
 	}
-	if sunk != parent.ChildCount {
-		t.Fatalf("%d sunk children with originals, parent reports %d", sunk, parent.ChildCount)
+	// The sunk turns keep their own originals, which is the whole reason this read
+	// exists. Claimed by id rather than by position: two turns settled inside one
+	// millisecond tie on the timestamp and fall back to the id.
+	byID := make(map[string]memhop.SceneContextTopic, len(ctx2.Topics))
+	for _, e := range ctx2.Topics {
+		byID[e.TopicID] = e
+	}
+	for _, want := range []struct{ id, user, agent string }{
+		{first, "用户要求先拆分 Update 的蒸馏调用", "已拆出 extractOne,两条路径共用同一阶梯"},
+		{second, "用户要求把读不动的记录上报而不是跳过", "已改成只有 ErrNotFound 才跳过"},
+	} {
+		got, ok := byID[want.id]
+		if !ok {
+			t.Fatalf("the sunk turn %s is missing from %+v", want.id, ctx2.Topics)
+		}
+		if got.Depth != 2 || got.ChildCount != 0 {
+			t.Fatalf("sunk turn %s = depth %d children %d, want depth 2 with none under it", got.TopicID, got.Depth, got.ChildCount)
+		}
+		if len(got.Messages) != 2 || got.Messages[0].Content != want.user || got.Messages[1].Content != want.agent {
+			t.Fatalf("sunk turn %s carries %+v, want its own two originals", got.TopicID, got.Messages)
+		}
 	}
 }
 
@@ -276,8 +296,8 @@ func TestInterfaceMergeScenes(t *testing.T) {
 	if primary == secondary {
 		t.Fatal("two fresh sessions must not share an id")
 	}
-	settleTurn(t, db, primary, "主会话的第一轮", "第一轮回复")
-	settleTurn(t, db, secondary, "被重启的同一件事", "重启后的回复")
+	primaryTurn := settleTurn(t, db, primary, "主会话的第一轮", "第一轮回复")
+	secondaryTurn := settleTurn(t, db, secondary, "被重启的同一件事", "重启后的回复")
 
 	if err := db.MergeScenes(primary, []string{secondary}); err != nil {
 		t.Fatalf("MergeScenes: %v", err)
@@ -291,28 +311,42 @@ func TestInterfaceMergeScenes(t *testing.T) {
 			t.Fatalf("merged scene still listed: %+v", s)
 		}
 	}
-	// Its turn is now part of the primary's surface, in turn order.
+	// Its turn is now part of the primary's surface — the same two topic ids, not
+	// two re-minted ones: a merge moves a turn's scene, it does not rewrite the turn.
 	res, err := db.Search(memhop.SearchQuery{SceneID: primary})
 	if err != nil {
 		t.Fatalf("Search(primary): %v", err)
 	}
-	if len(res.Topics) != 2 {
-		t.Fatalf("primary surface = %+v, want both turns", res.Topics)
+	onSurface := make(map[string]bool, len(res.Topics))
+	for _, topic := range res.Topics {
+		onSurface[topic.ID] = true
 	}
-	// The originals came along, so nothing was lost by the fold.
+	if len(res.Topics) != 2 || !onSurface[primaryTurn] || !onSurface[secondaryTurn] {
+		t.Fatalf("primary surface = %+v, want exactly the turns %s and %s", res.Topics, primaryTurn, secondaryTurn)
+	}
+	// The originals came along, so nothing was lost by the fold: each turn still
+	// reads back its own two lines, and nothing else came with them.
 	merged, err := db.SceneContext(primary)
 	if err != nil {
 		t.Fatalf("SceneContext(primary): %v", err)
 	}
-	texts := ""
-	for _, e := range merged.Topics {
-		for _, msg := range e.Messages {
-			texts += msg.Content
-		}
+	if len(merged.Topics) != 2 {
+		t.Fatalf("merged transcript = %+v, want the two turns", merged.Topics)
 	}
-	for _, want := range []string{"主会话的第一轮", "被重启的同一件事"} {
-		if !strings.Contains(texts, want) {
-			t.Fatalf("merged transcript is missing %q: %s", want, texts)
+	byID := make(map[string]memhop.SceneContextTopic, len(merged.Topics))
+	for _, e := range merged.Topics {
+		byID[e.TopicID] = e
+	}
+	for _, want := range []struct{ id, user, agent string }{
+		{primaryTurn, "主会话的第一轮", "第一轮回复"},
+		{secondaryTurn, "被重启的同一件事", "重启后的回复"},
+	} {
+		got, ok := byID[want.id]
+		if !ok {
+			t.Fatalf("the merged transcript lost turn %s: %+v", want.id, merged.Topics)
+		}
+		if len(got.Messages) != 2 || got.Messages[0].Content != want.user || got.Messages[1].Content != want.agent {
+			t.Fatalf("merged turn %s carries %+v, want its own two originals", got.TopicID, got.Messages)
 		}
 	}
 	// A merge names scenes the host holds; an id whose scene is gone is an

@@ -1,10 +1,10 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// Session is the only business handle of the public facade: it embeds the
-// internal domain-bound session (internal.Session), so the promoted method
-// set is exactly the externally callable surface. Every call is serialized
-// per agent domain by the internal domain lock.
+// Session is the only business handle of the public facade: it holds the internal
+// domain-bound session in an unexported field and declares every externally callable
+// method itself, so the surface is exactly what this file lists. Every call is
+// serialized per agent domain by the internal domain lock.
 //
 // The methods split by audience. The runtime/task face (19) is what the host
 // drives every turn and what LLM tools bind to: Search, Update, Dream,
@@ -25,9 +25,12 @@ import (
 	"github.com/qyiun666/MemHop/internal"
 )
 
-// Session binds every call to one agent domain.
+// Session binds every call to one agent domain. The internal session it holds is an
+// unexported field, not an embedded one: every method below is declared here, so
+// embedding would promote nothing and would only hand a host the internal shapes —
+// numeric ids among them — that this facade exists to keep inside.
 type Session struct {
-	*internal.Session
+	session *internal.Session
 }
 
 // Search reads one scene — the host's session: its record plus its depth-1
@@ -38,7 +41,7 @@ type Session struct {
 // anchor where the host cannot see it did nothing; UpdateScene moves the anchor of a
 // scene that exists.
 func (s *Session) Search(q SearchQuery) (*SearchResult, error) {
-	res, err := s.Session.Search(q)
+	res, err := s.session.Search(q)
 	if err != nil {
 		return nil, err
 	}
@@ -51,7 +54,7 @@ func (s *Session) Search(q SearchQuery) (*SearchResult, error) {
 // A turn whose content the retention window already reclaimed is refused with
 // ErrInvalidQuery instead of getting an empty track.
 func (s *Session) Update(sceneID, topicID string) error {
-	return s.Session.Update(sceneID, topicID)
+	return s.session.Update(sceneID, topicID)
 }
 
 // GetL0 returns the profile without the internal id_hash. A domain whose profile
@@ -59,7 +62,7 @@ func (s *Session) Update(sceneID, topicID string) error {
 // "nothing stored yet" is not an error. A profile that exists but cannot be read
 // is reported as one (ErrIO / ErrDeserialization), never as an absent profile.
 func (s *Session) GetL0() (*ProfileSlot, error) {
-	slot, err := s.Session.GetL0()
+	slot, err := s.session.GetL0()
 	if err != nil {
 		return nil, err
 	}
@@ -76,10 +79,10 @@ func (s *Session) GetL0() (*ProfileSlot, error) {
 // and never moves a domain between primary and sub.
 func (s *Session) UpdateL0(profile *ProfileInput) error {
 	if profile == nil {
-		return internal.NewError(internal.ErrInvalidQuery, "UpdateL0: profile is required")
+		return NewError(ErrInvalidQuery, "UpdateL0: profile is required")
 	}
 	coreSlot := toCoreProfileSlot(profile)
-	return s.Session.UpdateL0(&coreSlot)
+	return s.session.UpdateL0(&coreSlot)
 }
 
 // ListL1 returns the domain's L1 scene nodes, every id rendered as hex and the
@@ -88,7 +91,7 @@ func (s *Session) UpdateL0(profile *ProfileInput) error {
 // reads what consolidation decided and cannot set it. EdgeIDs have no read of
 // their own; two nodes sharing one are a pair Dream judged related.
 func (s *Session) ListL1() ([]SceneNodeView, error) {
-	nodes, err := s.Session.ListL1()
+	nodes, err := s.session.ListL1()
 	if err != nil {
 		return nil, err
 	}
@@ -102,7 +105,7 @@ func (s *Session) ListL1() ([]SceneNodeView, error) {
 // ListScenes returns scenes with hex IDs; a non-empty l3ID keeps only the
 // scenes anchored to that L3 project domain.
 func (s *Session) ListScenes(l3ID string) ([]SceneSlot, error) {
-	scenes, err := s.Session.ListScenes(l3ID)
+	scenes, err := s.session.ListScenes(l3ID)
 	if err != nil {
 		return nil, err
 	}
@@ -117,7 +120,7 @@ func (s *Session) ListScenes(l3ID string) ([]SceneSlot, error) {
 // returns the scene as stored afterwards, so a host confirms an anchor without
 // listing the domain. Nil patch fields keep their stored value.
 func (s *Session) UpdateScene(sceneID string, patch ScenePatch) (SceneSlot, error) {
-	slot, err := s.Session.UpdateScene(sceneID, patch)
+	slot, err := s.session.UpdateScene(sceneID, patch)
 	if err != nil {
 		return SceneSlot{}, err
 	}
@@ -132,7 +135,7 @@ func (s *Session) UpdateScene(sceneID string, patch ScenePatch) (SceneSlot, erro
 // ErrNotFound, and nothing is created for it. The new name is visible to
 // Search and SceneContext immediately, not at the next consolidation.
 func (s *Session) RenameTopic(topicID, name string) (TopicSlot, error) {
-	slot, err := s.Session.RenameTopic(topicID, name)
+	slot, err := s.session.RenameTopic(topicID, name)
 	if err != nil {
 		return TopicSlot{}, err
 	}
@@ -143,7 +146,7 @@ func (s *Session) RenameTopic(topicID, name string) (TopicSlot, error) {
 // and that order is the same on every call: the scan under the shared pool is a
 // hash map, so without the sort one host would see one graph in two orders.
 func (s *Session) GetL3(id string) (*L3Graph, error) {
-	g, err := s.Session.GetL3(id)
+	g, err := s.session.GetL3(id)
 	if err != nil {
 		return nil, err
 	}
@@ -152,7 +155,7 @@ func (s *Session) GetL3(id string) (*L3Graph, error) {
 
 // ListL3 returns all hypergraph slots with hex IDs, sorted by graph id.
 func (s *Session) ListL3() ([]HypergraphSlot, error) {
-	graphs, err := s.Session.ListL3()
+	graphs, err := s.session.ListL3()
 	if err != nil {
 		return nil, err
 	}
@@ -172,7 +175,7 @@ func (s *Session) ListL3() ([]HypergraphSlot, error) {
 // spelling of "stamp it, change nothing" and an empty one is refused rather than
 // erasing the label that addresses the graph.
 func (s *Session) UpdateL3(id string, name *string) (*L3Graph, error) {
-	g, err := s.Session.UpdateL3(id, name)
+	g, err := s.session.UpdateL3(id, name)
 	if err != nil {
 		return nil, err
 	}
@@ -182,7 +185,7 @@ func (s *Session) UpdateL3(id string, name *string) (*L3Graph, error) {
 // QueryL3Nodes returns nodes with hex IDs, sorted by node id; Limit keeps the
 // first N of that order, so a capped query is the same subset every time.
 func (s *Session) QueryL3Nodes(q L3NodeQuery) ([]HypergraphNode, error) {
-	nodes, err := s.Session.QueryL3Nodes(q)
+	nodes, err := s.session.QueryL3Nodes(q)
 	if err != nil {
 		return nil, err
 	}
@@ -197,7 +200,7 @@ func (s *Session) QueryL3Nodes(q L3NodeQuery) ([]HypergraphNode, error) {
 // by id. A node the walk reaches but cannot be read is an error rather than a
 // smaller answer: that node is one an edge named.
 func (s *Session) QueryL3Subgraph(graphID, startNodeID string, maxDepth int, edgeKinds []GraphEdgeKind) (*L3Subgraph, error) {
-	sub, err := s.Session.QueryL3Subgraph(graphID, startNodeID, maxDepth, edgeKinds)
+	sub, err := s.session.QueryL3Subgraph(graphID, startNodeID, maxDepth, edgeKinds)
 	if err != nil {
 		return nil, err
 	}
@@ -213,7 +216,7 @@ func (s *Session) QueryL3Subgraph(graphID, startNodeID string, maxDepth int, edg
 // for one turn, parsed as it is everywhere else — the reserved all-zero key is
 // refused, not answered with an empty list.
 func (s *Session) SearchL4(q L4Query) ([]ArchiveSlot, error) {
-	archives, err := s.Session.SearchL4(q)
+	archives, err := s.session.SearchL4(q)
 	if err != nil {
 		return nil, err
 	}
@@ -231,11 +234,14 @@ func (s *Session) SearchL4(q L4Query) ([]ArchiveSlot, error) {
 // under a Kind condition, and the plan tree sharing the key comes back from
 // PlanState.
 //
-// What is stored of what you hand in is Kind, Seq, EventType, NodeSeq, Content and
-// CreatedAt; IDHash and TopicID are ignored, which is what makes the round trip
-// work — read a record back, change one field, write it to the slot it came from.
-// CreatedAt is yours to supply and the library never stamps it: a turn records when
-// things were said, not when the write happened, and a non-positive one is refused.
+// What is stored of what you hand in is Kind, Seq, Role, ContentType, EventType,
+// NodeSeq, Content and CreatedAt; IDHash and TopicID are ignored, which is what makes
+// the round trip work — read a record back, change one field, write it to the slot it
+// came from. CreatedAt is yours to supply and the library never stamps it: a turn
+// records when things were said, not when the write happened. It is milliseconds since
+// the epoch, the unit the retention window and every time filter measure, so a
+// non-positive one is refused and so is a stamp in the seconds or microsecond band —
+// the first would be swept as already expired, the second would never expire.
 // An event owns no speaker and no medium, so its Role and ContentType are the
 // library's (0 and text) whatever you set the second one to; an utterance owns
 // both. A ContentType outside the constants above is refused on either kind.
@@ -272,7 +278,7 @@ func (s *Session) SearchL4(q L4Query) ([]ArchiveSlot, error) {
 // plan_step, llm_request, llm_output, tool_call, tool_result, subagent_spawn,
 // subagent_done, context_inject, ask_user, user_reply.
 func (s *Session) AppendArchive(topicID string, slot ArchiveSlot) error {
-	return s.Session.AppendArchive(topicID, toCoreAppendSlot(slot))
+	return s.session.AppendArchive(topicID, toCoreAppendSlot(slot))
 }
 
 // PlanCreate opens a turn's plan tree by creating its first step, and returns the
@@ -288,7 +294,7 @@ func (s *Session) AppendArchive(topicID string, slot ArchiveSlot) error {
 // number — so a host returning to a turn older than the retention window treats
 // an ordinal it held before as a new step's address, not as the same step.
 func (s *Session) PlanCreate(topicID string, title string) (uint32, error) {
-	return s.Session.PlanCreate(topicID, title)
+	return s.session.PlanCreate(topicID, title)
 }
 
 // PlanNodeAdd adds one step to a turn's plan tree and returns its ordinal.
@@ -307,7 +313,7 @@ func (s *Session) PlanCreate(topicID string, title string) (uint32, error) {
 // PlanNodeUpdate, which is why an empty title here is allowed: the view falls back
 // to the ordinal until the host names the step.
 func (s *Session) PlanNodeAdd(topicID string, parentSeq uint32, title string) (uint32, error) {
-	return s.Session.PlanNodeAdd(topicID, parentSeq, title)
+	return s.session.PlanNodeAdd(topicID, parentSeq, title)
 }
 
 // PlanNodeUpdate restates one step of a turn's plan tree: its status, and its own
@@ -325,13 +331,13 @@ func (s *Session) PlanNodeAdd(topicID string, parentSeq uint32, title string) (u
 // the events a step produced are L4 records, appended with AppendArchive under the
 // same topic id.
 func (s *Session) PlanNodeUpdate(topicID string, step PlanStep) error {
-	return s.Session.PlanNodeUpdate(topicID, toInternalPlanStep(step))
+	return s.session.PlanNodeUpdate(topicID, toInternalPlanStep(step))
 }
 
 // PlanState returns the plan tree of one turn — keyed by the topic id that
 // opened it — with hex-free string statuses.
 func (s *Session) PlanState(topicID string) (*PlanTree, error) {
-	t, err := s.Session.PlanState(topicID)
+	t, err := s.session.PlanState(topicID)
 	if err != nil {
 		return nil, err
 	}
@@ -361,7 +367,7 @@ func (s *Session) PlanState(topicID string) (*PlanTree, error) {
 // on a mid-pipeline failure the partially filled report comes back with the
 // error.
 func (s *Session) Dream(ctx context.Context, sceneID string) (*DreamReport, error) {
-	return s.Session.Dream(ctx, sceneID)
+	return s.session.Dream(ctx, sceneID)
 }
 
 // SceneContext reads a scene's whole transcript without opening a turn: unlike
@@ -375,7 +381,7 @@ func (s *Session) Dream(ctx context.Context, sceneID string) (*DreamReport, erro
 // ChildCount, so a fused parent (whose message is Dream's summary) can be told
 // apart from the turns it grouped.
 func (s *Session) SceneContext(sceneID string) (*SceneContext, error) {
-	return s.Session.SceneContext(sceneID)
+	return s.session.SceneContext(sceneID)
 }
 
 // MergeScenes folds scenes together: every topic of each secondary scene is
@@ -384,7 +390,7 @@ func (s *Session) SceneContext(sceneID string) (*SceneContext, error) {
 // The primary's name and anchor win, and nothing comes back — re-read the
 // primary to see the merged history.
 func (s *Session) MergeScenes(primaryID string, secondaryIDs []string) error {
-	return s.Session.MergeScenes(primaryID, secondaryIDs)
+	return s.session.MergeScenes(primaryID, secondaryIDs)
 }
 
 // DeleteScene removes a scene for good: its record, every topic at any depth,
@@ -393,7 +399,7 @@ func (s *Session) MergeScenes(primaryID string, secondaryIDs []string) error {
 // A hyperedge that pointed at that scene loses the member to the next Dream's
 // edge decay, and one left with fewer than two members is deleted with it.
 func (s *Session) DeleteScene(sceneID string) error {
-	return s.Session.DeleteScene(sceneID)
+	return s.session.DeleteScene(sceneID)
 }
 
 // DeleteTopic removes one topic and its whole subtree (children at any depth)
@@ -402,7 +408,7 @@ func (s *Session) DeleteScene(sceneID string) error {
 // goes with the topic, so a surviving topic never keeps a parent that is gone.
 // Deleting a topic that does not exist is an error, not a no-op.
 func (s *Session) DeleteTopic(topicID string) error {
-	return s.Session.DeleteTopic(topicID)
+	return s.session.DeleteTopic(topicID)
 }
 
 // ImportL3 batch-imports knowledge nodes into one graph per Domain: a domain
@@ -422,7 +428,7 @@ func (s *Session) DeleteTopic(topicID string) error {
 // scene on them (UpdateScene / SearchQuery.L3ID), since a graph id derives from the
 // domain name and no other public call renders that derivation.
 func (s *Session) ImportL3(items []L3ImportItem, mode L3ImportMode) (*L3ImportResult, error) {
-	return s.Session.ImportL3(items, mode)
+	return s.session.ImportL3(items, mode)
 }
 
 // DeleteL3 removes a whole graph: the slot plus all of its nodes and hyperedges.
@@ -433,5 +439,5 @@ func (s *Session) ImportL3(items []L3ImportItem, mode L3ImportMode) (*L3ImportRe
 // too, including the ones pointing at nodes a host would have kept. There is no
 // narrower delete — a graph whose contents are wrong is re-imported.
 func (s *Session) DeleteL3(id string) error {
-	return s.Session.DeleteL3(id)
+	return s.session.DeleteL3(id)
 }

@@ -12,6 +12,7 @@ package internal
 
 import (
 	"github.com/qyiun666/MemHop/internal/cap/profile"
+	"github.com/qyiun666/MemHop/internal/repo"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 	"github.com/qyiun666/MemHop/internal/scene"
 	"github.com/qyiun666/MemHop/internal/turn"
@@ -34,11 +35,11 @@ func (db *DB) Search(agentID uint64, q SearchQuery) (*SearchResult, error) {
 	}
 	defer ac.Mu.Unlock()
 
-	resolved, err := scene.ResolveForRead(db.engine, agentID, q)
+	sceneID, err := scene.ResolveForRead(db.engine, agentID, q)
 	if err != nil {
 		return nil, err
 	}
-	sceneSlot, err := scene.OpenTurn(db.engine, agentID, resolved.SceneID)
+	sceneSlot, err := repo.OpenSceneTurn(db.engine, agentID, sceneID)
 	if err != nil {
 		return nil, err
 	}

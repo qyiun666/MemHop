@@ -176,7 +176,7 @@ err := db.AppendArchive(topicIDHex, api.ArchiveSlot{
     Role:      api.RoleUser,      // 仅原文：RoleUser / RoleAgent / RoleSystem
     ContentType: api.ContentText, // 仅原文；非文本侧把媒体路径/URL 写在 Content 里
     Content:   userRawText,       // 必填
-    CreatedAt: userTS,            // Unix 毫秒，必填 > 0
+    CreatedAt: userTS,            // Unix 毫秒——秒级与微秒级那两段值一律拒
 })
 // 事件自己命名、不要说话者，并可挂在某个计划步骤上：
 err = db.AppendArchive(topicIDHex, api.ArchiveSlot{
@@ -199,7 +199,9 @@ err = db.AppendArchive(topicIDHex, api.ArchiveSlot{
 `DeleteTopic` 或保留窗到期。
 
 以下全部在任何写入（append 从不建计划步骤——建步骤只有 `PlanCreate` 与 `PlanNodeAdd`）
-**之前**拒绝：未定义的 `Kind`、空 `Content`、`CreatedAt <= 0`、未定义的 `ContentType`、
+**之前**拒绝：未定义的 `Kind`、空 `Content`、`CreatedAt <= 0` 或落在秒级 / 微秒级那两段
+（单位是 Unix 毫秒：秒级的记录一落盘就老于保留窗，下一次巩固会把整轮转录扫走；微秒级的
+永不过期）、未定义的 `ContentType`、
 事件没有 `EventType`、原文带了 `EventType` 或 `NodeSeq`、事件的 `NodeSeq` 指向本轮计划
 从未建出的步骤（`ErrInvalidQuery`，且什么都不落库）、以及值 3 那个角色（融合摘要的标记，
 库自己盖）；超预算同样拒写不截断——事件整条 4 KiB（名字与正文合计）、原文 64 KiB，被剪短的记录读回来和完整的
@@ -407,7 +409,7 @@ id——宿主把自己拿到的 hex 字符串原样回传，不自己拼。也�
 if api.CodeOf(err) == api.ErrNotFound { ... }
 ```
 
-错误码：`ErrConfig`、`ErrInvalidQuery`、`ErrNotFound`、`ErrAgentNotFound`（agentID 未注册或已删除）、`ErrIO`、`ErrClosed`、`ErrInvalidMagic`、`ErrCRCMismatch`、`ErrCorruption`、`ErrSerialization`、`ErrDeserialization`、`ErrCancelled`（调用方自己的上下文先结束——被取消的 `Dream`、退避中途被放弃的 LLM 调用）、`ErrLLM`。编号永不复用：`1002` 与 `9001` 已退役、不再重新发放。
+错误码：`ErrConfig`、`ErrInvalidQuery`、`ErrNotFound`、`ErrIO`、`ErrClosed`、`ErrInvalidMagic`、`ErrCRCMismatch`、`ErrCorruption`、`ErrSerialization`、`ErrDeserialization`、`ErrCancelled`（调用方自己的上下文先结束——被取消的 `Dream`、退避中途被放弃的 LLM 调用）与 `ErrLLM`。`ErrAgentNotFound` 虽然导出，公开面上却没有任何调用能产出它：域以句柄交回，宿主手里没有一个「未注册」的 agentID。`api.NewError(code, message)` 供自己拒绝一个入参的调用方（例如工具层拒一个词表外的取值）构造同一套错误，于是它的拒绝与库自己的拒绝带同一个码。编号永不复用：`1002` 与 `9001` 已退役、不再重新发放。
 
 ---
 

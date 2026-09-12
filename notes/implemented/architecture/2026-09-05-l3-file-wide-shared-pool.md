@@ -9,7 +9,7 @@ Status: implemented
 ## Decision
 
 - 保留域机制：新增 `core.SharedPoolAgentID`（frame.go，宿主不可见/不可删/`Session` 拒绑/`ListAgents` 不列/空闲回收豁免/`CreateAgent` 拒撞；0x000B 起 L5 能力记录同入该域，常量由 `SharedL3AgentID` 更名、域值不变），全部 L3 记录住该域；`internal` 根 8 个 L3 大方法改走 `lockSharedPool(callerID)`（先 `CheckSession` 校验调用方域活着，再锁公共域；原 `lockSharedL3`）。graph/repo 小方法包零改动——agentID 本就是参数。
-- 锁语义：L3 操作跨 agent 在公共域锁上全局串行（L3 链路无 LLM、操作短，代价可接受）；锚点校验（`scene.Create`/`ResolveForRead`/`UpdateScene`）持调用方锁无锁读公共域记录，由引擎级互斥兜底，`TestL3PoolConcurrentImportAndAnchor` 供 `-race` 证明。
+- 锁语义：L3 操作跨 agent 在公共域锁上全局串行（L3 链路无 LLM、操作短，代价可接受）；锚点校验（新建场景时解析宿主给的锚、以及重挂锚点两处）持调用方锁无锁读公共域记录，由引擎级互斥兜底，`TestL3PoolConcurrentImportAndAnchor` 供 `-race` 证明。
 - `DeleteL3` 两阶段：公共锁内删图 → 释放后遍历「默认域 + 注册表」逐域 `lockAgent` 清锚（`detachGraphAnchors`），不嵌套双锁（锁序环风险归零，也不会把 L3 全局串行顶在一个慢域后面）。遍历对象不用 `engine.IterAgents()`：它含未注册域会让 `lockAgent` 报错，且默认域不在注册表而场景锚点可能落在默认域。
 - 格式 0x0009 → 0x000A，旧文件 Open 时显式拒绝、无迁移（沿用 0x0008 拒绝先例）。
 - 公开面零变化（34 会话 + 8 DB 方法）。

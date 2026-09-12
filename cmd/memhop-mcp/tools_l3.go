@@ -81,7 +81,8 @@ func parseImportMode(s string) (memhop.L3ImportMode, error) {
 	case "Overwrite":
 		return memhop.L3ImportOverwrite, nil
 	}
-	return "", fmt.Errorf("invalid import mode %q (want Skip, Merge or Overwrite)", s)
+	return "", memhop.NewError(memhop.ErrInvalidQuery,
+		fmt.Sprintf("invalid import mode %q (want Skip, Merge or Overwrite)", s))
 }
 
 // parseEdgeKinds converts JSON string edge kinds to GraphEdgeKind values.
@@ -93,7 +94,8 @@ func parseEdgeKinds(kinds []string) ([]memhop.GraphEdgeKind, error) {
 	for _, k := range kinds {
 		v, ok := edgeKindNames[k]
 		if !ok {
-			return nil, fmt.Errorf("invalid edge kind %q (want related, causal, part_of, sequence, dependency or custom)", k)
+			return nil, memhop.NewError(memhop.ErrInvalidQuery,
+				fmt.Sprintf("invalid edge kind %q (want related, causal, part_of, sequence, dependency or custom)", k))
 		}
 		out = append(out, v)
 	}
@@ -201,7 +203,8 @@ func toImportItems(in []knowledgeImportItem) ([]memhop.L3ImportItem, error) {
 				if r.Kind != "" {
 					v, ok := edgeKindNames[r.Kind]
 					if !ok {
-						return nil, fmt.Errorf("invalid relation kind %q in item %q (want related, causal, part_of, sequence, dependency or custom)", r.Kind, it.Title)
+						return nil, memhop.NewError(memhop.ErrInvalidQuery,
+							fmt.Sprintf("invalid relation kind %q in item %q (want related, causal, part_of, sequence, dependency or custom)", r.Kind, it.Title))
 					}
 					kind = v
 				}

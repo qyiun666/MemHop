@@ -10,6 +10,7 @@ package test
 import (
 	"fmt"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -165,11 +166,16 @@ func TestInterfaceSearchUpdateL2L4(t *testing.T) {
 	if len(after.Topics) != 1 || after.Topics[0].ID != topicID {
 		t.Fatalf("surface = %+v, want the one turn topic %s", after.Topics, topicID)
 	}
-	if owned, err := db.SearchL4(memhop.L4Query{TopicID: &topicID}); err != nil || len(owned) != 2 {
+	owned, err := db.SearchL4(memhop.L4Query{TopicID: &topicID})
+	if err != nil || len(owned) != 2 {
 		t.Fatalf("turn %s owns %d originals, want 2 (err %v)", topicID, len(owned), err)
 	}
-	if len(after.Topics[0].FusedKeywords) == 0 {
-		t.Fatal("the turn topic must carry its distilled keywords")
+	if owned[0].Seq != 1 || owned[0].Role != memhop.RoleUser || owned[0].Content != "用户要求重构代码" ||
+		owned[1].Seq != 2 || owned[1].Role != memhop.RoleAgent || owned[1].Content != "好的,我来重构这段代码" {
+		t.Fatalf("the turn's originals = %+v, want the dialogue exactly as it was appended", owned)
+	}
+	if !slices.Equal(after.Topics[0].FusedKeywords, []string{"重构", "代码", "测试"}) {
+		t.Fatalf("the turn topic carries %q, want the three words distilled from it", after.Topics[0].FusedKeywords)
 	}
 
 	// A turn id belongs to the scene that opened it: handing one to another scene
@@ -251,5 +257,47 @@ func TestInterfaceL0(t *testing.T) {
 	}
 	if got.Name != "测试画像" || got.Preferences["language"] != "Go" {
 		t.Fatalf("L0 mismatch: %+v", got)
+	}
+}
+
+// A model that answers off contract costs the host that turn's distillation and
+// nothing else: the settle is refused rather than storing a topic with no keyword
+// track, and the originals the host already wrote stay exactly as they were.
+func TestInterfaceUpdateRefusesAnOffContractReply(t *testing.T) {
+	db, llm := openTestDB(t)
+	sceneID := openSession(t, db)
+	topicID := openTurn(t, db, sceneID)
+	ts := time.Now().UnixMilli()
+	for _, u := range []memhop.ArchiveSlot{
+		{Kind: memhop.KindUtterance, Seq: 1, Role: memhop.RoleUser, Content: "用户要求重构代码", CreatedAt: ts},
+		{Kind: memhop.KindUtterance, Seq: 2, Role: memhop.RoleAgent, Content: "好的,我来重构这段代码", CreatedAt: ts + 1},
+	} {
+		if err := db.AppendArchive(topicID, u); err != nil {
+			t.Fatalf("AppendArchive: %v", err)
+		}
+	}
+
+	llm.offContract = "这不是契约里的回包"
+	err := db.Update(sceneID, topicID)
+	if memhop.CodeOf(err) != memhop.ErrLLM {
+		t.Fatalf("Update over an off-contract reply = %v (code %d), want the LLM code %d",
+			err, memhop.CodeOf(err), memhop.ErrLLM)
+	}
+	if llm.calls["keywords"] == 0 {
+		t.Fatal("the refusal came without ever asking the model")
+	}
+
+	surface, err := db.Search(memhop.SearchQuery{SceneID: sceneID})
+	if err != nil {
+		t.Fatalf("Search after the refused settle: %v", err)
+	}
+	for _, topic := range surface.Topics {
+		if topic.ID == topicID {
+			t.Fatalf("the refused settle left a topic behind: %+v", topic)
+		}
+	}
+	owned, err := db.SearchL4(memhop.L4Query{TopicID: &topicID})
+	if err != nil || len(owned) != 2 {
+		t.Fatalf("the refused settle cost the turn its originals: %d records, err %v", len(owned), err)
 	}
 }

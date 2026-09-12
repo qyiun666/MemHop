@@ -143,7 +143,8 @@ func registerL4Tools(s *mcp.Server, db *memhop.Session) {
 			return memhop.ArchiveSlot{}, err
 		}
 		if len(slots) == 0 {
-			return memhop.ArchiveSlot{}, fmt.Errorf("archive %s not found", a.ID)
+			return memhop.ArchiveSlot{}, memhop.NewError(memhop.ErrNotFound,
+				fmt.Sprintf("archive %s not found", a.ID))
 		}
 		return slots[0], nil
 	}))

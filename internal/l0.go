@@ -1,7 +1,8 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// L0 profile operations of the internal layer: thin wrappers over the repo layer.
+// L0 profile operations of the internal layer: the read shares the turn package's
+// profile read, the write is a thin wrapper over the repo layer.
 
 package internal
 
@@ -12,25 +13,23 @@ import (
 	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/repo"
 	"github.com/qyiun666/MemHop/internal/repo/core"
+	"github.com/qyiun666/MemHop/internal/turn"
 )
 
 // GetL0 reads the profile singleton of one agent. An absent profile is
 // returned as an empty, non-nil ProfileSlot; storage/corruption errors are
-// surfaced.
+// surfaced. The classification is turn.ReadProfile's — one rule, one place.
 func (db *DB) GetL0(agentID uint64) (*core.ProfileSlot, error) {
 	ac, err := db.lockAgent(agentID)
 	if err != nil {
 		return nil, err
 	}
 	defer ac.Mu.Unlock()
-	slot, err := repo.GetProfileL0(db.engine, agentID)
+	slot, err := turn.ReadProfile(db.engine, agentID)
 	if err != nil {
-		if common.CodeOf(err) == common.ErrNotFound {
-			return &core.ProfileSlot{}, nil
-		}
 		return nil, err
 	}
-	return slot, nil
+	return &slot, nil
 }
 
 // UpdateL0 writes the host-owned half of the profile (Name/Role/Personality/

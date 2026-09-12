@@ -9,6 +9,7 @@ package internal
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/content"
@@ -135,5 +136,49 @@ func TestAppendArchiveBudgets(t *testing.T) {
 	}
 	if owned := archivesOfTopic(t, db.engine, topicID); len(owned) != 1 {
 		t.Fatalf("refused appends stored %d records, want only the accepted one", len(owned))
+	}
+}
+
+// A record's timestamp is milliseconds since the epoch, and the two unit mistakes a
+// host makes are refused rather than stored: a seconds-scale stamp writes a record
+// the retention window sweeps at the next Dream, taking the turn's whole transcript
+// with it while the sweep reports nothing, and a microsecond-scale one never expires.
+// Both leave nothing behind, and the same instant in milliseconds is stored and found
+// by a millisecond window.
+func TestAppendArchiveRefusesATimestampInTheWrongUnit(t *testing.T) {
+	db := newTestDB(t, newTestEngine(t))
+	topicID := common.HashID("timestamp-unit")
+	hex := common.FormatHash(topicID)
+	now := time.Now()
+	for _, tc := range []struct {
+		name string
+		ts   int64
+	}{
+		{"seconds since the epoch", now.Unix()},
+		{"microseconds since the epoch", now.UnixMicro()},
+	} {
+		err := db.AppendArchive(core.DefaultAgentID, hex, core.ArchiveSlot{
+			Kind: core.KindUtterance, Role: core.RoleUser, Content: "a turn", CreatedAt: tc.ts,
+		})
+		if common.CodeOf(err) != common.ErrInvalidQuery {
+			t.Fatalf("%s (%d): want ErrInvalidQuery, got %v", tc.name, tc.ts, err)
+		}
+		if owned := archivesOfTopic(t, db.engine, topicID); len(owned) != 0 {
+			t.Fatalf("%s: a refused timestamp stored %d records", tc.name, len(owned))
+		}
+	}
+
+	ms := now.UnixMilli()
+	if err := db.AppendArchive(core.DefaultAgentID, hex, core.ArchiveSlot{
+		Kind: core.KindUtterance, Role: core.RoleUser, Content: "a turn", CreatedAt: ms,
+	}); err != nil {
+		t.Fatalf("a millisecond timestamp must be accepted: %v", err)
+	}
+	got, err := db.SearchL4(core.DefaultAgentID, core.L4Query{TopicID: &hex, Start: ms, End: ms})
+	if err != nil {
+		t.Fatalf("millisecond window: %v", err)
+	}
+	if len(got) != 1 || got[0].CreatedAt != ms {
+		t.Fatalf("millisecond window read %+v, want the one record stamped %d", got, ms)
 	}
 }

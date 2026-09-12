@@ -57,15 +57,24 @@ func TestInterfaceAgentDomainsAreIsolated(t *testing.T) {
 	sb := mustSub(t, m, llm.srv.URL, "beta")
 
 	// A name is the domain's address, so asking twice is one domain: a host calls
-	// this at every startup and treats the name as the key to its own records.
-	if again := mustSub(t, m, llm.srv.URL, "alpha"); again == nil {
-		t.Fatal("SubAgent(alpha) again returned no handle")
-	}
+	// this at every startup and treats the name as the key to its own records. The
+	// second handle has to read what the first one settled — proved below, once
+	// there is something to read.
+	again := mustSub(t, m, llm.srv.URL, "alpha")
 
 	sceneA := settleOneTurn(t, sa, "alpha 的专属话题", "记录 alpha 的事实")
 	sceneB := settleOneTurn(t, sb, "beta 的专属话题", "记录 beta 的事实")
 	if sceneA == sceneB {
 		t.Fatal("two domains minted the same scene id")
+	}
+
+	// Same name, same domain: the second handle lists the scene the first one
+	// settled and reads the originals written under it.
+	if scenes, err := again.ListScenes(""); err != nil || len(scenes) != 1 || scenes[0].SceneID != sceneA {
+		t.Fatalf("the second alpha handle = %+v err %v, want the scene the first one settled", scenes, err)
+	}
+	if arcs, err := again.SearchL4(queryFor("alpha 的专属")); err != nil || len(arcs) == 0 {
+		t.Fatalf("the second alpha handle cannot read what the first settled: %+v err %v", arcs, err)
 	}
 
 	// Each domain lists only its own conversation, and finds only its own text.

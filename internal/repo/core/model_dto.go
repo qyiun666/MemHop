@@ -98,12 +98,12 @@ type L3Relation struct {
 // and including one it added nothing to) — a graph id derives from its domain
 // label, and this is where a batch reports it.
 type L3ImportResult struct {
-	GraphIDs     []string `json:"graph_ids,omitempty"`
+	GraphIDs     []string `json:"graph_ids"`
 	CreatedIDs   []string `json:"created_ids"`
 	UpdatedIDs   []string `json:"updated_ids"`
 	SkippedCount int      `json:"skipped_count"`
 	EdgesCreated int      `json:"edges_created,omitempty"`
-	Errors       []string `json:"errors,omitempty"`
+	Errors       []string `json:"errors"`
 }
 
 // L3NodeQuery is a node query over one graph: GraphID is required and every

@@ -198,7 +198,7 @@ err := db.AppendArchive(topicIDHex, api.ArchiveSlot{
     Role:      api.RoleUser,      // utterance only: RoleUser / RoleAgent / RoleSystem
     ContentType: api.ContentText, // utterance only; a non-text slot carries its media path/URL in Content
     Content:   userRawText,       // required
-    CreatedAt: userTS,            // Unix milliseconds, > 0
+    CreatedAt: userTS,            // Unix milliseconds — a seconds- or microsecond-scale stamp is refused
 })
 // An event names itself instead of taking a speaker, and may hang on a plan step:
 err = db.AppendArchive(topicIDHex, api.ArchiveSlot{
@@ -225,7 +225,10 @@ until `DeleteTopic` or the retention window.
 
 The refusals, all of them before anything is written (an append never creates a plan
 step — only `PlanCreate` and `PlanNodeAdd` do): an undefined `Kind`, empty `Content`,
-`CreatedAt <= 0`, an undefined `ContentType`, an event with no `EventType`, an utterance
+`CreatedAt <= 0` or a `CreatedAt` in the seconds / microsecond band (the unit is Unix
+milliseconds: a seconds-scale record is already older than the retention window, so the
+next consolidation sweeps the turn's transcript, and a microsecond-scale one never
+expires), an undefined `ContentType`, an event with no `EventType`, an utterance
 carrying an `EventType` or a `NodeSeq`, an event whose `NodeSeq` names a step this turn
 never created (`ErrInvalidQuery`, and nothing lands), the consolidation role `3` (the
 library marks its own summaries with it), and content over budget — 4 KiB per event record, its name included, 64
@@ -530,8 +533,12 @@ if api.CodeOf(err) == api.ErrNotFound { ... }
 Codes: `ErrConfig`, `ErrInvalidQuery`, `ErrNotFound`,
 `ErrIO`, `ErrClosed`, `ErrInvalidMagic`, `ErrCRCMismatch`, `ErrCorruption`,
 `ErrSerialization`, `ErrDeserialization`, `ErrCancelled` (the caller's own context
-ended before the work did — a cancelled `Dream`, an LLM call abandoned mid-retry),
-`ErrLLM`, `ErrAgentNotFound` (agentID not registered or deleted).
+ended before the work did — a cancelled `Dream`, an LLM call abandoned mid-retry)
+and `ErrLLM`. `ErrAgentNotFound` is exported but no public call produces it: domains
+come back as handles, so there is no host-supplied agent id that could be
+unregistered. `api.NewError(code, message)` builds one of these errors for a caller
+that refuses on its own terms — a tool layer turning down an argument outside a
+vocabulary, say — so that refusal carries the same code the library's own refusals do.
 Numbers are never reused: `1002` and `9001` are retired and will not be reissued.
 
 ---

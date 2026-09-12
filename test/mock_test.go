@@ -21,6 +21,11 @@ import (
 type mockLLM struct {
 	srv   *httptest.Server
 	calls map[string]int
+	// offContract, when set, is what every call point gets back instead of its own
+	// contractual reply — the injection point for a model that answers off contract.
+	// Set it before the call under test; the handler only reads it. The call counters
+	// still tick, so a test can tell "refused after asking" from "never asked".
+	offContract string
 }
 
 func newMockLLM(t *testing.T) *mockLLM {
@@ -62,6 +67,9 @@ func newMockLLM(t *testing.T) *mockLLM {
 			t.Errorf("mockLLM: unknown system prompt: %.80s", sys)
 			w.WriteHeader(http.StatusInternalServerError)
 			return
+		}
+		if m.offContract != "" {
+			content = m.offContract
 		}
 		resp := map[string]any{
 			"choices": []map[string]any{{"message": map[string]any{"content": content}}},

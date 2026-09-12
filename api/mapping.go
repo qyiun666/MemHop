@@ -8,8 +8,6 @@
 package api
 
 import (
-	"slices"
-
 	"github.com/qyiun666/MemHop/internal"
 )
 
@@ -20,6 +18,16 @@ func formatIDs(ids []uint64) []string {
 	for i, id := range ids {
 		out[i] = formatID(id)
 	}
+	return out
+}
+
+// cloneStrings copies a list out of an internal record and keeps it non-nil: an
+// imported node may carry no keywords, and every other list this package maps already
+// answers as []. One field encoding as null while its neighbours encode as [] is two
+// shapes for one answer.
+func cloneStrings(in []string) []string {
+	out := make([]string, len(in))
+	copy(out, in)
 	return out
 }
 
@@ -88,7 +96,7 @@ func fromTopicSlot(t internal.TopicSlot) TopicSlot {
 		ParentID:       formatPtr(t.ParentID),
 		Depth:          t.Depth,
 		Name:           t.Name,
-		FusedKeywords:  slices.Clone(t.FusedKeywords),
+		FusedKeywords:  cloneStrings(t.FusedKeywords),
 		UserTimestamp:  t.UserTimestamp,
 		AgentTimestamp: t.AgentTimestamp,
 	}
@@ -124,7 +132,7 @@ func fromHypergraphNode(n internal.HypergraphNode) HypergraphNode {
 		Title:     n.Title,
 		NodeType:  n.NodeType,
 		Content:   n.Content,
-		Keywords:  slices.Clone(n.Keywords),
+		Keywords:  cloneStrings(n.Keywords),
 		SourceRef: n.SourceRef,
 		CreatedAt: n.CreatedAt,
 		UpdatedAt: n.UpdatedAt,

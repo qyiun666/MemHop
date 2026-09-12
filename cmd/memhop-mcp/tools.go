@@ -170,7 +170,8 @@ func resolveContentType(name string) (memhop.ContentType, error) {
 	}
 	v, ok := contentTypeNames[name]
 	if !ok {
-		return 0, fmt.Errorf("invalid content_type %q (want text, image, video, document, audio, code or other)", name)
+		return 0, memhop.NewError(memhop.ErrInvalidQuery,
+			fmt.Sprintf("invalid content_type %q (want text, image, video, document, audio, code or other)", name))
 	}
 	return v, nil
 }
@@ -184,7 +185,8 @@ func resolveArchiveKind(name string) (memhop.ArchiveKind, error) {
 	}
 	v, ok := kindNames[name]
 	if !ok {
-		return 0, fmt.Errorf("invalid kind %q (want utterance or event)", name)
+		return 0, memhop.NewError(memhop.ErrInvalidQuery,
+			fmt.Sprintf("invalid kind %q (want utterance or event)", name))
 	}
 	return v, nil
 }
@@ -195,7 +197,8 @@ func resolveArchiveKind(name string) (memhop.ArchiveKind, error) {
 func resolveRole(name string) (uint8, error) {
 	v, ok := roleNames[name]
 	if !ok {
-		return 0, fmt.Errorf("invalid role %q (want user, agent or system)", name)
+		return 0, memhop.NewError(memhop.ErrInvalidQuery,
+			fmt.Sprintf("invalid role %q (want user, agent or system)", name))
 	}
 	return v, nil
 }

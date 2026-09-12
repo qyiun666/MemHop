@@ -28,7 +28,7 @@ internal/{domain,scene,turn,dream,graph,plan,content}
 | 包 | 职责 |
 |---|---|
 | `domain` | 域状态容器 `Context`（Mu/L2Meta/L4/Plans/DreamInFlight/OpCtx，持 Engine/LLM/Defaults 注入）+ PlanCache + L2Meta 缓存维护（SyncL2Meta/RemoveTopicsFromIndices/RetargetL2Meta）；`L4` 是「话题 → 它名下的内容槽位（原文 + 事件）」的镜像 |
-| `scene` | L2 场景读写面：ResolveForRead（没有场景可读时就在内部新建）/OpenTurn/SurfaceTopics/ContextTopic/DeleteCascade |
+| `scene` | L2 场景读写面：ResolveForRead（没有场景可读时就在内部新建；交回的是场景 id）/SurfaceTopics/ContextTopic/DeleteCascade/DetachGraph |
 | `turn` | 轮次归属：SettleTarget（可沉淀的轮次范围）、ReadProfile（Search 的 L0 读面）；进来的 hex 键已在根上解析完，本包不碰内容 |
 | `dream` | 巩固阶段：SceneSet、PruneContentStage(`l4_prune`) 与 PrunePlanStage(`l5_prune`)（共用 `ContentRetention` 窗口、各读自己的时间戳）、CompressScenes(+组回滚)、StructureStages、L1 各阶段、DistillL0Stage；调参常量随阶段在此 |
 | `graph` | L3 导入/查询：`ImportBatch`（一次批次的 mode + result + 缓存：domain→图、图→标题集、图→边键，外加两份图集「访问过」/「写过内容」；方法 ImportNode/ImportRelations/GraphIDs/StampChanged）、NodeFilter.Matches/ResolveSubgraphStart/SubgraphAdjacency/BfsWithinDepth/AllNodesVisited |
@@ -51,8 +51,8 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    门面侧的会话准入策略在 `CheckSession`。L3 的方法是唯一例外：走
    `db.lockSharedPool(callerID)`——先 `CheckSession` 校验调用方域活着，再锁
    保留公共域 `core.SharedPoolAgentID`（L3 记录全部住该域，跨 agent
-   全局串行；公共域免空闲回收）。锚点校验（`scene.Create`/
-   `ResolveForRead`/`UpdateScene`）持调用方锁无锁读公共域记录，由引擎级
+   全局串行；公共域免空闲回收）。锚点校验（`scene` 新建时的 `create`、
+   `UpdateScene` 的重挂）持调用方锁无锁读公共域记录，由引擎级
    互斥兜底。
 2. **缓存刷新序**：写记录帧后紧跟 `ac.SyncL2Meta`（**存储 -> l2meta**），交出去的是
    刚写出去那条 slot——镜像不回读它刚写的那条记录：一次瞬时读失败除了把这条轮次从两份
@@ -191,11 +191,11 @@ internal/{domain,scene,turn,dream,graph,plan,content}
 
 1. **一次 `Search` = 读场景 + 开一轮**：`scene_id` 为空 → `scene` 在自己内部铸一个未被
    占用的 ID（`0` 跳过；只有 `ErrNotFound` 才算可用，其他读错误原样上抛）并落一条场景记录
-   （名字一律库生成 `session:<id>`，锚点与它同批写入，交回的就是刚写的这条）；非空且不存在 →
+   （名字一律库生成 `session:<id>`，锚点与它同批写入，交回的是这条记录的 id）；非空且不存在 →
    `ErrNotFound`；非空、已存在、且带了 `L3ID` 一律拒——锚点是创建期字段，改锚只走
    `UpdateScene`，静默丢弃会让一次没生效的锚定看起来生效了。这道拒绝不看那张图在不在，
    否则一张已删的图会把「场景已在这里」报成「记录不存在」。同一批调用还经
-   `scene.OpenTurn`（`repo.OpenSceneTurn`）把
+   `repo.OpenSceneTurn` 把
    场景的 `TurnSeq` 推到下一轮，返回值 `NewTopicID = hash("turn:" +
    场景:TurnSeq)` 就是本轮要沉淀进去的话题。`Update` 一律拒绝未知场景，
    库内不再猜场景。画像读取失败同样使本次读取失败（仅"画像尚未建立"按空
@@ -261,7 +261,7 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    一律不被采信（`TestAppendEventCannotForgeContentFields`）。
 6. **`UpdateScene` 是 `SceneName` 的唯一宿主写者**：场景记录只被 `OpenSceneTurn`
    读改写（它回填整条记录、只动计数），Dream 从不写场景记录，故改名不会被
-   后续读取覆盖；`scene.Create` 建新场景时才写默认名 `session:<id>`。
+   后续读取覆盖；建新场景时才写默认名 `session:<id>`（`scene` 私有的 `create`）。
 7. **内容由 (话题, Seq) 寻址，枚举仍靠镜像**：一条内容的地址就是
    `hash("content:"+话题+":"+seq)`，`TopicID` 是它归属的话题；单条能推出来，
    「这个话题一共有哪几条」推不出来，唯一的来源还是域内的 `ac.L4`——它是枚举

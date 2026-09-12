@@ -11,9 +11,10 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
-// SurfaceTopics returns one scene's depth-1 topics in turn order, served from
-// the L2Meta cache so a read costs no record scan; ties break by ID to keep the
-// order deterministic.
+// SurfaceTopics returns one scene's depth-1 topics in the order they were
+// spoken: the user timestamp, with the topic id breaking a tie, so a batch of
+// turns stamped with one time still comes back in the same order on every read.
+// Served from the L2Meta cache, so a read costs no record scan.
 func SurfaceTopics(ac *domain.Context, sceneID uint64) []core.TopicSlot {
 	metas := ac.L2Meta.TopicsByScene(sceneID)
 	out := make([]core.TopicSlot, 0, len(metas))
@@ -37,11 +38,15 @@ func SurfaceTopics(ac *domain.Context, sceneID uint64) []core.TopicSlot {
 // share with it, so a reader can see which of a turn's slots came back and which
 // did not, without the list's length having to carry that.
 func ContextTopic(t core.TopicSlot, children map[uint64]int, utterances []core.ArchiveSlot) core.SceneContextTopic {
+	// Cloned non-nil: every list of the DTO this fills answers as [], and cloning an
+	// empty track is the one place that could answer as nothing at all.
+	keywords := make([]string, len(t.FusedKeywords))
+	copy(keywords, t.FusedKeywords)
 	st := core.SceneContextTopic{
 		TopicID:    common.FormatHash(t.ID),
 		Depth:      int(t.Depth),
 		Name:       t.Name,
-		Keywords:   slices.Clone(t.FusedKeywords),
+		Keywords:   keywords,
 		ChildCount: children[t.ID],
 		Messages:   make([]core.SceneMessage, 0, len(utterances)),
 	}

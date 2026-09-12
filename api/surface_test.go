@@ -20,6 +20,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/qyiun666/MemHop/internal"
 	"github.com/qyiun666/MemHop/internal/common"
 )
 
@@ -231,4 +232,33 @@ func TestSurfaceOpenValidatesArguments(t *testing.T) {
 	if _, err := Open(filepath.Join(dir, "b.meh"), surfaceLLM("http://127.0.0.1:1"), DefaultMemHopDefaults, nil); err == nil {
 		t.Fatal("Open on a file that is not there yet, with no primary profile, must fail")
 	}
+}
+
+// A list this package maps encodes as [] even when the record behind it holds none:
+// an imported node may carry no keywords, and a topic's track is empty only if a
+// writer let it be — which the mapping has no way to know. One field answering null
+// while its neighbours answer [] is two shapes for one answer, and a host decoding
+// into a slice would have to special-case it.
+func TestMappedListsEncodeAsEmptyNotNull(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body []byte
+		want string
+	}{
+		{"a topic with no keyword track", mustEncode(t, fromTopicSlot(internal.TopicSlot{})), `"fused_keywords":[]`},
+		{"a node with no keywords", mustEncode(t, fromHypergraphNode(internal.HypergraphNode{})), `"keywords":[]`},
+	} {
+		if !strings.Contains(string(tc.body), tc.want) {
+			t.Errorf("%s: json = %s, want it to hold %s", tc.name, tc.body, tc.want)
+		}
+	}
+}
+
+func mustEncode(t *testing.T, v any) []byte {
+	t.Helper()
+	out, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("encode %T: %v", v, err)
+	}
+	return out
 }

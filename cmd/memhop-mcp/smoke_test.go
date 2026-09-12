@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -39,9 +40,9 @@ func TestSSEMultiTenantIsolation(t *testing.T) {
 	if len(tools.Tools) != 24 {
 		t.Errorf("expected 24 tools, got %d", len(tools.Tools))
 	}
-	names := make(map[string]bool, len(tools.Tools))
+	toolsByName := make(map[string]*mcp.Tool, len(tools.Tools))
 	for _, tool := range tools.Tools {
-		names[tool.Name] = true
+		toolsByName[tool.Name] = tool
 	}
 	for _, want := range []string{
 		"memhop_search", "memhop_update", "memhop_dream", "memhop_checkpoint", "memhop_status",
@@ -54,8 +55,70 @@ func TestSSEMultiTenantIsolation(t *testing.T) {
 		"memhop_archive_append",
 		"memhop_trajectory_read",
 	} {
-		if !names[want] {
+		if _, ok := toolsByName[want]; !ok {
 			t.Errorf("missing tool %q", want)
+		}
+	}
+
+	// A tool's contract with its client is the argument names: renaming one is a
+	// broken tool, and no call in this suite would notice — every call below passes
+	// the names the tools have today. Required lists are pinned per tool, and a
+	// required name has to be a declared property, or a client is told to send
+	// something the schema never describes.
+	for _, want := range []struct {
+		name     string
+		required []string
+	}{
+		{"memhop_search", nil},
+		{"memhop_update", []string{"scene_id", "topic_id"}},
+		{"memhop_dream", nil},
+		{"memhop_checkpoint", nil},
+		{"memhop_status", nil},
+		{"memhop_l1_nodes", nil},
+		{"memhop_profile_get", nil},
+		{"memhop_profile_update", []string{"name"}},
+		{"memhop_scene_list", nil},
+		{"memhop_scene_merge", []string{"primary_id", "secondary_ids"}},
+		{"memhop_scene_topics", []string{"scene_id"}},
+		{"memhop_scene_rename", []string{"scene_id", "name"}},
+		{"memhop_topic_rename", []string{"topic_id", "name"}},
+		{"memhop_knowledge_get", []string{"id"}},
+		{"memhop_knowledge_list", nil},
+		{"memhop_knowledge_import", []string{"items", "mode"}},
+		{"memhop_knowledge_update", []string{"id"}},
+		{"memhop_knowledge_delete", []string{"id"}},
+		{"memhop_knowledge_nodes", []string{"graph_id"}},
+		{"memhop_knowledge_subgraph", []string{"graph_id", "start_node_id"}},
+		{"memhop_archive_search", nil},
+		{"memhop_archive_get", []string{"id"}},
+		{"memhop_archive_append", []string{"topic_id", "content", "timestamp"}},
+		{"memhop_trajectory_read", []string{"session_id"}},
+	} {
+		tool, ok := toolsByName[want.name]
+		if !ok {
+			continue // already reported as missing above
+		}
+		schema, ok := tool.InputSchema.(map[string]any)
+		if !ok {
+			t.Errorf("%s: input schema is %T, want the decoded object", want.name, tool.InputSchema)
+			continue
+		}
+		props, _ := schema["properties"].(map[string]any)
+		required, _ := schema["required"].([]any)
+		var got []string
+		for _, entry := range required {
+			name, ok := entry.(string)
+			if !ok {
+				t.Errorf("%s: a required entry is %T, want an argument name", want.name, entry)
+				continue
+			}
+			got = append(got, name)
+			if _, declared := props[name]; !declared {
+				t.Errorf("%s: %q is required but is not one of its properties", want.name, name)
+			}
+		}
+		if !slices.Equal(got, want.required) {
+			t.Errorf("%s: required = %v, want %v", want.name, got, want.required)
 		}
 	}
 
@@ -503,6 +566,47 @@ func TestSSETurnFlow(t *testing.T) {
 	}
 	if want := fmt.Sprintf("[%d]", memhop.ErrInvalidQuery); !strings.Contains(zeroKey.Error(), want) {
 		t.Fatalf("an engine refusal must carry its code %s, got %v", want, zeroKey)
+	}
+
+	// The tool layer's own refusals carry a code by the same rule: a client has no
+	// other channel, and "this argument is outside the vocabulary" has to be tellable
+	// from "that record will not read". Each of these is judged before the database is
+	// touched, so the code is the resolver's and not whatever a lookup would have said.
+	for _, tc := range []struct {
+		name string
+		tool string
+		args map[string]any
+		code memhop.Code
+	}{
+		{"append kind", "memhop_archive_append", map[string]any{
+			"topic_id": turn.NewTopicID, "kind": "nonsense", "role": "user",
+			"content": "x", "timestamp": 2200}, memhop.ErrInvalidQuery},
+		{"append role", "memhop_archive_append", map[string]any{
+			"topic_id": turn.NewTopicID, "kind": "utterance", "role": "nonsense",
+			"content": "x", "timestamp": 2201}, memhop.ErrInvalidQuery},
+		{"append content_type", "memhop_archive_append", map[string]any{
+			"topic_id": turn.NewTopicID, "kind": "utterance", "role": "user",
+			"content_type": "nonsense", "content": "x", "timestamp": 2202}, memhop.ErrInvalidQuery},
+		{"import mode", "memhop_knowledge_import", map[string]any{
+			"items": []any{map[string]any{"title": "t", "domain": "d", "content": "c"}},
+			"mode":  "nonsense"}, memhop.ErrInvalidQuery},
+		{"relation kind", "memhop_knowledge_import", map[string]any{
+			"items": []any{map[string]any{"title": "t", "domain": "d", "content": "c",
+				"related": []any{map[string]any{"titles": []any{"other"}, "kind": "nonsense"}}}},
+			"mode": "Skip"}, memhop.ErrInvalidQuery},
+		{"subgraph edge kind", "memhop_knowledge_subgraph", map[string]any{
+			"graph_id": "0123456789abcdef", "start_node_id": "0123456789abcdef",
+			"edge_kinds": []any{"nonsense"}}, memhop.ErrInvalidQuery},
+		{"archive by an id nothing holds", "memhop_archive_get", map[string]any{
+			"id": "0123456789abcdef"}, memhop.ErrNotFound},
+	} {
+		_, err := callClient(t, alice, tc.tool, tc.args)
+		if err == nil {
+			t.Fatalf("%s outside the vocabulary: want a refusal", tc.name)
+		}
+		if want := fmt.Sprintf("[%d]", tc.code); !strings.Contains(err.Error(), want) {
+			t.Fatalf("%s: a tool refusal must carry its code %s, got %v", tc.name, want, err)
+		}
 	}
 
 	// An optional filter sent as an empty string is no filter. The resolvers'

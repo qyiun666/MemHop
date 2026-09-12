@@ -121,8 +121,8 @@ type TopicSlot struct {
 	AgentTimestamp int64 `json:"agent_timestamp"` // turn: agent reply time; fused: latest agent turn in group
 }
 
-// CompareTopicOrder orders a scene's topics by the turn they were spoken in,
-// breaking a tie on ID so the order is deterministic.
+// CompareTopicOrder orders a scene's topics by the user timestamp they were
+// spoken at, breaking a tie on ID so the order is deterministic.
 func CompareTopicOrder(a, b TopicSlot) int {
 	if a.UserTimestamp != b.UserTimestamp {
 		return cmp.Compare(a.UserTimestamp, b.UserTimestamp)

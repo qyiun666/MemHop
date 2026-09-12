@@ -8,6 +8,7 @@ package test
 import (
 	"context"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	memhop "github.com/qyiun666/MemHop/api"
@@ -35,11 +36,11 @@ func TestInterfaceDream(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Dream: %v", err)
 	}
-	if rep == nil || rep.ConsolidatedScenes < 1 || rep.L2TopicsCompressed < 1 {
+	if rep == nil || rep.ConsolidatedScenes != 1 || rep.L2TopicsCompressed != 1 {
 		t.Fatalf("Dream should consolidate the session: %+v", rep)
 	}
-	if llm.calls["consolidate"] < 1 {
-		t.Fatal("Dream should call consolidate on the session")
+	if llm.calls["consolidate"] != 1 {
+		t.Fatalf("one scene over the threshold is one consolidate call, got %d", llm.calls["consolidate"])
 	}
 	// Consolidation fuses the group into one depth-1 topic, so the read
 	// surface shrinks below the two turns written.
@@ -59,8 +60,23 @@ func TestInterfaceDream(t *testing.T) {
 	if len(full.Topics) != 3 {
 		t.Fatalf("scene context after fusion = %+v, want the fused parent over its 2 sunk turns", full.Topics)
 	}
-	if fused := full.Topics[0]; fused.Depth != 1 || fused.ChildCount != 2 {
+	fused := full.Topics[0]
+	if fused.Depth != 1 || fused.ChildCount != 2 {
 		t.Fatalf("fused parent = %+v, want depth 1 owning 2 children", fused)
+	}
+	if !slices.Equal(fused.Keywords, []string{"重构", "代码", "测试"}) {
+		t.Fatalf("fused keywords = %q, want the three words extracted from the summary", fused.Keywords)
+	}
+	// The summary is the fused topic's own utterance: the user slot of the parent,
+	// under role 3 — the one role a host cannot write and the public surface
+	// deliberately leaves unnamed, so the number is what a host matches on.
+	fusedID := fused.TopicID
+	sums, err := db.SearchL4(internal.L4Query{TopicID: &fusedID})
+	if err != nil {
+		t.Fatalf("SearchL4 on the fused topic: %v", err)
+	}
+	if len(sums) != 1 || sums[0].Content != "合并摘要保留全部细节" || sums[0].Role != 3 || sums[0].Seq != 1 {
+		t.Fatalf("fused summary = %+v, want the summary alone in the parent's user slot under role 3", sums)
 	}
 	// Stage timeline covers the full pipeline, distillation included.
 	if len(rep.Stages) == 0 {
@@ -89,8 +105,20 @@ func TestInterfaceDream(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetL0 after dream: %v", err)
 	}
-	if profile.MBTI.Type == "" || profile.Personality == "" {
-		t.Fatalf("dream distill should backfill emotion/mbti: %+v", profile)
+	// The type word is derived from the four dimensions and never taken from the
+	// reply: the mock answers "ESFP" over dimensions that read ESTP, so an
+	// implementation that started trusting the model's own word fails here.
+	if profile.MBTI.Type != "ESTP" {
+		t.Fatalf("distilled MBTI = %+v, want the type derived from 0.2/0.3/-0.1/0.4", profile.MBTI)
+	}
+	if profile.MBTI.IE != 0.2 || profile.MBTI.NS != 0.3 || profile.MBTI.TF != -0.1 || profile.MBTI.JP != 0.4 {
+		t.Fatalf("distilled dimensions = %+v, want the mock's four", profile.MBTI)
+	}
+	if profile.EmotionState.Valence != 0.8 || profile.EmotionState.Arousal != 0.6 || profile.EmotionState.Dominance != 0.5 {
+		t.Fatalf("distilled emotion = %+v, want the mock's 0.8/0.6/0.5", profile.EmotionState)
+	}
+	if profile.Personality != "务实直接，注重代码质量，面对重构任务条理清晰，习惯先补测试再动手" {
+		t.Fatalf("distilled personality = %q, want the mock's sentence verbatim", profile.Personality)
 	}
 
 	// Directed Dream: an invalid scene id is rejected, a valid one succeeds.
@@ -139,8 +167,8 @@ func TestInterfaceCheckpointPersist(t *testing.T) {
 	if len(res.Topics) != 1 || res.Topics[0].ID != topicID {
 		t.Fatalf("topics did not persist: %+v", res.Topics)
 	}
-	if len(res.Topics[0].FusedKeywords) == 0 {
-		t.Fatal("the keyword track must persist with the topic")
+	if !slices.Equal(res.Topics[0].FusedKeywords, []string{"重构", "代码", "测试"}) {
+		t.Fatalf("the keyword track must persist with the topic: %q", res.Topics[0].FusedKeywords)
 	}
 	arcs, err := db2.SearchL4(internal.L4Query{Keyword: "重构"})
 	if err != nil {
@@ -151,4 +179,81 @@ func TestInterfaceCheckpointPersist(t *testing.T) {
 	}
 	// Reading the host's own session id back from the reopened file is what
 	// proves the id survives a restart.
+}
+
+// A model that answers off contract during consolidation costs one Dream pass and
+// nothing else: no group lands, so the turns stay on the surface with their own
+// keywords and originals, and no summary is written above them.
+func TestInterfaceDreamRefusesAnOffContractReply(t *testing.T) {
+	llm := newMockLLM(t)
+	m := openMockDB(t, filepath.Join(t.TempDir(), "offcontract.meh"), llm.srv.URL,
+		func(d *internal.MemHopDefaults) { d.DreamCompressMinTopics = 2 })
+	db := newTestDB(t, m)
+	defer db.Close()
+
+	sceneID := openSession(t, db)
+	first := settleTurn(t, db, sceneID, "用户要求重构代码", "好的,我来重构这段代码")
+	second := settleTurn(t, db, sceneID, "继续重构第二个模块", "第二个模块也补上测试")
+
+	llm.offContract = "这不是契约里的回包"
+	rep, err := db.Dream(context.Background(), "")
+	if memhop.CodeOf(err) != memhop.ErrLLM {
+		t.Fatalf("Dream over an off-contract reply = %v (code %d), want the LLM code %d",
+			err, memhop.CodeOf(err), memhop.ErrLLM)
+	}
+	if rep == nil || rep.ConsolidatedScenes != 0 || rep.L2TopicsCompressed != 0 {
+		t.Fatalf("a pass that fused nothing reports %+v", rep)
+	}
+
+	surface, err := db.Search(memhop.SearchQuery{SceneID: sceneID})
+	if err != nil {
+		t.Fatalf("Search after the refused pass: %v", err)
+	}
+	onSurface := make(map[string]memhop.TopicSlot, len(surface.Topics))
+	for _, topic := range surface.Topics {
+		onSurface[topic.ID] = topic
+	}
+	if len(surface.Topics) != 2 {
+		t.Fatalf("surface after the refused pass = %+v, want both turns still at depth 1", surface.Topics)
+	}
+	for _, id := range []string{first, second} {
+		topic, ok := onSurface[id]
+		if !ok {
+			t.Fatalf("the refused pass lost turn %s: %+v", id, surface.Topics)
+		}
+		if !slices.Equal(topic.FusedKeywords, []string{"重构", "代码", "测试"}) {
+			t.Fatalf("turn %s carries %q, want the track it was settled with", id, topic.FusedKeywords)
+		}
+	}
+	// A fused parent would be a third entry carrying the group's summary, so the
+	// transcript staying at two is what proves no summary was written.
+	full, err := db.SceneContext(sceneID)
+	if err != nil {
+		t.Fatalf("SceneContext after the refused pass: %v", err)
+	}
+	if len(full.Topics) != 2 {
+		t.Fatalf("transcript after the refused pass = %+v, want the two turns and no summary", full.Topics)
+	}
+}
+
+// A cancelled pass answers with the cancellation, not with the model's failure:
+// one cancel fails every scene's call at once, and a host told "the model failed"
+// goes and checks a model that never refused it.
+func TestInterfaceDreamReportsCancellation(t *testing.T) {
+	llm := newMockLLM(t)
+	m := openMockDB(t, filepath.Join(t.TempDir(), "cancel.meh"), llm.srv.URL,
+		func(d *internal.MemHopDefaults) { d.DreamCompressMinTopics = 2 })
+	db := newTestDB(t, m)
+	defer db.Close()
+
+	sceneID := openSession(t, db)
+	settleTurn(t, db, sceneID, "用户要求重构代码", "好的,我来重构这段代码")
+	settleTurn(t, db, sceneID, "继续重构第二个模块", "第二个模块也补上测试")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := db.Dream(ctx, ""); memhop.CodeOf(err) != memhop.ErrCancelled {
+		t.Fatalf("a cancelled Dream = %v (code %d), want the cancellation code %d",
+			err, memhop.CodeOf(err), memhop.ErrCancelled)
+	}
 }

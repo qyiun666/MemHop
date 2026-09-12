@@ -8,6 +8,7 @@ package internal
 
 import (
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 
@@ -418,7 +419,9 @@ func TestUpdateReplayOverwritesPriorContent(t *testing.T) {
 // turn topic of the scene it names. A replayed turn and an opened-but-earlier
 // turn both qualify (pinned above); a Dream-fused topic does not — writing one
 // would reset its depth and orphan the turns it folded — and neither does a
-// turn of another scene.
+// turn of another scene, nor a depth-2 topic whose id no turn counter issued.
+// A turn Dream has sunk keeps its turn id and is settled again on purpose; the
+// next test pins that replay.
 func TestUpdateRejectsForeignOrFusedTopic(t *testing.T) {
 	srv, calls := countingLLMServer(t, turnKeywords)
 	db := newSearchTestDB(t, srv.URL)
@@ -439,7 +442,7 @@ func TestUpdateRejectsForeignOrFusedTopic(t *testing.T) {
 		topicID uint64
 	}{
 		{"fused parent", fusedParent},
-		{"sunk child", fusedChild.ID},
+		{"a depth-2 topic no turn counter issued", fusedChild.ID},
 		{"another scene's turn", core.ComputeTurnTopicID(sceneID+1, 1)},
 		{"invented id", common.HashID("not-a-turn-this-scene-opened")},
 	}
@@ -455,11 +458,56 @@ func TestUpdateRejectsForeignOrFusedTopic(t *testing.T) {
 		t.Fatalf("rejected turns wrote topics: %d -> %d", before, got)
 	}
 	if child, err := core.ReadTopicSlot(db.engine, core.DefaultAgentID, fusedChild.ID); err != nil || child.Depth != 2 {
-		t.Fatalf("sunk topic was modified: %+v (%v)", child, err)
+		t.Fatalf("the depth-2 fixture was modified: %+v (%v)", child, err)
 	}
 
 	// The turn Search actually opened still settles.
 	if err := settle(db, sceneID, topicID); err != nil {
 		t.Fatalf("Update of the opened turn: %v", err)
+	}
+}
+
+// A turn Dream has sunk is still a turn this scene opened, so settling it again is
+// a rewrite and not an error — and the rewrite must not undo the consolidation:
+// depth, parent link and the host's own name come off the stored record, so the turn
+// stays under its fused group while its keyword track is refreshed. The gate judges
+// the key; where the turn sits is the settle write's answer.
+func TestUpdateReplayKeepsASunkTurnSunk(t *testing.T) {
+	srv, _ := countingLLMServer(t, turnKeywords)
+	db := newSearchTestDB(t, srv.URL)
+	sceneID, topicID := openTurn(t, db)
+	appendTurn(t, db, topicID, 1000)
+	if err := settle(db, sceneID, topicID); err != nil {
+		t.Fatalf("first settle: %v", err)
+	}
+
+	ac := testDefaultContext(db)
+	fusedParent := core.ComputeTopicID(sceneID, 500, 600)
+	writeTopicCached(t, ac, db.engine, core.DefaultAgentID, newTopic(fusedParent, sceneID, 500, []string{"kw"}))
+	sunk, err := core.ReadTopicSlot(db.engine, core.DefaultAgentID, topicID)
+	if err != nil {
+		t.Fatalf("read the settled turn: %v", err)
+	}
+	sunk.Depth = 2
+	sunk.ParentID = &fusedParent
+	sunk.Name = "宿主给的名字"
+	writeTopicCached(t, ac, db.engine, core.DefaultAgentID, *sunk)
+
+	if err := settle(db, sceneID, topicID); err != nil {
+		t.Fatalf("replaying a sunk turn: %v", err)
+	}
+	after, err := core.ReadTopicSlot(db.engine, core.DefaultAgentID, topicID)
+	if err != nil {
+		t.Fatalf("read the replayed turn: %v", err)
+	}
+	if after.Depth != 2 || after.ParentID == nil || *after.ParentID != fusedParent {
+		t.Fatalf("the replay brought a sunk turn back to the surface: depth=%d parent=%v",
+			after.Depth, after.ParentID)
+	}
+	if after.Name != "宿主给的名字" {
+		t.Fatalf("the replay renamed the turn: %q", after.Name)
+	}
+	if want := []string{"rust", "所有权"}; !slices.Equal(after.FusedKeywords, want) {
+		t.Fatalf("keyword track = %v, want the distilled %v", after.FusedKeywords, want)
 	}
 }

@@ -48,9 +48,16 @@ func TestInterfaceTurnEvents(t *testing.T) {
 		t.Fatalf("read events: %v", err)
 	}
 	// Slots 1 and 2 are reserved for the turn's dialogue, so the library allocates
-	// a topic's first event at 3.
+	// a topic's first event at 3. Each one comes back as it went in: its own type,
+	// its own payload, and the timestamp the host stamped it with.
 	if len(events) != 2 || events[0].Seq != 3 || events[1].Seq != 4 {
 		t.Fatalf("want 2 events with seq 3,4: %+v", events)
+	}
+	if events[0].EventType != "tool_call" || events[0].Content != `{"tool":"read_file","file":"a.go"}` || events[0].CreatedAt != ts {
+		t.Fatalf("first event = %+v, want the tool_call as appended at %d", events[0], ts)
+	}
+	if events[1].EventType != "tool_result" || events[1].Content != "file content" || events[1].CreatedAt != ts+500 {
+		t.Fatalf("second event = %+v, want the tool_result as appended at %d", events[1], ts+500)
 	}
 }
 

@@ -22,6 +22,9 @@
   （domain→图、图→标题集、图→边键）加两份图集（解析到的 / 写过内容的）；调用方
   持域锁创建它，整批跑完后调一次 `StampChanged`，再读回 result。
 - `ImportNode` 只返回 error：一条 item 落在哪张图、建没建成都进 `result`，不打断整批。
+- `result` 的每份列表在建批时就非 nil：它是交出去的报告，一份没写过的列表要答成空的
+  那一种写法，而不是少一个键或者一个 null。往这份报告里加列表字段，就在
+  `NewImportBatch` 那一行一起初始化。
 - `ResolveSubgraphStart` 对起点不属于该图返回 `ErrInvalidQuery` 而非 `ErrNotFound`
   ——图是查询的范围，不是被查的对象。起点记录本身读不回（`ErrNotFound` 以外的任何错误）
   原样上报：「没有这个节点」让宿主换起点，「这个节点坏了」让它知道这张图坏在这里。

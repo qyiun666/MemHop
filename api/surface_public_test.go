@@ -1,12 +1,13 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// The public surface of the facade, pinned by reflection. Session reaches most
-// of its methods by embedding internal.Session, so a new internal method
-// becomes host-callable without any edit in this package: this list is the
-// review gate. Add a name only when the method is meant to be public, and let
-// TestPublicSignaturesCarryNoNumericIds below enforce the other half of the
-// contract — no id a host can see, in an input or a result, leaves as a number.
+// The public surface of the facade, pinned by reflection. Both handles hold their
+// internal counterpart in an unexported field and declare every method themselves,
+// so nothing becomes host-callable without an edit in this package: these lists are
+// the review gate. Add a name only when the method is meant to be public, and let
+// TestPublicSignaturesCarryNoNumericIds and TestHandlesExposeNoField below enforce
+// the other half of the contract — no id a host can see, in an input or a result,
+// leaves as a number, and no field of a handle is reachable around its methods.
 
 package api
 
@@ -97,6 +98,28 @@ func TestDBPublicSurface(t *testing.T) {
 	missing, extra := diffNames(want, methodNames(&DB{}))
 	if len(missing) > 0 || len(extra) > 0 {
 		t.Fatalf("DB public surface drifted: missing=%v unexpected=%v", missing, extra)
+	}
+}
+
+// TestHandlesExposeNoField pins the route the method lists cannot see: an exported
+// field on a handle lets a host reach the internal value it holds — and with it the
+// numeric ids this facade renders as hex — without calling a single method. Both
+// handles carry their counterpart unexported.
+func TestHandlesExposeNoField(t *testing.T) {
+	for _, handle := range []struct {
+		name string
+		v    any
+	}{
+		{"Session", &Session{}},
+		{"DB", &DB{}},
+	} {
+		typ := reflect.TypeOf(handle.v).Elem()
+		for i := 0; i < typ.NumField(); i++ {
+			if f := typ.Field(i); f.PkgPath == "" {
+				t.Errorf("%s.%s is exported: a host reaches the internal value around every method here",
+					handle.name, f.Name)
+			}
+		}
 	}
 }
 

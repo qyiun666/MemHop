@@ -62,8 +62,8 @@ func ValidateAppend(in core.ArchiveSlot) error {
 	if in.Content == "" {
 		return common.NewError(common.ErrInvalidQuery, "content is required")
 	}
-	if in.CreatedAt <= 0 {
-		return common.NewError(common.ErrInvalidQuery, "a positive timestamp is required")
+	if err := checkTimestamp(in.CreatedAt); err != nil {
+		return err
 	}
 	if !in.ContentType.Valid() {
 		return common.NewError(common.ErrInvalidQuery, "undefined content type")
@@ -96,6 +96,31 @@ func checkPayload(size, budget int, what string) error {
 	if size > budget {
 		return common.NewError(common.ErrInvalidQuery,
 			fmt.Sprintf("%s of %d bytes exceeds the %d-byte budget", what, size, budget))
+	}
+	return nil
+}
+
+// A record's timestamp is milliseconds since the epoch — the retention sweep and
+// every L4 time filter compare it against a millisecond cutoff. The two bands below
+// are the shapes a host produces by mistake, and each is a silent loss rather than an
+// error: a seconds-scale record is already older than the retention window, so the
+// next Dream sweeps the whole turn's transcript, and a microsecond-scale one never
+// expires. Anything under the seconds band is left alone: those are relative counters
+// and fixtures, not a wrong unit, and refusing them would refuse a caller that stamps
+// its own ordering rather than a wall clock.
+const (
+	secondsScaleFloor = 1_000_000_000       // 1e9: 2001-09-09 read as seconds
+	secondsScaleCeil  = 100_000_000_000     // 1e11: 5138-11-16 read as seconds
+	millisScaleCeil   = 100_000_000_000_000 // 1e14: 5138-11-16 read as milliseconds
+)
+
+func checkTimestamp(v int64) error {
+	if v <= 0 {
+		return common.NewError(common.ErrInvalidQuery, "a positive timestamp is required")
+	}
+	if (v >= secondsScaleFloor && v < secondsScaleCeil) || v > millisScaleCeil {
+		return common.NewError(common.ErrInvalidQuery,
+			fmt.Sprintf("created_at %d is not milliseconds since the epoch: a seconds-scale stamp is swept by the retention window as soon as it is written, and a microsecond-scale one never expires", v))
 	}
 	return nil
 }
