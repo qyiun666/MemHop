@@ -103,7 +103,7 @@ func (db *DB) AppendArchive(agentID uint64, topicID string, slot core.ArchiveSlo
 	if slot.Kind == core.KindEvent && slot.NodeSeq != 0 &&
 		!ac.Plans.HasSeq(th, slot.NodeSeq) {
 		return common.NewError(common.ErrInvalidQuery,
-			fmt.Sprintf("the event names step %d, which this turn's plan never created",
+			fmt.Sprintf("the event names step %d, which is not on this turn's plan tree",
 				slot.NodeSeq))
 	}
 	_, err = content.Append(ac, agentID, th, slot)

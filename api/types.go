@@ -215,8 +215,10 @@ type ArchiveSlot struct {
 }
 
 // PlanNodeView is the external plan-tree node; Status is the string form. A step
-// is addressed by Seq inside its turn, and ParentSeq is the step it hangs under
-// (0 = a root).
+// is addressed by Seq inside its turn, and ParentSeq is the step it hangs under —
+// 0 for a step at the top level. A step whose parent is not in this tree heads its
+// own branch all the same and keeps naming that absent step, so the roots of what
+// a read returns are "ParentSeq 0 or not listed here", not just the former.
 type PlanNodeView struct {
 	Seq        uint32         `json:"seq"`
 	ParentSeq  uint32         `json:"parent_seq"`

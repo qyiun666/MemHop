@@ -48,11 +48,14 @@ func (db *DB) PlanNodeAdd(agentID uint64, topicID string, parentSeq uint32, titl
 // Title/Summary, where a field left blank keeps what the node holds. Then the
 // tree is rolled up bottom-up, because this is the write that can settle a
 // branch: once every direct child of a Done parent has reached a terminal
-// status, the parent gets its summary. A refused update changes nothing — the
-// status word is checked before the node is read, so no half-applied step can
-// leave the host unsure which of its writes landed. Nothing here touches the
-// turn's content: the events a step produced are L4 records the host appends
-// itself, so restating a step can never rewrite what a turn recorded.
+// status, the parent gets its summary. A restatement that is refused changes
+// nothing — the status word is checked before the node is read, so no
+// half-applied step can leave the host unsure which of its writes landed. The
+// rollup is a separate step after that write has landed: if it fails, the step is
+// restated and only the parent's folded summary is missing, which the next
+// restatement of that branch folds again. Nothing here touches the turn's
+// content: the events a step produced are L4 records the host appends itself, so
+// restating a step can never rewrite what a turn recorded.
 func (db *DB) PlanNodeUpdate(agentID uint64, topicID string, step plan.Step) error {
 	ac, th, err := db.lockSession(agentID, topicID)
 	if err != nil {
@@ -68,7 +71,10 @@ func (db *DB) PlanNodeUpdate(agentID uint64, topicID string, step plan.Step) err
 
 // PlanState returns the plan tree of one turn (the topic id that opened it) as
 // the actual stored statuses — no auto-fold: a parent becomes Done only where
-// the host declared it so.
+// the host declared it so. A turn that holds no tree answers with an empty one
+// rather than an error, the same answer a turn whose tree the retention window
+// swept gives: whether the key is known is a question about L2, and this read
+// spans none of it.
 func (db *DB) PlanState(agentID uint64, topicID string) (*PlanTree, error) {
 	ac, th, err := db.lockSession(agentID, topicID)
 	if err != nil {

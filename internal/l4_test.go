@@ -326,3 +326,28 @@ func TestSearchL4RefusesUndefinedFilterValues(t *testing.T) {
 		t.Fatalf("an undefined content type must be refused, got %v", err)
 	}
 }
+
+// Allocating a slot (Seq 0) is the library choosing an address, and the number it
+// chooses comes from the content mirror — whose rebuild skips a record it cannot
+// decode. Such a record is therefore invisible there while its slot lives on in the
+// id (topic, Seq) hashes to, and taking it would turn a record no one can read into
+// this topic's line, with the id the caller gets back naming that other content.
+func TestAppendArchiveRefusesASlotItCannotRead(t *testing.T) {
+	engine := newTestEngine(t)
+	db := newTestDB(t, engine)
+	const topic = uint64(4242)
+	topicID := common.FormatHash(topic)
+	address := core.HashContent(topic, core.LastUtteranceSeq+1)
+	const corrupt = `{"id":`
+	if _, err := engine.WriteRecord(core.DefaultAgentID, core.RecL4Archive, address,
+		[]byte(corrupt)); err != nil {
+		t.Fatalf("write the slot no mirror can list: %v", err)
+	}
+
+	if err := db.AppendArchive(core.DefaultAgentID, topicID, ev("tool_call", 5000)); common.CodeOf(err) != common.ErrDeserialization {
+		t.Fatalf("allocating onto an undecodable slot must report its own code, got %v", err)
+	}
+	if _, data, err := engine.ReadRecord(core.DefaultAgentID, address); err != nil || string(data) != corrupt {
+		t.Fatalf("the refused append overwrote the record it could not read: %q err=%v", data, err)
+	}
+}

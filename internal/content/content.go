@@ -123,6 +123,14 @@ func Append(ac *domain.Context, agentID, topicID uint64, in core.ArchiveSlot) (u
 	seq := in.Seq
 	if seq == 0 {
 		seq = max(ac.L4.MaxSeq(topicID), core.LastUtteranceSeq) + 1
+		// Allocating is the library choosing an address, and the number it chose comes
+		// from a mirror whose rebuild skips records it cannot decode — so the slot can
+		// still be held by one, its ordinal living on in the derived id. Read that
+		// address before taking it. A named Seq is unchecked on purpose: overwriting a
+		// slot the caller points at is this write path's replay contract.
+		if _, err := core.ReadArchiveSlot(ac.Engine, agentID, core.HashContent(topicID, seq)); err != nil && common.CodeOf(err) != common.ErrNotFound {
+			return 0, common.NewError(common.CodeOf(err), "read the slot the content mirror offered", err)
+		}
 	}
 	in.TopicID, in.Seq = topicID, seq
 	if in.Kind == core.KindEvent {

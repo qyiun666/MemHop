@@ -284,6 +284,11 @@ func (s *Session) PlanCreate(topicID string, title string) (uint32, error) {
 // PlanNodeAdd under an unknown parent is refused rather than answered by growing
 // one.
 //
+// One refusal is durable rather than one-shot: if the address the next ordinal
+// names holds a record the engine cannot read back, the create reports that read's
+// own code, and the next call reports it again — the library will not step around a
+// record it cannot read in order to hand out a neighbouring number.
+//
 // This is the only way a step comes into existence. Nothing is written when either
 // create call returns an error, and a step's title may be filled in later by
 // PlanNodeUpdate, which is why an empty title here is allowed: the view falls back
@@ -370,17 +375,19 @@ func (s *Session) MergeScenes(primaryID string, secondaryIDs []string) error {
 }
 
 // DeleteScene removes a scene for good: its record, every topic at any depth,
-// the L4 originals they reference and the L1 scene node, so it disappears from
-// listings and reads. Hyperedges that incidentally pointed at it are cleaned by
-// the next Dream's L1 rebuild.
+// all of their L4 content (originals and events alike), the plan trees those
+// turns opened and the L1 scene node, so it disappears from listings and reads.
+// A hyperedge that pointed at that scene loses the member to the next Dream's
+// edge decay, and one left with fewer than two members is deleted with it.
 func (s *Session) DeleteScene(sceneID string) error {
 	return s.Session.DeleteScene(sceneID)
 }
 
 // DeleteTopic removes one topic and its whole subtree (children at any depth)
-// with the L4 originals they reference, and prunes it from its surviving
-// parent's child list — the memory-correction counterpart of Update. Deleting a
-// topic that does not exist is an error, not a no-op.
+// with all of their L4 content and the plan trees those turns opened — the
+// memory-correction counterpart of Update. Nothing is left hanging: the subtree
+// goes with the topic, so a surviving topic never keeps a parent that is gone.
+// Deleting a topic that does not exist is an error, not a no-op.
 func (s *Session) DeleteTopic(topicID string) error {
 	return s.Session.DeleteTopic(topicID)
 }

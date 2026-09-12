@@ -130,8 +130,8 @@ type L3Subgraph struct {
 // Limit keeps the tail of whichever order applies.
 // Keyword is matched case-insensitively, the same way the L3 node filter matches
 // one. An empty query returns the domain's whole archive set — that is a lot of
-// text for a caller with a context window, so Limit caps the result to its most
-// recent matches. NodeSeq keeps only the records bound to one plan step — that
+// text for a caller with a context window, so Limit caps the result to the tail of
+// that order. NodeSeq keeps only the records bound to one plan step — that
 // step and every step under it; a step is addressed inside a turn, so it means
 // nothing without TopicID. Zero leaves the condition unset, which is safe because
 // the library hands step ordinals out from 1.
