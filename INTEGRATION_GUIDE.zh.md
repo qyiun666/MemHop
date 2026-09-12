@@ -234,7 +234,7 @@ rep, err := db.Dream(ctx, "")       // sceneID 传 "" = 遍历域内全部场景
 通常**不需要宿主调用**：某场景 depth-1 话题数超过 `Defaults.SceneDreamTopicThreshold`（默认 24）时，`Update` 会在后台调度该场景的巩固（同场景在途不重复调度）。
 
 执行 L2→L1→L0 压缩 / 衰减 / 画像蒸馏（多次 LLM 调用，耗时较长）——放后台 goroutine 或对话间隔执行。
-返回结构化 `*DreamReport` 供宿主观测：`ConsolidatedScenes / L2TopicsCompressed / L1NodesAdded|Removed / L1EdgesAdded|Removed / L0Updated`，外加 `Stages []DreamStage{Name, Status, DurationMs}`（状态取值 `ok | skipped | cancelled | error`）。空报告表示无内容可巩固，不算错误；管线中途失败时部分填充的报告随错误一起返回。场景读回上下文的规模不是一条硬上限：depth-1 话题数越过 `SceneDreamTopicThreshold` 就调度该场景 Dream，Dream 只把 LLM 判定成一组的话题合并上去，没被选中的仍留在 depth-1。
+返回结构化 `*DreamReport` 供宿主观测：`ConsolidatedScenes / L2TopicsCompressed / L1NodesAdded|Removed / L1EdgesAdded|Removed / L0Updated`，外加 `Stages []DreamStage{Name, Status, DurationMs}`（状态取值 `ok | skipped | cancelled | error`）。其中两个数容易被读错：`L2TopicsCompressed` 数的是**沉进融合组的话题**，不是组数；`L1EdgesAdded` 数的是本轮新建**或抬权**的共现边。空报告表示无内容可巩固，不算错误；管线中途失败时部分填充的报告随错误一起返回。场景读回上下文的规模不是一条硬上限：depth-1 话题数越过 `SceneDreamTopicThreshold` 就调度该场景 Dream，Dream 只把 LLM 判定成一组的话题合并上去，没被选中的仍留在 depth-1。
 
 ---
 
@@ -507,6 +507,6 @@ func main() {
 4. **ID 是不透明 16 位 hex**：不要自行拼接/截断；响应里的 id 原样回传即可，门面上不再有 hex ⇄ 整数转换函数。
 5. **`Search` 不写记忆内容**：它开启一个轮次（场景的轮次计数 +1），但不建任何话题记录——开了没沉淀的轮次不留残渣。想读原文用 `SceneContext` / `SearchL4`。重放一次 append（同 `(话题, Seq)`）是幂等的：记录 id 由那一对派生，重试只会覆盖不会叠加；而重放不再去填的槽位不会被回收。
 6. **单文件多 agent 域**：所有租户驻留同一个 `.meh` 文件——`api.Open` 落定文件被打开所依据的那个域，`DB.SubAgent(llm, profile)` 按名字在其下建/取一个——除文件级 L3 公共池外按域完全隔离；旧库（`FormatVersion < 0x0012`）既打不开也不迁移。
-7. **内容与计划自动过期**：Dream 清掉 7 天前的话题内容与 7 天前的计划节点（仍在途的树豁免）；显式纠正走 `DeleteTopic` / `DeleteScene`。过了窗的话题只剩关键词轨，`Messages` 读回来是空的或 `Seq` 上有洞——那是合法的终局，不是读取失败。一切都按轮次话题 id 绑定，所以 `Update` 前后都能追加（id 在 `Search` 时已在手），但绝不要自造轮键。
-8. **场景 id 由宿主保管，话题 id 由库保管**：`Update` 只接受已存在场景（先 `Search` 得到 `Scene.SceneID`）+ 该次读铸出的话题 id——没开轮就沉淀不了。库不会为一次沉淀自动建场景，也不会在 Dream 里合并场景——合并只走显式 `MergeScenes`，而它会把被并场景连记录删掉，宿主手里的旧 id 随即失效。每次 `Search` 恰好开启一个轮次：读两次只沉淀一次，就是跳掉一个轮次号，空洞不产生成本，且已给出的 id 永不重复。
+7. **内容与计划自动过期**：Dream 清掉 7 天前的话题内容与 7 天前的计划节点（仍在途的树豁免）；显式纠正走 `DeleteTopic` / `DeleteScene`。过了窗的话题只剩关键词轨，`Messages` 读回来是空的或 `Seq` 上有洞——那是合法的终局，不是读取失败。融合组的摘要按**写下它的那一次巩固**计龄，不按它取代的那几轮，所以它能活过那些原文：子话题的原文被扫走之后，父话题仍可能带着 Dream 自己写的那段文本。一切都按轮次话题 id 绑定，所以 `Update` 前后都能追加（id 在 `Search` 时已在手），但绝不要自造轮键。
+8. **场景 id 由宿主保管，话题 id 由库保管**：`Update` 只接受已存在场景（先 `Search` 得到 `Scene.SceneID`）+ 该次读铸出的话题 id——没开轮就沉淀不了。库不会为一次沉淀自动建场景，也不会在 Dream 里合并场景——合并只走显式 `MergeScenes`，而它会把被并场景连记录删掉，宿主手里的旧 id 随即失效。**合并之前先沉淀**：开了没沉淀的轮次还没有话题记录，所以不在被改写的范围之内——它的 id 指着一个已经不存在的场景，此后再也沉淀不了。每次 `Search` 恰好开启一个轮次：读两次只沉淀一次，就是跳掉一个轮次号，空洞不产生成本，且已给出的 id 永不重复。
 9. **`SceneDreamTopicThreshold` 默认 24**：用部分字面量构造 `MemHopDefaults` 时该字段为 0，会**禁用**自动巩固——先赋 `api.DefaultMemHopDefaults` 再覆盖。上下文规模只由 Dream 收敛，不是硬上限，禁用自动巩固就等于让注入无界增长。

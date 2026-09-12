@@ -26,7 +26,11 @@ const briefFieldMaxRunes = 160
 // personality, MBTI, top preferences and the current emotional state. Every field
 // it carries is bounded — one budget per free-text value, five preferences — because
 // a digest rides along with every call and must not grow with the profile it came
-// from. An all-empty slot renders as the empty string.
+// from. An all-empty slot renders as the empty string, and an all-zero emotional
+// state is left out with it: 0/0/0 is the extreme reading "very negative, calm,
+// submissive" on this scale, but it is also what a profile nothing was ever
+// distilled onto carries, and the digest cannot tell the two apart — so it renders
+// neither rather than putting a reading nobody measured into every call.
 func Brief(slot core.ProfileSlot) string {
 	if slot.Name == "" && slot.Role == "" && slot.Personality == "" &&
 		slot.MBTI.Type == "" && len(slot.Preferences) == 0 &&

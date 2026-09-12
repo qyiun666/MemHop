@@ -17,7 +17,7 @@ type Code uint16
 var ErrTruncated = errors.New("llm response truncated")
 
 const (
-	ErrConfig       Code = 1001 // 1001 configuration error: missing or invalid parameters (config.go validation, tokenizer init)
+	ErrConfig       Code = 1001 // 1001 configuration error: missing or invalid parameters (LLM endpoint validation, open path and seeding)
 	ErrInvalidQuery Code = 1003 // 1003 invalid query or ID parse failure (hex id parse, layer read/write guards, reclaim legacy layout)
 
 	ErrNotFound      Code = 3001 // 3001 resource not found (profile missing, record lookup)

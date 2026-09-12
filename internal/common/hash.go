@@ -10,7 +10,10 @@ import (
 	"github.com/cespare/xxhash/v2"
 )
 
-// HashID computes xxhash64 of a string, compatible with Rust twox-hash (seed 0).
+// HashID computes xxhash64 of a string with seed 0. Every id this library derives —
+// a turn topic, a content slot, a plan node, an L3 graph, node or edge — is this hash
+// of a fixed formula, and the record stores the result, so the seed is part of the
+// on-disk contract: another one re-addresses every record in an existing file.
 func HashID(s string) uint64 {
 	return xxhash.Sum64String(s)
 }
@@ -37,15 +40,17 @@ func ParseID(id string) (uint64, error) {
 	return h, nil
 }
 
-// ParseAll parses id strings into hashes; any malformed id fails the whole call.
-func ParseAll(ids []string) ([]uint64, bool) {
+// ParseAll parses id strings into hashes; any malformed id fails the whole call and
+// comes back named. A caller handing over a list of ids answers for the whole list,
+// and a refusal that does not say which one broke leaves its own caller guessing.
+func ParseAll(ids []string) ([]uint64, error) {
 	out := make([]uint64, 0, len(ids))
 	for _, id := range ids {
 		h, err := ParseID(id)
 		if err != nil {
-			return nil, false
+			return nil, err
 		}
 		out = append(out, h)
 	}
-	return out, true
+	return out, nil
 }

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/qyiun666/MemHop/internal/cap/llmops"
 	"github.com/qyiun666/MemHop/internal/common"
@@ -16,27 +17,38 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
-// CompressScenes runs one goroutine per scene: reads depth-1 topics, asks the
-// LLM for merge groups and applies them; returns the set of scenes that had at
-// least one group applied and the LLM failure count. Applied groups
-// accumulate into rep.L2TopicsCompressed under mu. All scenes belong to ac's
-// domain; cross-agent merging is structurally impossible.
-func CompressScenes(ctx context.Context, ac *domain.Context, scenes []uint64, rep *core.DreamReport) (map[uint64]struct{}, int) {
+// compressFanout bounds how many scenes consolidate at once. Every scene costs an
+// LLM round-trip taken inside the domain lock, and a whole-domain pass fans out over
+// every scene the domain has: unbounded, that is a burst of as many concurrent
+// requests as there are scenes — the shape that trips an endpoint's rate limit and
+// then has every scene report a failed call.
+const compressFanout = 4
+
+// CompressScenes consolidates every scene named, at most compressFanout at a time:
+// reads depth-1 topics, asks the LLM for merge groups and applies them. It returns
+// the scenes that had at least one group applied, and how many scenes produced
+// nothing usable — a call that failed, or a group this engine could not apply, both
+// of which are the model's answer rather than a fault in the records. An engine
+// refusal comes back as the error instead of joining that count: it carries its own
+// code, and folding it in is what let a failed write be reported to the host as a
+// model that never answered. The topics the applied groups sank accumulate into
+// rep.L2TopicsCompressed under mu. All scenes belong to ac's domain; cross-agent
+// merging is structurally impossible.
+func CompressScenes(ctx context.Context, ac *domain.Context, scenes []uint64, rep *core.DreamReport) (map[uint64]struct{}, int, error) {
 	var (
 		wg        sync.WaitGroup
 		mu        sync.Mutex
 		succeeded = make(map[uint64]struct{})
-		failures  int
+		unusable  int
+		failed    error
+		sem       = make(chan struct{}, compressFanout)
 	)
-	countFailure := func() {
-		mu.Lock()
-		failures++
-		mu.Unlock()
-	}
 	for _, sid := range scenes {
+		sem <- struct{}{}
 		wg.Add(1)
 		go func(sceneID uint64) {
 			defer wg.Done()
+			defer func() { <-sem }()
 			topics := repo.ListTopicsL2(repo.TopicListQuery{
 				MetaIdx: ac.L2Meta,
 				SceneID: sceneID,
@@ -48,36 +60,53 @@ func CompressScenes(ctx context.Context, ac *domain.Context, scenes []uint64, re
 			}
 			out, err := llmops.Consolidate(ctx, ac.LLM, topics, ac.Defaults.DreamCompressMinTopics)
 			if err != nil {
-				countFailure()
+				mu.Lock()
+				unusable++
+				mu.Unlock()
 				return
 			}
-			applied, rejected := applyGroups(ctx, ac, sceneID, topics, out)
-			for i := 0; i < rejected; i++ {
-				countFailure()
+			got, err := applyGroups(ctx, ac, sceneID, topics, out)
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				if failed == nil {
+					failed = err
+				}
+				return
 			}
-			if rejected > 0 {
+			unusable += got.unusable
+			if got.unusable > 0 {
 				slog.Warn("dream: merge groups proposed but not applied",
-					"scene", common.FormatHash(sceneID), "applied", applied, "rejected", rejected)
+					"scene", common.FormatHash(sceneID), "applied", got.groups, "rejected", got.unusable)
 			}
-			if applied > 0 {
-				mu.Lock()
+			if got.groups > 0 {
 				succeeded[sceneID] = struct{}{}
-				rep.L2TopicsCompressed += int(applied)
-				mu.Unlock()
+				rep.L2TopicsCompressed += got.topics
 			}
 		}(sid)
 	}
 	wg.Wait()
-	return succeeded, failures
+	return succeeded, unusable, failed
+}
+
+// groupOutcome is one scene's consolidation result: the groups that landed, the
+// topics those groups sank under them, and the proposals that produced nothing.
+type groupOutcome struct {
+	groups   uint32
+	topics   int
+	unusable int
 }
 
 // applyGroups applies one scene's groups: store MergedSummary as an L4
 // archive of the fused topic, extract keywords for that topic, create it, then
-// sink the group nodes. It reports how many groups landed and how many the
-// model proposed but the engine could not apply — the two are different facts,
-// and a pass that applied nothing because every proposed group was unusable
-// must not look like a scene with nothing to consolidate.
-func applyGroups(ctx context.Context, ac *domain.Context, sceneID uint64, topics []core.TopicSlot, out *llmops.ConsolidationOutput) (uint32, int) {
+// sink the group nodes. A proposal that produces nothing — one name, a member
+// another group already claimed, bounds this engine cannot resolve, a summary the
+// model left empty — counts as unusable and the rest continue, so a pass that
+// applied nothing because every proposed group was unusable does not look like a
+// scene with nothing to consolidate. A refusal that came out of the records is
+// returned instead: applyOneGroup has already rolled that group back, and the
+// caller reports it under the code it arrived with.
+func applyGroups(ctx context.Context, ac *domain.Context, sceneID uint64, topics []core.TopicSlot, out *llmops.ConsolidationOutput) (groupOutcome, error) {
 	byID := make(map[uint64]core.TopicSlot, len(topics))
 	for _, t := range topics {
 		byID[t.ID] = t
@@ -87,35 +116,38 @@ func applyGroups(ctx context.Context, ac *domain.Context, sceneID uint64, topics
 	// group's summary claiming a child that no longer answers to it and pushes the
 	// topic one level below the deepest read that reaches it.
 	claimed := make(map[uint64]struct{}, len(topics))
-	var count uint32
-	var rejected int
+	var got groupOutcome
 	for _, g := range out.L2Groups {
 		if len(g.NodeHashes) < 2 {
 			// A one-name group is a proposal this engine cannot apply: fusing buys a
 			// parent over children, and there is nothing to put under it. It counts as
 			// proposed-but-not-applied, not as nothing to consolidate.
-			rejected++
+			got.unusable++
 			continue
 		}
 		if sharesMember(g.NodeHashes, claimed) {
-			rejected++
+			got.unusable++
 			continue
 		}
 		minTS, maxTS, ok := groupTimestamps(g.NodeHashes, byID)
 		if !ok {
-			rejected++
+			got.unusable++
 			continue
 		}
 		if err := applyOneGroup(ctx, ac, sceneID, g, minTS, maxTS); err != nil {
-			rejected++
+			if common.CodeOf(err) != common.ErrLLM {
+				return got, err
+			}
+			got.unusable++
 			continue
 		}
 		for _, id := range g.NodeHashes {
 			claimed[id] = struct{}{}
 		}
-		count++
+		got.groups++
+		got.topics += len(g.NodeHashes)
 	}
-	return count, rejected
+	return got, nil
 }
 
 // sharesMember reports whether any of a proposed group's members already belongs
@@ -159,10 +191,16 @@ func applyOneGroup(ctx context.Context, ac *domain.Context, sceneID uint64, g ll
 		return common.NewError(common.ErrLLM, "dream: merge group's bounds collide with an existing topic", nil)
 	}
 	// The fused group's summary is the parent topic's own utterance: it occupies
-	// the slot a turn's user side would, and no reference list points at it.
+	// the slot a turn's user side would, and no reference list points at it. It ages
+	// from this pass and not from the group's last turn: the retention window sweeps
+	// on CreatedAt, so consolidating turns already past the cutoff would hand the
+	// summary a birthday older than the window and the next pass would delete the one
+	// text consolidation produced. The group's own span stays on the topic record,
+	// which is where a reader looks for it.
 	if err := repo.AppendArchiveL4(ac.Engine, ac.ID, ac.L4, &core.ArchiveSlot{
 		TopicID: parentID, Seq: core.SeqUser, Kind: core.KindUtterance,
-		Role: core.RoleDream, ContentType: core.ContentText, Content: g.MergedSummary, CreatedAt: maxTS,
+		Role: core.RoleDream, ContentType: core.ContentText, Content: g.MergedSummary,
+		CreatedAt: time.Now().UnixMilli(),
 	}); err != nil {
 		return common.NewError(common.ErrIO, "dream: archive merged summary", err)
 	}

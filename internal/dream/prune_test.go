@@ -36,7 +36,7 @@ func TestPrunePlanStageSkipsWhenTheTreeIsIncomplete(t *testing.T) {
 		{IDHash: staleID, TopicID: topicID, Seq: 1, Status: core.StatusDone, UpdatedAt: stale},
 		{IDHash: liveID, TopicID: topicID, Seq: 2, ParentSeq: 1, Status: core.StatusInProgress, UpdatedAt: time.Now().UnixMilli()},
 	} {
-		if _, err := repo.WritePlanNode(engine, core.DefaultAgentID, n); err != nil {
+		if err := repo.WritePlanNode(engine, core.DefaultAgentID, n); err != nil {
 			t.Fatalf("write node %d: %v", n.Seq, err)
 		}
 	}

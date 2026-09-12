@@ -56,11 +56,17 @@ func Samples(engine *core.StorageEngine, agentID uint64) []core.DistillSample {
 	}
 	samples := make([]core.DistillSample, 0, len(nodes))
 	for i := range nodes {
+		keywords := sampleKeywords(engine, agentID, nodes[i].TopicIDs)
+		if len(keywords) == 0 {
+			// A row with no keywords is no signal, and the prompt asks the model to
+			// infer an emotional state from what each row carries: a node whose topics
+			// would not read back must thin the sample set, not join it as an empty one.
+			continue
+		}
 		samples = append(samples, core.DistillSample{
 			IDHash:     nodes[i].IDHash,
-			Keywords:   sampleKeywords(engine, agentID, nodes[i].TopicIDs),
+			Keywords:   keywords,
 			Importance: nodes[i].Importance,
-			UpdatedAt:  nodes[i].UpdatedAt,
 		})
 	}
 	return samples

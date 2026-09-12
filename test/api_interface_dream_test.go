@@ -36,7 +36,9 @@ func TestInterfaceDream(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Dream: %v", err)
 	}
-	if rep == nil || rep.ConsolidatedScenes != 1 || rep.L2TopicsCompressed != 1 {
+	// L2TopicsCompressed counts the topics sunk into fused groups, not the
+	// groups: one proposal swallowing both turns reports 2.
+	if rep == nil || rep.ConsolidatedScenes != 1 || rep.L2TopicsCompressed != 2 {
 		t.Fatalf("Dream should consolidate the session: %+v", rep)
 	}
 	if llm.calls["consolidate"] != 1 {

@@ -32,7 +32,7 @@ func DeleteCascade(ac *domain.Context, agentID uint64, scenes, topics []uint64) 
 	if err := repo.DeleteTopicArchives(ac.Engine, agentID, ac.L4, topics); err != nil {
 		return err
 	}
-	if _, err := repo.DeletePlanNodesByIDs(ac.Engine, agentID, planNodes); err != nil {
+	if err := repo.DeletePlanNodesByIDs(ac.Engine, agentID, planNodes); err != nil {
 		return err
 	}
 	records := make([]uint64, 0, len(scenes)+len(topics))

@@ -34,10 +34,14 @@ type serverConfig struct {
 	LLM memhop.LlmConfig
 	// Defaults is the engine's tuning knobs. It stays at its zero value, which
 	// is what this server has always run with: no automatic consolidation
-	// trigger (SceneDreamTopicThreshold <= 0 disables it), a compress floor of
-	// zero, and no idle-domain reclaim. Whether it should instead run on
-	// memhop.DefaultMemHopDefaults is a behaviour change, not a facade one, so
-	// it is left as it is and called out here rather than changed in passing.
+	// trigger (SceneDreamTopicThreshold <= 0 disables it); a compress floor of
+	// zero, which also disables the "too few topics, keep the raw detail" skip —
+	// so every memhop_dream pays one LLM round-trip per scene however little it
+	// holds, and the prompt asks the model to merge down toward zero — and no
+	// idle-domain reclaim, so without --tenants every tenant's context and its
+	// three caches live until the process exits. Whether it should instead run
+	// on memhop.DefaultMemHopDefaults is a behaviour change, not a facade one,
+	// so it is left as it is and called out here rather than changed in passing.
 	Defaults memhop.MemHopDefaults
 }
 

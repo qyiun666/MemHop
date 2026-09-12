@@ -36,11 +36,11 @@ type NodeEmotion struct {
 	Arousal float64
 }
 
-// DistillSample is one L1 node prepared for the distillation prompt: its
-// keywords, importance and last update.
+// DistillSample is one L1 node prepared for the distillation prompt: the three
+// fields the prompt renders. The node clock the ranking consumed stays on the
+// record it came from — nothing reads it after the cut.
 type DistillSample struct {
 	IDHash     uint64
 	Keywords   []string
 	Importance float32
-	UpdatedAt  int64
 }

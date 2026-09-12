@@ -46,9 +46,9 @@ func (db *DB) SearchL4(agentID uint64, q L4Query) ([]core.ArchiveSlot, error) {
 	rq := repo.ArchiveQuery{Keyword: q.Keyword, Start: q.Start, End: q.End, Type: q.Type,
 		Kind: q.Kind, Limit: q.Limit, Index: ac.L4}
 	if len(q.IDs) > 0 {
-		ids, ok := common.ParseAll(q.IDs)
-		if !ok {
-			return nil, common.NewError(common.ErrInvalidQuery, "parse archive ids")
+		ids, err := common.ParseAll(q.IDs)
+		if err != nil {
+			return nil, common.NewError(common.ErrInvalidQuery, "parse archive ids", err)
 		}
 		rq.IDs = ids
 	}

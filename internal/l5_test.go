@@ -520,7 +520,7 @@ func TestPlanStateOrphansSurfaceAsRoots(t *testing.T) {
 	parent := add(t, db, topicID, 0, "父")
 	child := add(t, db, topicID, parent, "子")
 	parentID := core.HashPlanNode(9, parent)
-	if _, err := repo.DeletePlanNodesByIDs(db.engine, core.DefaultAgentID,
+	if err := repo.DeletePlanNodesByIDs(db.engine, core.DefaultAgentID,
 		[]uint64{parentID}); err != nil {
 		t.Fatal(err)
 	}
@@ -609,7 +609,7 @@ func TestDreamPrunePlanNodesAndContent(t *testing.T) {
 			t.Fatalf("read node for aging: %v", err)
 		}
 		node.UpdatedAt = old
-		if _, err := repo.WritePlanNode(db.engine, core.DefaultAgentID, node); err != nil {
+		if err := repo.WritePlanNode(db.engine, core.DefaultAgentID, node); err != nil {
 			t.Fatal(err)
 		}
 	}

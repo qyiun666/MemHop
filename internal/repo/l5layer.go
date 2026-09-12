@@ -21,34 +21,32 @@ import (
 // (core.HashPlanNode(node.TopicID, node.Seq)) so the node's address stays stable
 // across writes. A node has no ordinal a caller may invent: the plan cache hands
 // it out, the id follows from it, and a mismatch is refused rather than written
-// sideways onto another step.
-func WritePlanNode(engine *core.StorageEngine, agentID uint64, node *core.PlanNode) (uint64, error) {
+// sideways onto another step. The address is the caller's own, so nothing comes
+// back but the outcome.
+func WritePlanNode(engine *core.StorageEngine, agentID uint64, node *core.PlanNode) error {
 	if node == nil {
-		return 0, common.NewError(common.ErrInvalidQuery, "plan node is nil")
+		return common.NewError(common.ErrInvalidQuery, "plan node is nil")
 	}
 	if node.Seq == 0 {
-		return 0, common.NewError(common.ErrInvalidQuery, "plan node seq required")
+		return common.NewError(common.ErrInvalidQuery, "plan node seq required")
 	}
 	if node.IDHash != core.HashPlanNode(node.TopicID, node.Seq) {
-		return 0, common.NewError(common.ErrInvalidQuery, "plan node id does not match topic/seq")
+		return common.NewError(common.ErrInvalidQuery, "plan node id does not match topic/seq")
 	}
-	if err := core.WritePlanNode(engine, agentID, node.IDHash, node); err != nil {
-		return 0, err
-	}
-	return node.IDHash, nil
+	return core.WritePlanNode(engine, agentID, node.IDHash, node)
 }
 
-// DeletePlanNodesByIDs batch-deletes plan nodes by record id and returns how
-// many were removed.
-func DeletePlanNodesByIDs(engine *core.StorageEngine, agentID uint64, idHashes []uint64) (int, error) {
+// DeletePlanNodesByIDs batch-deletes plan nodes by record id. It reads nothing and
+// reports no count: the ids come from an enumeration the caller already ran, so
+// "how many went away" is a figure the caller can take from its own list.
+func DeletePlanNodesByIDs(engine *core.StorageEngine, agentID uint64, idHashes []uint64) error {
 	if len(idHashes) == 0 {
-		return 0, nil
+		return nil
 	}
-	n, err := engine.DeleteRecordBatch(agentID, idHashes)
-	if err != nil {
-		return 0, common.NewError(common.ErrIO, "delete plan nodes", err)
+	if _, err := engine.DeleteRecordBatch(agentID, idHashes); err != nil {
+		return common.NewError(common.ErrIO, "delete plan nodes", err)
 	}
-	return n, nil
+	return nil
 }
 
 // PlanNodeIDsByTopicIDs enumerates the record ids of every plan node a listed

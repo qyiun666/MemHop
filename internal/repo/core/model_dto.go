@@ -167,11 +167,11 @@ type DreamStage struct {
 // what this pass actually did. On mid-pipeline failures the partially filled
 // report is returned together with the error.
 type DreamReport struct {
-	ConsolidatedScenes int          `json:"consolidated_scenes"` // 场景数（≥1 个合并组生效）
-	L2TopicsCompressed int          `json:"l2_topics_compressed"`
-	L1NodesAdded       int          `json:"l1_nodes_added"`   // 同步创建/更新的场景节点
-	L1EdgesAdded       int          `json:"l1_edges_added"`   // 新建超边
-	L1NodesRemoved     int          `json:"l1_nodes_removed"` // 陈旧重建 + 衰减移除
+	ConsolidatedScenes int          `json:"consolidated_scenes"`  // 场景数（≥1 个合并组生效）
+	L2TopicsCompressed int          `json:"l2_topics_compressed"` // 沉进融合组的话题数，不是组数
+	L1NodesAdded       int          `json:"l1_nodes_added"`       // 同步创建/更新的场景节点
+	L1EdgesAdded       int          `json:"l1_edges_added"`       // 新建或抬权的超边
+	L1NodesRemoved     int          `json:"l1_nodes_removed"`     // 陈旧重建 + 衰减移除
 	L1EdgesRemoved     int          `json:"l1_edges_removed"`
 	L0Updated          bool         `json:"l0_updated"` // 本轮执行了情感/MBTI 蒸馏并回写
 	Stages             []DreamStage `json:"stages,omitempty"`

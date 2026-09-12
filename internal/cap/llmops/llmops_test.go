@@ -232,7 +232,7 @@ func TestFormatRetryFailureKeepsItsOwnCode(t *testing.T) {
 	} {
 		spy := &retryFailsOnce{budgetSpy: budgetSpy{ceiling: 8192}, failWith: fail}
 		_, err := Distill(context.Background(), spy,
-			[]L1Sample{{IDHash: 1, Keywords: []string{"a"}, Importance: 1, UpdatedAt: 1}})
+			[]L1Sample{{IDHash: 1, Keywords: []string{"a"}, Importance: 1}})
 		if common.CodeOf(err) != common.CodeOf(fail) {
 			t.Fatalf("distill over a %v retry: code=%d err=%v", fail, common.CodeOf(err), err)
 		}

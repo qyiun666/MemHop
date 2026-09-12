@@ -32,7 +32,10 @@ func BuildHyperedges(engine *core.StorageEngine, agentID uint64, minSimilarity f
 	if len(nodes) < 2 {
 		return 0, nil
 	}
-	kwByNode, inverted := collectNodeKeywordSets(engine, agentID, nodes)
+	kwByNode, inverted, err := collectNodeKeywordSets(engine, agentID, nodes)
+	if err != nil {
+		return 0, err
+	}
 	// Pairwise Jaccard over keyword-sharing node pairs only.
 	now := time.Now().UnixMilli()
 	changed := 0
@@ -66,7 +69,7 @@ func BuildHyperedges(engine *core.StorageEngine, agentID uint64, minSimilarity f
 // collectNodeKeywordSets aggregates the lowercased deduplicated keyword
 // set per node and the keyword → nodeID inverted index used to skip pairs
 // sharing no terms.
-func collectNodeKeywordSets(engine *core.StorageEngine, agentID uint64, nodes []core.SceneNode) (map[uint64]map[string]struct{}, map[string][]uint64) {
+func collectNodeKeywordSets(engine *core.StorageEngine, agentID uint64, nodes []core.SceneNode) (map[uint64]map[string]struct{}, map[string][]uint64, error) {
 	kwByNode := make(map[uint64]map[string]struct{}, len(nodes))
 	inverted := make(map[string][]uint64)
 	for i := range nodes {
@@ -74,8 +77,16 @@ func collectNodeKeywordSets(engine *core.StorageEngine, agentID uint64, nodes []
 		set := make(map[string]struct{})
 		for _, topicID := range node.TopicIDs {
 			topic, err := core.ReadTopicLenient(engine, agentID, topicID)
-			if err != nil || topic == nil {
-				continue
+			switch {
+			case err != nil && common.CodeOf(err) != common.ErrNotFound:
+				// A topic that will not read back is not a topic that is gone. Taking
+				// it for gone shrinks the set this node is measured by, and an edge that
+				// drops under the similarity floor because of it is never built — and
+				// never comes back on its own, since decay only lowers a weight and
+				// raising one needs an endpoint a later pass can see as changed.
+				return nil, nil, err
+			case err != nil, topic == nil:
+				continue // gone, or the id names a record of another kind
 			}
 			for _, kw := range topic.FusedKeywords {
 				set[strings.ToLower(kw)] = struct{}{}
@@ -89,7 +100,7 @@ func collectNodeKeywordSets(engine *core.StorageEngine, agentID uint64, nodes []
 			inverted[kw] = append(inverted[kw], node.IDHash)
 		}
 	}
-	return kwByNode, inverted
+	return kwByNode, inverted, nil
 }
 
 // jaccard returns the keyword-set similarity; ok is false for an empty

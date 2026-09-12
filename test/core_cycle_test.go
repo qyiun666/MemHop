@@ -134,7 +134,7 @@ func TestCoreCycleUpdateDream(t *testing.T) {
 	if rep == nil {
 		t.Fatal("dream returned no report")
 	}
-	t.Logf("dream consolidated %d scene(s), compressed %d topic group(s)", rep.ConsolidatedScenes, rep.L2TopicsCompressed)
+	t.Logf("dream consolidated %d scene(s), sank %d topic(s) into fused groups", rep.ConsolidatedScenes, rep.L2TopicsCompressed)
 
 	// Phase 2.5: post-Dream L0/L2 consistency — profile readable, the session
 	// still resolves and still has a surface.

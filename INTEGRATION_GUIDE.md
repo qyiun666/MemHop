@@ -262,7 +262,7 @@ rep, err := db.Dream(ctx, "")      // empty sceneID sweeps every scene of the do
 Usually **the host does not need to call it**: once a scene's depth-1 topic count passes `Defaults.SceneDreamTopicThreshold` (default 24), `Update` schedules that scene's Dream in the background (one in flight per scene).
 
 Runs L2→L1→L0 compression / decay / profile distillation (several LLM calls, slow) — keep it in a goroutine or between turns.
-Returns a structured `*DreamReport`: `ConsolidatedScenes / L2TopicsCompressed / L1NodesAdded|Removed / L1EdgesAdded|Removed / L0Updated` plus `Stages []DreamStage{Name, Status, DurationMs}` (status `ok | skipped | cancelled | error`). An empty report is not an error; a mid-pipeline failure returns the partial report with the error. What a host reads back is bounded by convergence, not by a cap: passing the threshold schedules that scene's Dream, and Dream only merges the groups the model judges one — topics it never picked stay at depth 1.
+Returns a structured `*DreamReport`: `ConsolidatedScenes / L2TopicsCompressed / L1NodesAdded|Removed / L1EdgesAdded|Removed / L0Updated` plus `Stages []DreamStage{Name, Status, DurationMs}` (status `ok | skipped | cancelled | error`). Two of those figures are easy to misread: `L2TopicsCompressed` counts the topics sunk into fused groups, not the number of groups, and `L1EdgesAdded` counts the co-occurrence edges created **or strengthened** by the pass. An empty report is not an error; a mid-pipeline failure returns the partial report with the error. What a host reads back is bounded by convergence, not by a cap: passing the threshold schedules that scene's Dream, and Dream only merges the groups the model judges one — topics it never picked stay at depth 1.
 
 ---
 
@@ -666,7 +666,10 @@ func main() {
    days and plan nodes older than 7 days (a tree still in flight is exempt);
    `DeleteTopic` / `DeleteScene` are the explicit corrections. Past the window a
    topic keeps its keyword track and its `Messages` come back empty or with gaps in
-   `Seq` — a legal end state, not a failed read. Everything is keyed by the turn's
+   `Seq` — a legal end state, not a failed read. A fused group's summary ages from
+   the pass that wrote it, not from the turns it replaced, so it can outlive their
+   originals: a parent may still carry Dream's own text after its children's have
+   been swept. Everything is keyed by the turn's
    topic id, so append before `Update` closes the turn (the id is already in hand
    from `Search`) and never invent one.
 8. **The library owns the turn id**: `Update` accepts only an existing scene
@@ -674,7 +677,10 @@ func main() {
    be settled without first being opened. The library never creates a scene
    behind a settle, and Dream never merges scenes — merging is the explicit
    `MergeScenes`, which deletes the merged-away records and thereby invalidates
-   any scene id the host still holds.
+   any scene id the host still holds. Settle before merging: a turn `Search`
+   opened and `Update` never settled has no topic record yet, so there is nothing
+   for the merge to retarget — its id names a scene that is gone, and the turn can
+   never be settled afterwards.
    Each `Search` opens exactly one turn: a host that reads a scene twice and
    settles once simply skips a turn number — gaps cost nothing, and no read
    ever reissues an id already given out.

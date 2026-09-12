@@ -35,6 +35,12 @@ var primaryProfile = memhop.ProfileInput{
 	Role: "primary domain of the shared MCP database file",
 }
 
+// errRegistryClosed is what a request meets after shutdown. CloseAll nils the shared
+// database, and nil is also "not opened yet", so without a flag of its own a session
+// still connected would reopen the file: the revived database is closed by nobody,
+// its checkpoint is never written, and the process still reports a clean exit.
+var errRegistryClosed = errors.New("memhop-mcp is shut down")
+
 // tenantRegistry opens the shared DB and serves one MCP server per tenant bound
 // to that tenant's sub-agent domain.
 type tenantRegistry struct {
@@ -44,6 +50,7 @@ type tenantRegistry struct {
 	dbDir    string
 	allowed  map[string]bool // empty means any valid tenant id
 	db       *memhop.DB
+	closed   bool
 	entries  map[string]*mcp.Server
 	logger   *slog.Logger
 	// open is a small injection seam for offline tests; production always
@@ -85,6 +92,10 @@ func (r *tenantRegistry) get(tenant string) (*mcp.Server, error) {
 		return nil, fmt.Errorf("invalid tenant id %q", tenant)
 	}
 	r.mu.Lock()
+	if r.closed {
+		r.mu.Unlock()
+		return nil, errRegistryClosed
+	}
 	if srv, ok := r.entries[tenant]; ok {
 		r.mu.Unlock()
 		return srv, nil
@@ -135,6 +146,9 @@ func (r *tenantRegistry) get(tenant string) (*mcp.Server, error) {
 func (r *tenantRegistry) OpenShared() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.closed {
+		return errRegistryClosed
+	}
 	if r.db != nil {
 		return nil
 	}
@@ -148,7 +162,7 @@ func (r *tenantRegistry) openShared() error {
 	}
 	if _, err := root.Stat(dbFileName); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		root.Close()
-		return fmt.Errorf("database file escapes db-dir: %w", err)
+		return fmt.Errorf("check %s inside db-dir: %w", dbFileName, err)
 	}
 	if err := root.Close(); err != nil {
 		return err
@@ -163,11 +177,13 @@ func (r *tenantRegistry) openShared() error {
 }
 
 // CloseAll persists and closes the shared database (Close builds the
-// per-agent index snapshots first) and drops every tenant entry.
+// per-agent index snapshots first), drops every tenant entry and refuses
+// everything after it: this is the process's last word about the file.
 func (r *tenantRegistry) CloseAll() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	clear(r.entries)
+	r.closed = true
 	if r.db == nil {
 		return nil
 	}

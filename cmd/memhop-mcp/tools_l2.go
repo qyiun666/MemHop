@@ -47,7 +47,7 @@ func registerL2Tools(s *mcp.Server, db *memhop.Session) {
 func registerProfileTools(s *mcp.Server, db *memhop.Session) {
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_profile_get",
-		Description: "读取 L0 宿主画像（名称、角色、个性、偏好，以及 Dream 蒸馏出的情绪状态与 MBTI 倾向）。",
+		Description: "读取 L0 宿主画像（名称、角色、个性、偏好，以及 Dream 蒸馏出的情绪状态与 MBTI 倾向）。两组蒸馏信号都是带标度的数：emotion_state 的 valence/arousal/dominance 各在 0..1——valence 0=极负面、0.5=中性、1=极正面，arousal 0=平静、1=高度激动，dominance 0=顺从、1=支配——两端都是合法读数，0 不是「没测过」；mbti 的 i_e/n_s/t_f/j_p 各在 -1..1，负=I/N/T/J、正=E/S/F/P、幅度即强度，type 由这四轴推出（某轴为 0 即在类型词里记 X，四轴全静默就不给类型词）。从未蒸馏过的域两组都是全零、type 为空。",
 		InputSchema: objSchema(nil),
 	}, handleNoArgs[memhop.ProfileSlot](func() (memhop.ProfileSlot, error) {
 		slot, err := db.GetL0()

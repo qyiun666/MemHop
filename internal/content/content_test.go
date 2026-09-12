@@ -160,9 +160,11 @@ func TestReadUtterancesExcludesEvents(t *testing.T) {
 	}
 }
 
-// A hole in Seq is what a reclaimed slot leaves behind. It is a legal end state for
-// an old turn, so the read reports it as two records with a gap in their Seq rather
-// than as a failure — and a reader can tell the two apart afterwards.
+// A hole in Seq is a legal end state for an old turn, and it has two causes this
+// read cannot tell apart: the retention window reclaimed that slot, or the host
+// never wrote it. So the gap is reported as two records with a hole between their
+// Seq values rather than as a failure, and what the gap means is left to a reader
+// that knows its own turn.
 func TestReadReportsSeqGaps(t *testing.T) {
 	engine, ac := newReadFixture(t)
 	const topicID uint64 = 0xfeed

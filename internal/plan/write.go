@@ -45,7 +45,7 @@ func CreateNode(ac *domain.Context, agentID uint64, spec NodeSpec) (uint32, erro
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
-	if _, err := repo.WritePlanNode(ac.Engine, agentID, node); err != nil {
+	if err := repo.WritePlanNode(ac.Engine, agentID, node); err != nil {
 		return 0, err
 	}
 	ac.Plans.UpsertNode(spec.TopicID, node)
@@ -86,7 +86,7 @@ func UpdateNode(ac *domain.Context, agentID uint64, step Step) error {
 		node.FinishedAt = 0
 	}
 	node.UpdatedAt = now
-	if _, err := repo.WritePlanNode(ac.Engine, agentID, node); err != nil {
+	if err := repo.WritePlanNode(ac.Engine, agentID, node); err != nil {
 		return err
 	}
 	ac.Plans.UpsertNode(node.TopicID, node)
@@ -103,7 +103,7 @@ func UpdateNodeSummaryLocked(ac *domain.Context, agentID, nodeID uint64, summary
 	}
 	node.Summary = summary
 	node.UpdatedAt = time.Now().UnixMilli()
-	if _, err := repo.WritePlanNode(ac.Engine, agentID, node); err != nil {
+	if err := repo.WritePlanNode(ac.Engine, agentID, node); err != nil {
 		return err
 	}
 	ac.Plans.UpsertNode(node.TopicID, node)

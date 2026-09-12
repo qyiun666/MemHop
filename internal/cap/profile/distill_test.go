@@ -71,8 +71,8 @@ func TestSamplesRanksBeforeCappingAndBoundsEachRow(t *testing.T) {
 			len(got), maxDistillSamples, weakCount+2)
 	}
 	if got[0].IDHash != freshMid {
-		t.Fatalf("first sample is node %x with importance %v updated %d, want the fresh one: rank discounts age",
-			got[0].IDHash, got[0].Importance, got[0].UpdatedAt)
+		t.Fatalf("first sample is node %x with importance %v, want the fresh one: rank discounts age",
+			got[0].IDHash, got[0].Importance)
 	}
 	for _, s := range got {
 		if s.IDHash == staleStrong {

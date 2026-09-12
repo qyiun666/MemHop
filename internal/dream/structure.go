@@ -72,7 +72,7 @@ func StructureStages(ctx context.Context, ac *domain.Context, agentID uint64, re
 
 	// Stage 5: L0 distillation (LLM emotion/MBTI, backfilled into L1).
 	start = time.Now()
-	ran, dErr := DistillL0Stage(ctx, ac, agentID)
+	ran, dErr := distillL0Stage(ctx, ac, agentID)
 	status := stageStatus(dErr)
 	if dErr == nil {
 		if ran {
@@ -108,10 +108,10 @@ func l1Stages(ctx context.Context, ac *domain.Context, agentID uint64, newL2Meta
 	}
 	rep.L1EdgesAdded += added
 	AppendStage(rep, "l1_hyperedges", start, cErr)
-	if err != nil || cErr != nil {
-		if err != nil {
-			return err
-		}
+	if err != nil {
+		return err
+	}
+	if cErr != nil {
 		return cErr
 	}
 
@@ -147,9 +147,9 @@ func l1Stages(ctx context.Context, ac *domain.Context, agentID uint64, newL2Meta
 	return cErr
 }
 
-// DistillL0Stage runs Dream's L0 distillation (LLM emotion/MBTI, backfilled
+// distillL0Stage runs Dream's L0 distillation (LLM emotion/MBTI, backfilled
 // into L1) and reports whether it ran. Callers hold ac.Mu.
-func DistillL0Stage(ctx context.Context, ac *domain.Context, agentID uint64) (bool, error) {
+func distillL0Stage(ctx context.Context, ac *domain.Context, agentID uint64) (bool, error) {
 	samples := profile.Samples(ac.Engine, agentID)
 	if len(samples) == 0 {
 		return false, nil

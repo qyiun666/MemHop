@@ -99,11 +99,18 @@ func CreateTurnTopicL2(engine *core.StorageEngine, agentID uint64, sceneHash, to
 		AgentTimestamp: agentTS,
 	}
 	stored, err := core.ReadTopicLenient(engine, agentID, topicID)
-	if err != nil && common.CodeOf(err) != common.ErrNotFound {
+	switch {
+	case err != nil && common.CodeOf(err) != common.ErrNotFound:
 		// Nothing stored is this turn's first settle; a record that will not read
 		// back is a turn whose place in the tree nobody knows, and guessing it
 		// could put two versions of one turn on the read path.
 		return nil, err
+	case err == nil && stored == nil:
+		// The address holds a record of another kind. A topic written over it comes
+		// back as a type it never was, and the listing of the kind it was stops
+		// seeing it — the same answer the sink and the fused-parent check give.
+		return nil, common.NewError(common.ErrIO,
+			common.FormatHash(topicID)+" names a record that is not a topic", nil)
 	}
 	if stored != nil {
 		topic.Name = stored.Name

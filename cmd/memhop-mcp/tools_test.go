@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"math"
 	"strings"
 	"testing"
@@ -78,30 +79,64 @@ func TestOkResultCarriesHexIDStrings(t *testing.T) {
 	}
 }
 
-// contentTypeNames is the one vocabulary this package states by hand, so it is
-// where a new engine content type would silently go missing: enumerate the
-// defined values through String() instead of restating the list.
-func TestContentTypeNamesMatchTheEngine(t *testing.T) {
-	defined := map[string]bool{}
-	for i := 0; i <= math.MaxUint8; i++ {
-		name := memhop.ContentType(i).String()
-		if strings.HasPrefix(name, "ContentType(") {
-			continue // not a defined value
-		}
-		defined[name] = true
+// statedNames is the hand-stated half of a vocabulary, reduced to its names.
+func statedNames[T any](m map[string]T) map[string]bool {
+	out := make(map[string]bool, len(m))
+	for name := range m {
+		out[name] = true
 	}
-	if len(defined) == 0 {
-		t.Fatal("no content type resolved — the unknown-value shape changed")
+	return out
+}
+
+// This package states four vocabularies by hand: the content types, the two archive
+// kinds, the six edge kinds and the roles a host may name. Each is a place where a
+// value the engine defines would silently go missing — the tool would refuse a name
+// the library accepts, and no test would notice. The three the engine can enumerate
+// are checked against its own String() in both directions; roles have no engine table
+// to enumerate, so that one runs the other way: this face may name exactly what the
+// public face exports, which is what keeps role 3 — the library's own mark on a fused
+// group's summary, exported under no name at all — out of a host's reach.
+func TestStatedVocabulariesMatchTheEngine(t *testing.T) {
+	defined := func(typeName string, name func(uint8) string) map[string]bool {
+		out := map[string]bool{}
+		for i := 0; i <= math.MaxUint8; i++ {
+			n := name(uint8(i))
+			if strings.HasPrefix(n, typeName+"(") {
+				continue // not a defined value
+			}
+			out[n] = true
+		}
+		if len(out) == 0 {
+			t.Fatalf("%s: no value resolved — the unknown-value shape changed", typeName)
+		}
+		return out
 	}
-	for name := range defined {
-		if _, ok := contentTypeNames[name]; !ok {
-			t.Errorf("engine defines content type %q but memhop_archive_search cannot name it", name)
+	for _, tc := range []struct {
+		vocab           string
+		stated, defined map[string]bool
+	}{
+		{"content type", statedNames(contentTypeNames),
+			defined("ContentType", func(i uint8) string { return memhop.ContentType(i).String() })},
+		{"archive kind", statedNames(kindNames),
+			defined("ArchiveKind", func(i uint8) string { return memhop.ArchiveKind(i).String() })},
+		{"edge kind", statedNames(edgeKindNames),
+			defined("GraphEdgeKind", func(i uint8) string { return memhop.GraphEdgeKind(i).String() })},
+	} {
+		for name := range tc.defined {
+			if !tc.stated[name] {
+				t.Errorf("the engine defines %s %q but this package states no name for it", tc.vocab, name)
+			}
+		}
+		for name := range tc.stated {
+			if !tc.defined[name] {
+				t.Errorf("this package names %s %q, which the engine does not define", tc.vocab, name)
+			}
 		}
 	}
-	for name := range contentTypeNames {
-		if !defined[name] {
-			t.Errorf("contentTypeNames accepts %q, which the engine does not define", name)
-		}
+	if !maps.Equal(roleNames, map[string]uint8{
+		"user": memhop.RoleUser, "agent": memhop.RoleAgent, "system": memhop.RoleSystem,
+	}) {
+		t.Errorf("roleNames = %v, want exactly the three roles the public face exports", roleNames)
 	}
 }
 

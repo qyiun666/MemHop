@@ -70,14 +70,14 @@ func main() {
 		// The database is open by now, and Close is what persists the checkpoints;
 		// a process that stops on a busy port still owes that much.
 		if cerr := reg.CloseAll(); cerr != nil {
-			logger.Error("close databases", "error", cerr)
+			logger.Error("close database", "error", cerr)
 		}
 		os.Exit(1)
 	}
 
-	// Persist every open tenant DB (Close builds the index snapshot first).
+	// Persist the shared database (Close builds the index snapshot first).
 	if cerr := gracefulShutdown(srv, reg, logger); cerr != nil {
-		logger.Error("close databases", "error", cerr)
+		logger.Error("close database", "error", cerr)
 		os.Exit(1)
 	}
 	logger.Info("server exited cleanly")
@@ -115,9 +115,11 @@ func serve(ctx context.Context, srv *http.Server, cfg *serverConfig, logger *slo
 	}
 }
 
-// gracefulShutdown bounds the HTTP drain (SSE sessions hold hanging GETs
-// open, so Shutdown is time-boxed; remaining connections are dropped)
-// then persists and closes every open tenant database.
+// gracefulShutdown bounds the HTTP drain (SSE sessions hold hanging GETs open, so
+// Shutdown is time-boxed: it closes the listener and the idle connections and waits
+// for the rest, and a drain that outlives the bound is reported rather than forced)
+// then persists and closes the shared database. A request that arrives after that
+// meets the closed registry instead of reopening the file nobody would close again.
 func gracefulShutdown(srv *http.Server, reg *tenantRegistry, logger *slog.Logger) error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

@@ -17,11 +17,7 @@ import (
 func GetProfileL0(engine *core.StorageEngine, agentID uint64) (*core.ProfileSlot, error) {
 	slot, err := core.ReadProfileSlot(engine, agentID, common.HashID("profile"))
 	if err != nil {
-		code := common.CodeOf(err)
-		if code == 0 {
-			code = common.ErrIO
-		}
-		return nil, common.NewError(code, "read profile", err)
+		return nil, common.NewError(common.CodeOf(err), "read profile", err)
 	}
 	return slot, nil
 }

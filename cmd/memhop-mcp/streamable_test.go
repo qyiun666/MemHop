@@ -86,7 +86,8 @@ func TestStreamableMultiTenant(t *testing.T) {
 	if listResp["error"] != nil {
 		t.Fatalf("tools/list error: %v", listResp["error"])
 	}
-	// A second tenant gets its own registry entry (isolated .meh file).
+	// A second tenant gets its own registry entry, bound to its own domain inside
+	// the one shared database file.
 	post("bob", "initialize", 1)
 	if len(reg.entries) != 2 {
 		t.Errorf("expected 2 tenant entries, got %d", len(reg.entries))

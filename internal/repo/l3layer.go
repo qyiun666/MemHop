@@ -26,11 +26,14 @@ func ReadSharedGraphL3(engine *core.StorageEngine, hexID string) (*core.Hypergra
 	return core.ReadGraphSlot(engine, core.SharedPoolAgentID, graphID)
 }
 
-// CreateEdgeL3 creates a hyperedge; ID = hash(graphID:nodeIDs:kind). The kind
-// is part of the identity because a node pair can carry several relations at
-// once — hashing the pair alone made "a part of b" overwrite "a related to b".
+// CreateEdgeL3 creates a hyperedge whose id derives from EdgeKeyL3 — one formula
+// for the address and for the semantic key a caller matches on — scoped to the
+// graph, so members must arrive sorted: that is what makes an edge unordered over
+// them, and an unsorted list would address a second edge over the same relation.
+// The kind is part of the identity because a node pair can carry several relations
+// at once — hashing the pair alone made "a part of b" overwrite "a related to b".
 func CreateEdgeL3(engine *core.StorageEngine, agentID uint64, graphID uint64, kind core.GraphEdgeKind, nodeIDs []uint64) (uint64, error) {
-	edgeID := common.HashID(fmt.Sprintf("%s:%v:%d", common.FormatHash(graphID), nodeIDs, kind))
+	edgeID := common.HashID(common.FormatHash(graphID) + ":" + EdgeKeyL3(nodeIDs, kind))
 	if err := l3AddressFree(engine, agentID, edgeID); err != nil {
 		return 0, err
 	}
@@ -72,10 +75,11 @@ func ListEdgeL3(engine *core.StorageEngine, agentID uint64, graphID uint64) []co
 	return out
 }
 
-// CreateGraphL3 imports/creates a hypergraph; ID = hash(name). An address some other
-// record already holds is refused rather than rewritten — see l3AddressFree — so this
-// is safe to call without a prior existence check.
-func CreateGraphL3(engine *core.StorageEngine, agentID uint64, name string) (uint64, error) {
+// createGraphL3 writes a graph slot; ID = hash(name). An address some other
+// record already holds is refused rather than rewritten — see l3AddressFree.
+// EnsureGraphL3 is the exported create: it reuses a slot that is already there,
+// which is what every caller outside this file wants.
+func createGraphL3(engine *core.StorageEngine, agentID uint64, name string) (uint64, error) {
 	graphID := common.HashID(name)
 	if err := l3AddressFree(engine, agentID, graphID); err != nil {
 		return 0, err
@@ -105,7 +109,7 @@ func EnsureGraphL3(engine *core.StorageEngine, agentID uint64, name string) (uin
 	} else if common.CodeOf(err) != common.ErrNotFound {
 		return 0, err
 	}
-	return CreateGraphL3(engine, agentID, name)
+	return createGraphL3(engine, agentID, name)
 }
 
 // DeleteGraphL3 cascades: collects all nodes/edges of the graph plus the

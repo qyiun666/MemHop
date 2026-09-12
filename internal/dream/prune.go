@@ -81,7 +81,7 @@ func PrunePlanStage(ac *domain.Context, agentID uint64, rep *core.DreamReport) {
 		doomed = append(doomed, ids...)
 	}
 	if len(doomed) > 0 {
-		if _, err = repo.DeletePlanNodesByIDs(ac.Engine, agentID, doomed); err != nil {
+		if err = repo.DeletePlanNodesByIDs(ac.Engine, agentID, doomed); err != nil {
 			slog.Warn("dream: plan-node prune failed", "agent", common.FormatHash(agentID), "err", err)
 		} else {
 			for _, s := range sweeps {

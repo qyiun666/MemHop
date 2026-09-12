@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -439,7 +440,9 @@ func TestSSERegistryRejectsPathTraversal(t *testing.T) {
 	}
 }
 
-// TestSSECloseAllPersists checks that CloseAll persists every open tenant.
+// TestSSECloseAllPersists checks that CloseAll persists the one shared database and
+// that shutdown is final: a session still connected when the process stops would
+// otherwise reopen the file, and nothing closes that revived database again.
 func TestSSECloseAllPersists(t *testing.T) {
 	dbDir := t.TempDir()
 	reg := newRegistry(testLLM(t), memhop.MemHopDefaults{}, dbDir, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
@@ -457,6 +460,12 @@ func TestSSECloseAllPersists(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dbDir, "memhop.meh")); err != nil {
 		t.Errorf("expected memhop.meh persisted: %v", err)
+	}
+	if _, err := reg.get("alice"); !errors.Is(err, errRegistryClosed) {
+		t.Errorf("a request after shutdown reopened the shared database: %v", err)
+	}
+	if err := reg.OpenShared(); !errors.Is(err, errRegistryClosed) {
+		t.Errorf("an explicit open after shutdown reopened the shared database: %v", err)
 	}
 }
 

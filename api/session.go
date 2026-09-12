@@ -389,6 +389,12 @@ func (s *Session) SceneContext(sceneID string) (*SceneContext, error) {
 // deleted. Use it when a host resumed one conversation under a new session id.
 // The primary's name and anchor win, and nothing comes back — re-read the
 // primary to see the merged history.
+//
+// Settle before merging. A turn Search opened on a secondary scene and Update
+// never settled has no topic record yet — settling is what writes one — so it is
+// not among the topics this retargets. Its id names a scene that is now gone, the
+// turn can never be settled, and whatever the host appended under it is reclaimed
+// by the retention window like any other transcript.
 func (s *Session) MergeScenes(primaryID string, secondaryIDs []string) error {
 	return s.session.MergeScenes(primaryID, secondaryIDs)
 }

@@ -30,7 +30,7 @@ internal/{domain,scene,turn,dream,graph,plan,content}
 | `domain` | 域状态容器 `Context`（Mu/L2Meta/L4/Plans/DreamInFlight/OpCtx，持 Engine/LLM/Defaults 注入）+ PlanCache + L2Meta 缓存维护（SyncL2Meta/RemoveTopicsFromIndices/RetargetL2Meta）；`L4` 是「话题 → 它名下的内容槽位（原文 + 事件）」的镜像 |
 | `scene` | L2 场景读写面：ResolveForRead（没有场景可读时就在内部新建；交回的是场景 id）/SurfaceTopics/ContextTopic/DeleteCascade/DetachGraph |
 | `turn` | 轮次归属：SettleTarget（可沉淀的轮次范围）、ReadProfile（Search 的 L0 读面）；进来的 hex 键已在根上解析完，本包不碰内容 |
-| `dream` | 巩固阶段：SceneSet、PruneContentStage(`l4_prune`) 与 PrunePlanStage(`l5_prune`)（共用 `ContentRetention` 窗口、各读自己的时间戳）、CompressScenes(+组回滚)、StructureStages、L1 各阶段、DistillL0Stage；调参常量随阶段在此 |
+| `dream` | 巩固阶段：SceneSet、PruneContentStage(`l4_prune`) 与 PrunePlanStage(`l5_prune`)（共用 `ContentRetention` 窗口、各读自己的时间戳）、CompressScenes(+组回滚)、StructureStages、L1 各阶段、distillL0Stage（私有）；调参常量随阶段在此 |
 | `graph` | L3 导入/查询：`ImportBatch`（一次批次的 mode + result + 缓存：domain→图、图→标题集、图→边键，外加两份图集「访问过」/「写过内容」；方法 ImportNode/ImportRelations/GraphIDs/StampChanged）、NodeFilter.Matches/ResolveSubgraphStart/SubgraphAdjacency/BfsWithinDepth/AllNodesVisited |
 | `plan` | L5 计划树机制（一棵树归属于打开它的轮次；L5 只剩节点记录）：PlanStatus 面（单张词表、双向都查它）、NodeSpec/Step 两个入参形状、CreateNode/UpdateNode/UpdateNodeSummaryLocked、BuildTree/Forest/ToNodeView/RollupTree |
 | `content` | 话题内容与键：ParseTopicID（轮次键的解析与拒零，读写两侧共用）、ValidateAppend（两种 Kind 各自的写入契约）、Append（宿主侧写一条内容的唯一入口，必要时跨 Kind 分配 Seq）、Read（按 Kind 读回）、RenderForDistill（把一个话题的原文渲染成提炼读的转录）、MaxEventPayload/MaxUtterancePayload |
@@ -181,8 +181,9 @@ internal/{domain,scene,turn,dream,graph,plan,content}
   的错误返回 0，而 0 是「成功」那一档，一次不带码的拒绝等于没有结论。两处由此
   收口：帧解码器的 `io.EOF` 只对逐帧扫描有意义（「扫到这里为止」），按 id 读时
   它说的是索引点名了一条记录区里并不存在的记录，于是翻译成 `ErrCorruption`；
-  Dream 的「一个场景都没巩固成」带 `ErrLLM`，而上下文已经取消时如实说取消——
-  把一次取消报成模型失败，宿主就会去查错东西。**取消有自己的一档
+  Dream 的「一个场景都没巩固成」带 `ErrLLM`，上下文已经取消时如实说取消，而**引擎自己
+  拒掉的那一组原样上抛它那一档**（`ErrIO` 就是写失败）——
+  把一次取消或一次写失败报成模型失败，宿主就会去查一个从没拒绝过它的端点。**取消有自己的一档
   `ErrCancelled`（5008）**：Dream 的每个检查点、LLM 传输里被调用方撤掉的等待
   （请求在途与退避等待两条都算）都报它，cause 留着 `ctx.Err()`，
   `errors.Is(err, context.Canceled)` 照旧成立。

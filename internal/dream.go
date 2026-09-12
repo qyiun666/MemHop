@@ -48,11 +48,17 @@ func (db *DB) RunDream(ctx context.Context, agentID uint64, sceneID uint64) (*Dr
 	}
 
 	start := time.Now()
-	succeeded, failures := dream.CompressScenes(ctx, ac, scenes, rep)
-	if len(succeeded) == 0 && failures > 0 {
+	succeeded, unusable, failed := dream.CompressScenes(ctx, ac, scenes, rep)
+	if failed != nil {
+		// An engine refusal keeps the code it came with: a host told "the model
+		// failed" would go check an endpoint that answered every call it was sent.
+		dream.AppendStage(rep, "l2_compress", start, failed)
+		return rep, common.NewError(common.CodeOf(failed), "dream: consolidation", failed)
+	}
+	if len(succeeded) == 0 && unusable > 0 {
 		// A cancelled pass fails every scene's call at once, and a host told "the
 		// model failed" would go check the model.
-		err := common.NewError(common.ErrLLM, "dream: LLM consolidation failed for all scenes")
+		err := common.NewError(common.ErrLLM, "dream: consolidation produced nothing usable for any scene")
 		if cerr := ctx.Err(); cerr != nil {
 			err = common.NewError(common.ErrCancelled,
 				"dream: consolidation cancelled before any scene finished", cerr)

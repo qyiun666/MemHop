@@ -338,6 +338,26 @@ func TestCreateTurnTopicL2RefusesUndecodableRecord(t *testing.T) {
 	}
 }
 
+// One id names exactly one record kind, and the whole domain shares one address
+// space, so the lenient read's "there is a record here and it is not a topic"
+// answer must stop the settle: writing over it converts that record, and the
+// listing of the kind it was stops seeing it.
+func TestCreateTurnTopicL2RefusesAForeignRecordAtTheTurnAddress(t *testing.T) {
+	engine := tempEngine(t)
+	const sceneID = uint64(7)
+	topicID := core.ComputeTurnTopicID(sceneID, 1)
+	foreign := core.ArchiveSlot{IDHash: topicID, TopicID: topicID, Seq: core.SeqUser, Content: "not a topic"}
+	if err := core.WriteArchiveSlot(engine, core.DefaultAgentID, topicID, &foreign); err != nil {
+		t.Fatalf("seed a foreign record at the turn address: %v", err)
+	}
+	if _, err := CreateTurnTopicL2(engine, core.DefaultAgentID, sceneID, topicID, []string{"登录"}, 1000, 1001); common.CodeOf(err) != common.ErrIO {
+		t.Fatalf("a settle over another kind's record must refuse by code, got %v", err)
+	}
+	if _, err := core.ReadArchiveSlot(engine, core.DefaultAgentID, topicID); err != nil {
+		t.Fatalf("a refused settle must leave the record it found: %v", err)
+	}
+}
+
 // Two topics at the same depth can share one user timestamp — a fused parent is
 // stamped with its group's earliest turn's timestamp, so any same-depth topic
 // holding that instant ties with it on both sort keys. Ties have to break on

@@ -47,12 +47,15 @@ type SceneNode struct {
 	// Valence/Arousal are the emotion signals a distillation computed for this
 	// scene, each on [0,1]: valence 0 = very negative, 0.5 = neutral,
 	// 1 = very positive; arousal 0 = calm, 1 = highly excited. Both ends are
-	// readings a node can legitimately carry, so 0 here is not "no emotion".
-	Valence   float64  `json:"valence"`
-	Arousal   float64  `json:"arousal"`
-	CreatedAt int64    `json:"created_at"`
-	UpdatedAt int64    `json:"updated_at"`
-	EdgeIDs   []uint64 `json:"edge_ids"`
+	// readings a node can legitimately carry, so 0 here is not "no emotion" and
+	// the values cannot say whether any pass ever answered: EmotionSet is that
+	// signal, and a node without it has never been stamped.
+	Valence    float64  `json:"valence"`
+	Arousal    float64  `json:"arousal"`
+	EmotionSet bool     `json:"emotion_set,omitempty"`
+	CreatedAt  int64    `json:"created_at"`
+	UpdatedAt  int64    `json:"updated_at"`
+	EdgeIDs    []uint64 `json:"edge_ids"`
 }
 
 // SceneEdge is an L1 hyperedge over a set of member nodes, carrying a weight

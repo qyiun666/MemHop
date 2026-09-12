@@ -7,6 +7,7 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/qyiun666/MemHop/internal/cap/llmops"
 	"github.com/qyiun666/MemHop/internal/common"
@@ -63,9 +64,12 @@ func TestApplyGroupsRejectsOverlappingGroups(t *testing.T) {
 		{NodeHashes: []uint64{12, 13}, MergedSummary: "两轮都在追同一个 token 问题"},
 	}}
 
-	applied, rejected := applyGroups(context.Background(), ac, sceneID, topics, out)
-	if applied != 1 || rejected != 1 {
-		t.Fatalf("one group must land and the overlapping one must be refused, got applied=%d rejected=%d", applied, rejected)
+	got, err := applyGroups(context.Background(), ac, sceneID, topics, out)
+	if err != nil {
+		t.Fatalf("applyGroups: %v", err)
+	}
+	if got.groups != 1 || got.topics != 2 || got.unusable != 1 {
+		t.Fatalf("one group must land over its two members and the overlapping one must be refused, got %+v", got)
 	}
 
 	shared, err := core.ReadTopicSlot(engine, core.DefaultAgentID, 12)
@@ -131,9 +135,12 @@ func TestApplyGroupsRefusesCollidingParentID(t *testing.T) {
 		{NodeHashes: []uint64{21, 22}, MergedSummary: "第一组：登录链路"},
 		{NodeHashes: []uint64{23, 24}, MergedSummary: "第二组：完全不同的话题，但时间界一模一样"},
 	}}
-	applied, rejected := applyGroups(context.Background(), ac, sceneID, topics, out)
-	if applied != 1 || rejected != 1 {
-		t.Fatalf("the colliding group must be refused, got applied=%d rejected=%d", applied, rejected)
+	got, err := applyGroups(context.Background(), ac, sceneID, topics, out)
+	if err != nil {
+		t.Fatalf("applyGroups: %v", err)
+	}
+	if got.groups != 1 || got.unusable != 1 {
+		t.Fatalf("the colliding group must be refused, got %+v", got)
 	}
 
 	collisionParent := core.ComputeTopicID(sceneID, 1000, 2000)
@@ -195,9 +202,9 @@ func TestApplyGroupsRollsBackTheGroupWhenASinkRefuses(t *testing.T) {
 	out := &llmops.ConsolidationOutput{L2Groups: []llmops.L2Group{
 		{NodeHashes: []uint64{31, 32}, MergedSummary: "两轮把登录链路讲完"},
 	}}
-	applied, rejected := applyGroups(context.Background(), ac, sceneID, topics, out)
-	if applied != 0 || rejected != 1 {
-		t.Fatalf("a group whose sink refused must be rejected, got applied=%d rejected=%d", applied, rejected)
+	got, sinkErr := applyGroups(context.Background(), ac, sceneID, topics, out)
+	if common.CodeOf(sinkErr) != common.ErrIO || got.groups != 0 {
+		t.Fatalf("a group whose sink refused must come back as that refusal under its own code, got %+v err=%v", got, sinkErr)
 	}
 
 	parentID := core.ComputeTopicID(sceneID, 1000, 2001)
@@ -241,9 +248,12 @@ func TestApplyGroupsRefusesAGroupItCannotSeeWhole(t *testing.T) {
 	out := &llmops.ConsolidationOutput{L2Groups: []llmops.L2Group{
 		{NodeHashes: []uint64{41, 42}, MergedSummary: "两轮的内容，其中一轮引擎看不见"},
 	}}
-	applied, rejected := applyGroups(context.Background(), ac, sceneID, []core.TopicSlot{seen}, out)
-	if applied != 0 || rejected != 1 {
-		t.Fatalf("a group with an unseen member must be refused, got applied=%d rejected=%d", applied, rejected)
+	got, err := applyGroups(context.Background(), ac, sceneID, []core.TopicSlot{seen}, out)
+	if err != nil {
+		t.Fatalf("applyGroups: %v", err)
+	}
+	if got.groups != 0 || got.unusable != 1 {
+		t.Fatalf("a group with an unseen member must be refused, got %+v", got)
 	}
 	if stored, err := core.ReadTopicLenient(engine, core.DefaultAgentID,
 		core.ComputeTopicID(sceneID, 1000, 2001)); common.CodeOf(err) != common.ErrNotFound || stored != nil {
@@ -282,9 +292,12 @@ func TestApplyGroupsCountsADegenerateGroupAsProposedButUnapplied(t *testing.T) {
 	out := &llmops.ConsolidationOutput{L2Groups: []llmops.L2Group{
 		{NodeHashes: []uint64{51}, MergedSummary: "一轮自己算一组"},
 	}}
-	applied, rejected := applyGroups(context.Background(), ac, sceneID, []core.TopicSlot{alone}, out)
-	if applied != 0 || rejected != 1 {
-		t.Fatalf("a degenerate group is proposed-but-unapplied, got applied=%d rejected=%d", applied, rejected)
+	got, err := applyGroups(context.Background(), ac, sceneID, []core.TopicSlot{alone}, out)
+	if err != nil {
+		t.Fatalf("applyGroups: %v", err)
+	}
+	if got.groups != 0 || got.unusable != 1 {
+		t.Fatalf("a degenerate group is proposed-but-unapplied, got %+v", got)
 	}
 	member, err := core.ReadTopicSlot(engine, core.DefaultAgentID, 51)
 	if err != nil {
@@ -322,10 +335,10 @@ func TestAFusedParentFoldsIntoALaterGroup(t *testing.T) {
 	ctx := context.Background()
 
 	first := []core.TopicSlot{writeTurn(61, 1000), writeTurn(62, 1001)}
-	if applied, rejected := applyGroups(ctx, ac, sceneID, first, &llmops.ConsolidationOutput{
+	if got, err := applyGroups(ctx, ac, sceneID, first, &llmops.ConsolidationOutput{
 		L2Groups: []llmops.L2Group{{NodeHashes: []uint64{61, 62}, MergedSummary: "两轮讲完登录链路"}},
-	}); applied != 1 || rejected != 0 {
-		t.Fatalf("first pass: applied=%d rejected=%d", applied, rejected)
+	}); err != nil || got.groups != 1 || got.topics != 2 || got.unusable != 0 {
+		t.Fatalf("first pass: %+v err=%v", got, err)
 	}
 	parent, err := core.ReadTopicSlot(engine, core.DefaultAgentID, core.ComputeTopicID(sceneID, 1000, 2001))
 	if err != nil {
@@ -336,10 +349,10 @@ func TestAFusedParentFoldsIntoALaterGroup(t *testing.T) {
 	}
 
 	second := []core.TopicSlot{*parent, writeTurn(63, 1002)}
-	if applied, rejected := applyGroups(ctx, ac, sceneID, second, &llmops.ConsolidationOutput{
+	if got, err := applyGroups(ctx, ac, sceneID, second, &llmops.ConsolidationOutput{
 		L2Groups: []llmops.L2Group{{NodeHashes: []uint64{parent.ID, 63}, MergedSummary: "三轮都在追同一个 token"}},
-	}); applied != 1 || rejected != 0 {
-		t.Fatalf("second pass: applied=%d rejected=%d", applied, rejected)
+	}); err != nil || got.groups != 1 || got.unusable != 0 {
+		t.Fatalf("second pass: %+v err=%v", got, err)
 	}
 
 	folded, err := core.ReadTopicSlot(engine, core.DefaultAgentID, parent.ID)
@@ -359,5 +372,52 @@ func TestAFusedParentFoldsIntoALaterGroup(t *testing.T) {
 			t.Fatalf("the folded group's own children must stay where they were, level with it: depth=%d parent=%v",
 				child.Depth, child.ParentID)
 		}
+	}
+}
+
+// The summary is the one text a consolidation produces, and its members are already
+// sunk by the time it lands. Stamped with the group's own last turn, a fold of turns
+// that are past the retention window writes a summary already older than the cutoff:
+// the sweep at the head of the next pass deletes it on arrival, and the scene keeps
+// the keyword track with nothing behind it.
+func TestFusedSummaryOutlivesTheTurnsItFolded(t *testing.T) {
+	engine, err := core.Create(filepath.Join(t.TempDir(), "test.meh"))
+	if err != nil {
+		t.Fatalf("create engine: %v", err)
+	}
+	t.Cleanup(func() { _ = engine.Close() })
+
+	const sceneID = uint64(7)
+	first := time.Now().Add(-ContentRetention - time.Hour)
+	last := first.Add(time.Minute)
+	writeTurn := func(id uint64, at time.Time) core.TopicSlot {
+		topic := core.TopicSlot{
+			ID: id, SceneID: sceneID, Depth: 1, FusedKeywords: []string{"登录"},
+			UserTimestamp: at.UnixMilli(), AgentTimestamp: at.UnixMilli(),
+		}
+		if err := core.WriteTopicSlot(engine, core.DefaultAgentID, id, &topic); err != nil {
+			t.Fatalf("write topic %d: %v", id, err)
+		}
+		return topic
+	}
+	topics := []core.TopicSlot{writeTurn(71, first), writeTurn(72, last)}
+	ac := domain.NewContext(core.DefaultAgentID, context.Background(), engine, anyKeywords{}, &config.MemHopDefaults{})
+
+	out := &llmops.ConsolidationOutput{L2Groups: []llmops.L2Group{
+		{NodeHashes: []uint64{71, 72}, MergedSummary: "两轮把登录链路讲完"},
+	}}
+	if got, err := applyGroups(context.Background(), ac, sceneID, topics, out); err != nil || got.groups != 1 {
+		t.Fatalf("fold the group: %+v err=%v", got, err)
+	}
+
+	PruneContentStage(ac, core.DefaultAgentID, &core.DreamReport{})
+
+	parentID := core.ComputeTopicID(sceneID, first.UnixMilli(), last.UnixMilli())
+	summary, err := core.ReadArchiveSlot(engine, core.DefaultAgentID, core.HashContent(parentID, core.SeqUser))
+	if err != nil {
+		t.Fatalf("the next pass took the summary this one wrote: %v", err)
+	}
+	if summary.Content != "两轮把登录链路讲完" {
+		t.Fatalf("summary = %q, want the text the group proposed", summary.Content)
 	}
 }

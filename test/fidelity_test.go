@@ -279,7 +279,7 @@ func TestDreamCompressionFidelity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Dream: %v", err)
 	}
-	t.Logf("Dream consolidated=%d compressed_groups=%d stages=%d", rep.ConsolidatedScenes, rep.L2TopicsCompressed, len(rep.Stages))
+	t.Logf("Dream consolidated=%d topics_compressed=%d stages=%d", rep.ConsolidatedScenes, rep.L2TopicsCompressed, len(rep.Stages))
 
 	after, err := db.Search(memhop.SearchQuery{SceneID: sceneID})
 	if err != nil {

@@ -121,25 +121,28 @@ func sortedIDs(set map[uint64]struct{}) []uint64 {
 }
 
 // BackfillL1Emotions stamps the emotion signals a distillation computed onto the
-// nodes that carry none yet and leaves a node that already has them alone, so a
-// later pass never overwrites what an earlier one settled. A node it cannot read
-// aborts the pass with that cause: an absent node and an unreadable one both stop
-// the backfill, but they are not the same fact to report.
+// nodes no pass has stamped yet and leaves a stamped node alone, so a later pass
+// never overwrites what an earlier one settled. The test is the node's own marker
+// and not its values: both ends of the scale are readings a node can legitimately
+// carry, so one distilled to (0,0) — very negative and calm — is indistinguishable
+// from an unstamped one by value alone, and stamping it again both replaces a
+// settled reading and restarts the clock it decays on. A node it cannot read aborts
+// the pass with that cause: an absent node and an unreadable one both stop the
+// backfill, but they are not the same fact to report.
 func BackfillL1Emotions(engine *core.StorageEngine, agentID uint64, perNode map[uint64]core.NodeEmotion) error {
 	for id, em := range perNode {
 		node, err := core.ReadSceneNode(engine, agentID, id)
 		if err != nil {
 			return fmt.Errorf("backfill L1 emotions: node %s: %w", common.FormatHash(id), err)
 		}
-		if node.Valence == em.Valence && node.Arousal == em.Arousal {
-			continue // nothing to backfill: rewriting it would reset the clock this node decays on
-		}
-		if node.Valence != 0 || node.Arousal != 0 {
+		if node.EmotionSet {
 			continue
 		}
-		node.Valence = em.Valence
-		node.Arousal = em.Arousal
-		node.UpdatedAt = time.Now().UnixMilli()
+		moved := node.Valence != em.Valence || node.Arousal != em.Arousal
+		node.Valence, node.Arousal, node.EmotionSet = em.Valence, em.Arousal, true
+		if moved {
+			node.UpdatedAt = time.Now().UnixMilli()
+		}
 		if err := core.WriteSceneNode(engine, agentID, id, node); err != nil {
 			return fmt.Errorf("backfill L1 emotions: node %s: %w", common.FormatHash(id), err)
 		}

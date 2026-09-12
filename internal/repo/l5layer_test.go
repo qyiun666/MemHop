@@ -18,7 +18,7 @@ func TestWritePlanNode_KeepsHashPlanNodeID(t *testing.T) {
 		IDHash: id, TopicID: 9, Seq: 12, ParentSeq: 3,
 		Status: core.StatusInProgress, UpdatedAt: 100,
 	}
-	if _, err := WritePlanNode(engine, agentID, node); err != nil {
+	if err := WritePlanNode(engine, agentID, node); err != nil {
 		t.Fatal(err)
 	}
 	got, err := core.ReadPlanNode(engine, agentID, id)
@@ -38,7 +38,7 @@ func TestWritePlanNodeRejectsAForeignID(t *testing.T) {
 	node := &core.PlanNode{
 		IDHash: core.HashPlanNode(9, 2), TopicID: 9, Seq: 1,
 	}
-	if _, err := WritePlanNode(engine, core.DefaultAgentID, node); err == nil {
+	if err := WritePlanNode(engine, core.DefaultAgentID, node); err == nil {
 		t.Fatal("an id that does not match the node's own topic/seq must be refused")
 	}
 }
@@ -50,7 +50,7 @@ func TestWritePlanNodeRejectsZeroSeq(t *testing.T) {
 	node := &core.PlanNode{
 		IDHash: core.HashPlanNode(9, 0), TopicID: 9,
 	}
-	if _, err := WritePlanNode(engine, core.DefaultAgentID, node); err == nil {
+	if err := WritePlanNode(engine, core.DefaultAgentID, node); err == nil {
 		t.Fatal("step ordinal 0 is not an address and must be refused")
 	}
 }
@@ -67,7 +67,7 @@ func TestPlanNodeAndContentCoexistUnderOneTopic(t *testing.T) {
 		t.Fatalf("plan node id %d must not collide with content id %d", nodeID, contentID)
 	}
 	node := &core.PlanNode{IDHash: nodeID, TopicID: 9, Seq: 1, Status: core.StatusInProgress}
-	if _, err := WritePlanNode(engine, agentID, node); err != nil {
+	if err := WritePlanNode(engine, agentID, node); err != nil {
 		t.Fatal(err)
 	}
 	if err := core.WriteArchiveSlot(engine, agentID, contentID, &core.ArchiveSlot{
@@ -104,7 +104,7 @@ func TestCollectPlanNodesGroupsTrees(t *testing.T) {
 		{IDHash: core.HashPlanNode(3, 1), TopicID: 3, Seq: 1, Status: core.StatusDone, UpdatedAt: 50},
 	}
 	for _, n := range nodes {
-		if _, err := WritePlanNode(engine, agentID, n); err != nil {
+		if err := WritePlanNode(engine, agentID, n); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -148,7 +148,7 @@ func TestPlanNodeIDsByTopicIDsTakesWholeTrees(t *testing.T) {
 		{IDHash: core.HashPlanNode(9, 2), TopicID: 9, Seq: 2, ParentSeq: 1},
 		{IDHash: core.HashPlanNode(10, 1), TopicID: 10, Seq: 1},
 	} {
-		if _, err := WritePlanNode(engine, agentID, n); err != nil {
+		if err := WritePlanNode(engine, agentID, n); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -159,9 +159,8 @@ func TestPlanNodeIDsByTopicIDsTakesWholeTrees(t *testing.T) {
 	if len(ids) != 2 {
 		t.Fatalf("enumerated %v, want the two nodes of topic 9", ids)
 	}
-	n, err := DeletePlanNodesByIDs(engine, agentID, ids)
-	if err != nil || n != 2 {
-		t.Fatalf("delete the enumerated nodes: %d/%v", n, err)
+	if err := DeletePlanNodesByIDs(engine, agentID, ids); err != nil {
+		t.Fatalf("delete the enumerated nodes: %v", err)
 	}
 	left, err := CollectPlanNodes(engine, agentID)
 	if err != nil {
@@ -187,7 +186,7 @@ func TestPlanNodeScansReportAnUnreadableNode(t *testing.T) {
 		{IDHash: core.HashPlanNode(9, 1), TopicID: 9, Seq: 1},
 		{IDHash: victim, TopicID: 10, Seq: 1},
 	} {
-		if _, err := WritePlanNode(engine, agentID, n); err != nil {
+		if err := WritePlanNode(engine, agentID, n); err != nil {
 			t.Fatal(err)
 		}
 	}

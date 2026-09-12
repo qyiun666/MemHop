@@ -28,8 +28,8 @@ const distillPersonalityMaxRunes = 160
 
 // L1Sample is a distill input assembled from an L1 node and its topics (keywords
 // come from linked L2 topics). It is the sample the ranking pass produces, not a
-// second shape for the prompt: the prompt reads the id, importance and keywords,
-// while UpdatedAt is what the ranking consumed on the way in.
+// second shape for the prompt: the prompt reads every field it carries, and the
+// node clock the ranking consumed stays on the record it came from.
 type L1Sample = core.DistillSample
 
 type EmotionScore = core.EmotionScore

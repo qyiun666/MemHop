@@ -142,9 +142,9 @@ func (db *DB) MergeScenes(agentID uint64, primaryID string, secondaryIDs []strin
 	if err != nil {
 		return common.NewError(common.ErrInvalidQuery, "parse primary scene id", err)
 	}
-	hashes, ok := common.ParseAll(secondaryIDs)
-	if !ok {
-		return common.NewError(common.ErrInvalidQuery, "parse secondary scene ids")
+	hashes, err := common.ParseAll(secondaryIDs)
+	if err != nil {
+		return common.NewError(common.ErrInvalidQuery, "parse secondary scene ids", err)
 	}
 	if len(hashes) == 0 {
 		return common.NewError(common.ErrInvalidQuery, "secondary scene ids are required")
