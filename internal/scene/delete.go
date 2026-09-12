@@ -18,7 +18,9 @@ import (
 // scene and topic tombstones last. Past that last write the caller's own entry
 // stops finding the scene it asked to delete, so a pass interrupted there would
 // leave a scene no path can delete again while its cache still lists the topics
-// under it. Mirrors go after the disk agrees.
+// under it. Of the mirrors, only L2Meta and the plan tree wait for the last
+// tombstone; the content mirror goes with the content it mirrors, inside
+// DeleteTopicArchives.
 // Callers hold ac.Mu.
 func DeleteCascade(ac *domain.Context, agentID uint64, scenes, topics []uint64) error {
 	planNodes, err := repo.PlanNodeIDsByTopicIDs(ac.Engine, agentID, topics)

@@ -76,12 +76,10 @@ func newMockLLM(t *testing.T) *mockLLM {
 // in the consolidate user prompt ("- id=... depth=..." lines).
 func consolidateReply(user string) string {
 	idRe := regexp.MustCompile(`id=(\d+)`)
-	sceneRe := regexp.MustCompile(`## scene_id = (\d+)`)
 	ids := idRe.FindAllStringSubmatch(user, -1)
-	scene := sceneRe.FindStringSubmatch(user)
-	if len(scene) == 0 || len(ids) < 2 {
-		return `{"l2_groups":[],"l2_compression_needed":false}`
+	if len(ids) < 2 {
+		return `{"l2_groups":[]}`
 	}
-	return fmt.Sprintf(`{"l2_groups":[{"scene_id":%s,"node_hashes":[%s,%s],"merged_summary":"合并摘要保留全部细节"}],"l2_compression_needed":true}`,
-		scene[1], ids[0][1], ids[1][1])
+	return fmt.Sprintf(`{"l2_groups":[{"node_hashes":[%s,%s],"merged_summary":"合并摘要保留全部细节"}]}`,
+		ids[0][1], ids[1][1])
 }

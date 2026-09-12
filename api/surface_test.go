@@ -24,14 +24,14 @@ import (
 )
 
 // stubLLM returns one union JSON that satisfies every response parser
-// (keywords / l2_groups / emotion / mbti / capabilities) with empty merge
-// groups and capabilities, so consolidation / crystallize are no-ops.
+// (keywords / l2_groups / emotion+mbti+per_node) with empty merge groups, so
+// consolidation is a no-op.
 func stubLLM() *httptest.Server {
 	content := `{"keywords":["alpha","beta"],` +
-		`"l2_groups":[],"l2_compression_needed":false,` +
+		`"l2_groups":[],` +
 		`"emotion":{"valence":0.2,"arousal":0.3,"dominance":0.1},` +
 		`"mbti":{"i_e":0.4,"n_s":-0.2,"t_f":0.1,"j_p":-0.3,"type":"ENTJ"},` +
-		`"per_node":[],"capabilities":[]}`
+		`"per_node":[]}`
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
 			http.NotFound(w, r)

@@ -5,6 +5,7 @@ package llmops
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
@@ -176,19 +177,25 @@ func (s *budgetSpy) MaxOutputTokens() int { return s.ceiling }
 
 // An endpoint configured for 64 output tokens refuses a request for 8192 outright,
 // so no rung of any ladder may ask above the ceiling — the ladder that used to end
-// at the consolidation constant failed the turn it was meant to rescue.
+// at the consolidation constant failed the turn it was meant to rescue. The shape
+// is part of the contract too: three widening budgets and then the format-constrained
+// retry at the widest of them, which is the rung a dropped ladder loses first.
 func TestKeywordLadderStaysWithinTheConfiguredCeiling(t *testing.T) {
-	spy := &budgetSpy{ceiling: 64}
-	if _, err := ExtractKeywords(context.Background(), spy, "今天把存储层跑通了"); err == nil {
-		t.Fatal("the spy never answers in JSON; extraction must report that")
-	}
-	if len(spy.calls) < 3 {
-		t.Fatalf("the ladder did not run: %v", spy.calls)
-	}
-	for _, asked := range spy.calls {
-		if asked > spy.ceiling {
-			t.Fatalf("asked for %d output tokens above the configured ceiling %d: %v",
-				asked, spy.ceiling, spy.calls)
+	for _, tc := range []struct {
+		ceiling int
+		want    []int
+	}{
+		{ceiling: 64, want: []int{64, 64, 64, 64}},
+		{ceiling: 1024, want: []int{512, 1024, 1024, 1024}},
+		{ceiling: 8192, want: []int{512, 4096, 8192, 8192}},
+		{ceiling: 16384, want: []int{512, 4096, 8192, 8192}},
+	} {
+		spy := &budgetSpy{ceiling: tc.ceiling}
+		if _, err := ExtractKeywords(context.Background(), spy, "今天把存储层跑通了"); err == nil {
+			t.Fatalf("ceiling %d: the spy never answers in JSON; extraction must report that", tc.ceiling)
+		}
+		if !slices.Equal(spy.calls, tc.want) {
+			t.Fatalf("ceiling %d: ladder = %v, want %v", tc.ceiling, spy.calls, tc.want)
 		}
 	}
 }
