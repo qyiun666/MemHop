@@ -124,3 +124,48 @@ func TestRemoveNodeFromEdgeToleratesGoneEdge(t *testing.T) {
 		t.Fatal("an edge that was never there cannot be deleted")
 	}
 }
+
+// A node a scene delete took away between two Dreams leaves the co-occurrence edge
+// naming it: the rebuild walks the nodes that exist, so nothing else ever trims
+// that member, and the edge goes on reporting a pairing with a record the domain
+// does not hold.
+func TestDecayOneEdgeDropsAMemberThatIsGone(t *testing.T) {
+	engine, err := core.Create(filepath.Join(t.TempDir(), "decay.meh"))
+	if err != nil {
+		t.Fatalf("create engine: %v", err)
+	}
+	t.Cleanup(func() { _ = engine.Close() })
+
+	const (
+		edgeID = uint64(0xE3)
+		goneID = uint64(11)
+		liveID = uint64(12)
+	)
+	if err := core.WriteSceneNode(engine, core.DefaultAgentID, liveID, &core.SceneNode{
+		IDHash: liveID, SceneID: 2, TopicIDs: []uint64{1}, CreatedAt: 1000, Importance: 1,
+	}); err != nil {
+		t.Fatalf("write the surviving node: %v", err)
+	}
+	edge := &core.SceneEdge{IDHash: edgeID, Kind: core.HyperCoOccurrence,
+		NodeIDs: []uint64{goneID, liveID}, Weight: 0.9, CreatedAt: 1000}
+	if err := core.WriteSceneEdge(engine, core.DefaultAgentID, edgeID, edge); err != nil {
+		t.Fatalf("write the edge: %v", err)
+	}
+
+	rep := &DecayReport{}
+	if err := decayOneEdge(engine, core.DefaultAgentID,
+		&DecayParams{LambdaEdge: 0.02, EdgeRemoveThreshold: 0.05, MinEdgeNodes: 1},
+		edge, edgeID, map[uint64]bool{}, 1000, rep); err != nil {
+		t.Fatalf("decay one edge: %v", err)
+	}
+	got, err := core.ReadSceneEdge(engine, core.DefaultAgentID, edgeID)
+	if err != nil {
+		t.Fatalf("read the edge back: %v", err)
+	}
+	if len(got.NodeIDs) != 1 || got.NodeIDs[0] != liveID {
+		t.Fatalf("the edge still names a node the domain does not hold: %v", got.NodeIDs)
+	}
+	if rep.RemovedEdges != 0 {
+		t.Fatalf("an edge that kept a member is not a removed edge: %+v", rep)
+	}
+}

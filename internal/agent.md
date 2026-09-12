@@ -37,9 +37,9 @@ internal/{domain,scene,turn,dream,graph,plan,content}
 
 ## agentContext（domain.Context）域级锁纪律
 
-1. **先域锁后存储**：所有大方法统一走 `db.lockAgent(agentID)`（内部：
-   `contextFor` 取域 + `ac.Mu.Lock()` + 锁内复检库未关），再调小
-   方法；引擎自带的锁在内层，顺序不可颠倒。同 agent 串行、跨 agent 并行。
+1. **先域锁后存储**：所有大方法统一走 `db.lockAgent(agentID)`（内部：`contextFor`
+   取域 + `ac.Mu.Lock()` + 锁内复检库未关、且该上下文未被空闲回收——见第 4 条的
+   标记），再调小方法；引擎自带的锁在内层，顺序不可颠倒。同 agent 串行、跨 agent 并行。
    `contextFor` 对非默认域校验注册表：未注册的 agentID 直接
    `ErrAgentNotFound`。
    轮次键的写读面（`AppendArchive`、计划族、`Update` 的结算）统一走
@@ -69,7 +69,10 @@ internal/{domain,scene,turn,dream,graph,plan,content}
 4. **空闲回收**：无后台定时器；`contextFor` 顺带清扫超
    `Defaults.AgentIdleTTLMs` 未访问的域（默认域与共享 L3 域豁免），回收前先对域锁
    `TryLock`：锁被占用（在飞操作）或 `dreamInFlight` 非空则跳过，留待下轮。
-   回收时不快照任何东西：L2Meta 在下次访问时从记录重建，数据始终在文件里。
+   摘除与 `ac.Reclaimed` 打标在**同一个持锁区间内**完成：调用方可能已经取到上下文、
+   却在取锁前被调度出去，超过 TTL 后回收就会插进这两步之间——没有这个标记，那次操作
+   会写在一份已作废的缓存上，而 `lockAgent` 复检到标记就重取域。回收时不快照任何东西：
+   L2Meta 在下次访问时从记录重建，数据始终在文件里。
 5. **planCache 域内索引**：L5 计划聚合缓存 `ac.Plans`（`domain` 包）
    **不内置锁**，完全依赖 `ac.Mu` 串行（区别于自带 RWMutex 的 `L4Index`）。
    所有计划写路径（节点增删改、Dream 清理）必须先取 `ac.Mu` 再同步缓存；
@@ -317,6 +320,13 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    删除面其余各口同此：`DeleteScene`/`DeleteTopic`/`DeleteL3` 都先回读确认目标
    存在（不认识的 id 正是 `CheckSession` 拒的那类 id）——没有一处把「记录不在」
    当成成功返回。
+   **一个场景结束它的两种写法都要带走它的 L1 节点**：`DeleteScene` 删完记录就
+   `repo.DeleteSceneNodeL1`，`MergeScenes` 在验完 id 之后、写之前先删掉每个次场景的
+   节点（先删才谈得上可重试：合并被拒时场景还活着，下一次 Dream 会把节点建回来）。
+   合并只把话题改挂到主场景上，而 `engram.RebuildFromL2` 判陈旧看的是节点自己的
+   `TopicIDs`——那些话题条条读得回来，于是留下来的节点永远顶着一批不再属于它的轮次，
+   继续参与共现建边与 L0 蒸馏。它的共现边由下一次 Dream 的衰减剪掉：`decayOneEdge`
+   按「本域还持有这个节点吗」过滤成员，不再只看本轮刚删掉的那几个。
 14. **`SceneContext` 的说话顺序是读出来的语义**：融合父话题的时间戳就是它吞掉
    的第一轮的 `UserTimestamp`，两者必然同值，所以排序在时间戳之后加
    `Depth` 次键（浅的在前）。只按时间戳排时 `slices.SortFunc` 不稳定，一组的

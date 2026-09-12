@@ -40,6 +40,11 @@ type Context struct {
 
 	LastActiveAt atomic.Int64 // Unix ms of the last context access (idle sweep)
 
+	// Reclaimed is set by the idle sweep on the context it takes out of the table,
+	// while it holds Mu: a caller already queued on that lock has no other way to
+	// learn that this context is no longer the domain's.
+	Reclaimed atomic.Bool
+
 	// OpCtx bounds the agent's cancellable work: the long pipelines and the LLM
 	// calls made while Mu is held. Cancelling it lets in-flight work exit at the
 	// next stage boundary instead of blocking a lifecycle barrier for a full LLM

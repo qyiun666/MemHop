@@ -210,8 +210,9 @@ func decayRemainingEdges(engine *core.StorageEngine, agentID uint64, cfg *DecayP
 }
 
 // decayOneEdge decays the edge weight incrementally from the last decay
-// time, drops references to removed nodes, and deletes the edge when it
-// falls below MinEdgeNodes or the weight threshold.
+// time, drops members that are no longer nodes of this domain (removed by this
+// pass or by an out-of-band delete), and deletes the edge when it falls below
+// MinEdgeNodes or the weight threshold.
 func decayOneEdge(engine *core.StorageEngine, agentID uint64, cfg *DecayParams, edge *core.SceneEdge, idHash uint64, removedNodeIDs map[uint64]bool, nowMs int64, report *DecayReport) error {
 	baseMs := edge.LastDecayAt
 	if baseMs == 0 {
@@ -220,7 +221,12 @@ func decayOneEdge(engine *core.StorageEngine, agentID uint64, cfg *DecayParams, 
 	dtHours := common.ElapsedHours(nowMs, baseMs)
 	newWeight := edge.Weight * float32(math.Exp(-cfg.LambdaEdge*dtHours))
 
-	edge.NodeIDs = removeUint64s(edge.NodeIDs, removedNodeIDs)
+	// A member is gone either because this pass removed it or because something
+	// outside it did — a scene delete takes its node with it between two Dreams.
+	// Either way the edge is not a co-occurrence of nodes this domain holds.
+	edge.NodeIDs = slices.DeleteFunc(edge.NodeIDs, func(id uint64) bool {
+		return removedNodeIDs[id] || !engine.Contains(agentID, id)
+	})
 
 	if len(edge.NodeIDs) < cfg.MinEdgeNodes || newWeight < cfg.EdgeRemoveThreshold {
 		for _, nodePtr := range edge.NodeIDs {
@@ -289,18 +295,6 @@ func removeEdgeFromNode(engine *core.StorageEngine, agentID uint64, nodeID, edge
 		return nil
 	}
 	return core.WriteSceneNode(engine, agentID, nodeID, node)
-}
-
-// removeUint64s filters out the set members from s, reusing its backing
-// array (matches the in-place filtering of the decay pass).
-func removeUint64s(s []uint64, gone map[uint64]bool) []uint64 {
-	filtered := s[:0]
-	for _, v := range s {
-		if !gone[v] {
-			filtered = append(filtered, v)
-		}
-	}
-	return filtered
 }
 
 // applyEmotionalBoost: stronger emotions (|valence|×arousal) decay slower;

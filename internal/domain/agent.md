@@ -3,7 +3,7 @@
 ## 职责
 
 - `Context`：单个 agent 域的状态——`Mu` 域锁、`L2Meta`/`L4`/`Plans` 三份缓存、
-  `DreamInFlight`、`OpCtx`/`OpCancel`、`LastActiveAt`，以及构造时注入的
+  `DreamInFlight`、`OpCtx`/`OpCancel`、`LastActiveAt`、`Reclaimed`，以及构造时注入的
   `Engine`/`LLM`/`Defaults`。
 - `NewContext`：把一个域的全部缓存从记录重建出来——空闲回收后的域从这里复活。
 - `PlanCache`：按话题键聚合的计划树镜像，面只有
@@ -13,7 +13,9 @@
 
 ## 契约
 
-- 每个字段只在持有 `Mu` 时被读写；`PlanCache` 不内置锁，靠同一条串行。
+- 除 `LastActiveAt` 与 `Reclaimed` 两份原子量外，每个字段只在持有 `Mu` 时被读写；
+  `PlanCache` 不内置锁，靠同一条串行。两份原子量刻意能在锁外读——回收的判定与打标
+  正发生在调用方还没拿到 `Mu` 的时候。
 - 写记录帧后必须紧跟 `SyncL2Meta`（存储 → 缓存序）。
 - `HasSeq` 只回答「树上有没有这一步」，拒不拒写由问它的人决定，缓存不因此知道任何
   别的东西；`Subtree` 给调用方当过滤集合，`NextSeq` 给调用方当发号器。

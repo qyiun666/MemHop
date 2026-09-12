@@ -166,6 +166,60 @@ func TestSubAgentEndpointSurvivesIdleReclaim(t *testing.T) {
 	}
 }
 
+// The sweep's decision has to survive the window it cannot prevent: a caller
+// stamps its activity, is descheduled past the TTL, and takes a lock on a context
+// the table has already dropped — where its writes would land on caches nothing
+// reads back. So the removal marks the context inside the same lock hold, and
+// lockAgent re-fetches when it finds the mark. This pins the mark and the drop
+// landing together; the re-fetch would need a stall staged between two statements
+// of one function, which nothing but a seam in the production path can arrange.
+func TestIdleReclaimMarksTheDomainItDrops(t *testing.T) {
+	srv := mockLLMServer(t, turnKeywords)
+	defaults := DefaultMemHopDefaults
+	defaults.AgentIdleTTLMs = 1 // idle by the next access after any pause at all
+	db, err := OpenDB(filepath.Join(t.TempDir(), "reclaim.meh"),
+		LlmConfig{APIURL: srv.URL, APIKey: "test", Model: "mock"},
+		defaults, primaryProfile("primary"))
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+
+	sub, err := db.SubAgent(LlmConfig{APIURL: srv.URL, APIKey: "test", Model: "mock"},
+		core.ProfileSlot{Name: "worker"})
+	if err != nil {
+		t.Fatalf("SubAgent: %v", err)
+	}
+	dropped, err := db.contextFor(sub.agentID)
+	if err != nil {
+		t.Fatalf("contextFor: %v", err)
+	}
+
+	time.Sleep(10 * time.Millisecond) // long enough for the 1ms TTL to have passed
+	rebuilt, err := db.contextFor(sub.agentID)
+	if err != nil {
+		t.Fatalf("contextFor: %v", err)
+	}
+	if rebuilt == dropped {
+		t.Fatal("the idle domain was not reclaimed, so this test would prove nothing")
+	}
+	if !dropped.Reclaimed.Load() {
+		t.Fatal("the dropped context carries no mark, so a caller still holding it cannot tell")
+	}
+	if dropped.OpCtx.Err() == nil {
+		t.Fatal("the dropped domain's work context was left alive")
+	}
+
+	ac, err := db.lockAgent(sub.agentID)
+	if err != nil {
+		t.Fatalf("lockAgent: %v", err)
+	}
+	defer ac.Mu.Unlock()
+	if ac.Reclaimed.Load() {
+		t.Fatal("lockAgent took an operation to a domain the table had dropped")
+	}
+}
+
 // A host that reconnects names its new endpoint on a domain it is still holding,
 // so the replacement has to reach the live context: with the idle sweep disabled
 // there is no rebuild left to credit, and a domain still running on the endpoint

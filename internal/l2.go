@@ -159,6 +159,15 @@ func (db *DB) MergeScenes(agentID uint64, primaryID string, secondaryIDs []strin
 	if err := db.requireScenes(agentID, append([]uint64{primaryHash}, hashes...)...); err != nil {
 		return err
 	}
+	// A merged scene's L1 node goes with it: the merge retargets its topics to the
+	// primary, and nothing names the secondary's node again — the rebuild calls a
+	// node stale by its own topics, which still read back here. It goes first so a
+	// refused merge leaves a scene that still exists to have its node rebuilt.
+	for _, secondary := range hashes {
+		if err := repo.DeleteSceneNodeL1(db.engine, agentID, secondary); err != nil {
+			return err
+		}
+	}
 	if err := repo.MergeScenesL2(db.engine, agentID, primaryHash, hashes); err != nil {
 		return err
 	}
@@ -283,6 +292,7 @@ func (db *DB) DeleteScene(agentID uint64, sceneID string) error {
 		return err
 	}
 	// Drop the L1 scene node right away (its ID is derivable without an
-	// index); incident hyperedges are cleaned by the next Dream's rebuild.
+	// index). The hyperedges still naming it are dropped by the next Dream's decay
+	// pass, which prunes any edge member the domain no longer holds.
 	return repo.DeleteSceneNodeL1(db.engine, agentID, sceneHash)
 }

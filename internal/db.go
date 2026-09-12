@@ -120,23 +120,33 @@ func (db *DB) setDomainLLM(agentID uint64, cfg LlmConfig) *llm.Provider {
 }
 
 // lockAgent takes the domain lock and re-checks under it that the database is
-// still open: a caller that fetched its context before Close ran can still be
-// waiting here when the barrier passes. Every business entry point must go
-// through this helper.
+// still open and that this context is still the domain's: a caller that fetched
+// its context before Close ran can still be waiting here when the barrier passes,
+// and one that waited longer than the idle TTL can find the domain reclaimed.
+// Every business entry point must go through this helper.
 func (db *DB) lockAgent(agentID uint64) (*domain.Context, error) {
-	ac, err := db.contextFor(agentID)
-	if err != nil {
-		return nil, err
+	for {
+		ac, err := db.contextFor(agentID)
+		if err != nil {
+			return nil, err
+		}
+		ac.Mu.Lock()
+		if db.closed.Load() {
+			// A caller that fetched its context before Close ran can still be
+			// waiting here when the barrier passes and the engine shuts down:
+			// reject instead of reporting success on a closed database.
+			ac.Mu.Unlock()
+			return nil, common.NewError(common.ErrClosed, "database is closed")
+		}
+		if ac.Reclaimed.Load() {
+			// Reclaimed under this lock, so running here would be an operation on a
+			// domain the table no longer holds. Fetching again cannot loop: a sweep
+			// runs before the context it hands back is stamped as just active.
+			ac.Mu.Unlock()
+			continue
+		}
+		return ac, nil
 	}
-	ac.Mu.Lock()
-	if db.closed.Load() {
-		// A caller that fetched its context before Close ran can still be
-		// waiting here when the barrier passes and the engine shuts down:
-		// reject instead of reporting success on a closed database.
-		ac.Mu.Unlock()
-		return nil, common.NewError(common.ErrClosed, "database is closed")
-	}
-	return ac, nil
 }
 
 // lockSession is the shared prologue of the turn-keyed operations: take the domain
@@ -204,13 +214,19 @@ func (db *DB) sweepIdleLocked() {
 		if !ac.Mu.TryLock() { // an operation holds the domain lock: reclaim on a later pass
 			continue
 		}
-		busy := len(ac.DreamInFlight) > 0
-		ac.Mu.Unlock()
-		if busy {
+		if len(ac.DreamInFlight) > 0 {
+			ac.Mu.Unlock()
 			continue
 		}
+		// Marking and removal sit inside the lock hold: a caller that stamped its
+		// activity and then queued behind an operation longer than the TTL would
+		// otherwise walk in here and run on a context this table no longer holds.
+		// lockAgent reads the mark under the same lock, so it goes and fetches the
+		// domain that is live instead.
+		ac.Reclaimed.Store(true)
 		ac.OpCancel()
 		delete(db.agents, id)
+		ac.Mu.Unlock()
 	}
 }
 

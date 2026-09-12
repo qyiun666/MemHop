@@ -119,6 +119,41 @@ func TestMergeScenesRetargetsCache(t *testing.T) {
 	}
 }
 
+// A merged-away scene's L1 node has to go with it. The merge retargets the scene's
+// topics onto the primary, so nothing names that node again — and the rebuild
+// decides staleness from a node's own topics, which still read back — so a ghost
+// node keeps its importance, keeps being distilled into the profile, and keeps
+// pairing with live scenes in every later hyperedge pass.
+func TestMergeScenesRemovesTheMergedSceneNode(t *testing.T) {
+	engine := newTestEngine(t)
+	db := newTestDB(t, engine)
+	primary := mustScene(t, engine, 51, "主场景")
+	secondary := mustScene(t, engine, 52, "副场景")
+	topic := newTopic(common.HashID("kept"), secondary.SceneID, 1000, []string{"a"})
+	if err := core.WriteTopicSlot(engine, core.DefaultAgentID, topic.ID, &topic); err != nil {
+		t.Fatal(err)
+	}
+	for _, sceneID := range []uint64{primary.SceneID, secondary.SceneID} {
+		nodeID := core.SceneNodeID(sceneID)
+		if err := core.WriteSceneNode(engine, core.DefaultAgentID, nodeID, &core.SceneNode{
+			IDHash: nodeID, SceneID: sceneID, TopicIDs: []uint64{topic.ID}, CreatedAt: 1000, Importance: 1.0,
+		}); err != nil {
+			t.Fatalf("write scene node %d: %v", sceneID, err)
+		}
+	}
+
+	if err := db.MergeScenes(core.DefaultAgentID, common.FormatHash(primary.SceneID),
+		[]string{common.FormatHash(secondary.SceneID)}); err != nil {
+		t.Fatalf("MergeScenes: %v", err)
+	}
+	if _, err := core.ReadSceneNode(engine, core.DefaultAgentID, core.SceneNodeID(secondary.SceneID)); common.CodeOf(err) != common.ErrNotFound {
+		t.Fatalf("the merged-away scene still holds an L1 node: %v", err)
+	}
+	if _, err := core.ReadSceneNode(engine, core.DefaultAgentID, core.SceneNodeID(primary.SceneID)); err != nil {
+		t.Fatalf("the primary's own node must survive: %v", err)
+	}
+}
+
 // TestMergeScenesInvalid invalid primary ID and empty secondary list error.
 func TestMergeScenesInvalid(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
