@@ -47,7 +47,7 @@ func TestSyncL1NodesFromL2(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
-	if changed != 1 {
+	if len(changed) != 1 {
 		t.Fatalf("want 1 node created, got %d", changed)
 	}
 	node, err := core.ReadSceneNode(engine, core.DefaultAgentID, common.HashID("scene-node:"+common.FormatHash(sceneA)))
@@ -67,7 +67,7 @@ func TestSyncL1NodesFromL2(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sync #2: %v", err)
 	}
-	if changed != 0 {
+	if len(changed) != 0 {
 		t.Fatalf("want 0 changes, got %d", changed)
 	}
 	if node, err := core.ReadSceneNode(engine, core.DefaultAgentID, common.HashID("scene-node:"+common.FormatHash(sceneA))); err == nil && node.UpdatedAt != firstUpdatedAt {
@@ -80,7 +80,7 @@ func TestSyncL1NodesFromL2(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sync #3: %v", err)
 	}
-	if changed != 1 {
+	if len(changed) != 1 {
 		t.Fatalf("want 1 node updated, got %d", changed)
 	}
 	node, err = core.ReadSceneNode(engine, core.DefaultAgentID, common.HashID("scene-node:"+common.FormatHash(sceneA)))
@@ -98,7 +98,7 @@ func TestSyncL1NodesFromL2(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sync #4: %v", err)
 	}
-	if changed != 1 {
+	if len(changed) != 1 {
 		t.Fatalf("want 1 node for scene B, got %d", changed)
 	}
 	nodes := core.CollectAllSceneNodes(engine, core.DefaultAgentID)

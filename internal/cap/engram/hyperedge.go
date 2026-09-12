@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 // L1 hypergraph edge building: BuildHyperedges creates co-occurrence edges
-// between scenes whose depth-1 keyword sets overlap. This file only adds and
-// refreshes edges — forgetting is decay.go's side.
+// between scenes whose keyword sets overlap, and strengthens an existing edge
+// only over evidence that has moved. This file never forgets — that is decay.go.
 
 package engram
 
@@ -20,12 +20,14 @@ import (
 // BuildHyperedges creates or refreshes co-occurrence hyperedges between
 // scene nodes whose topic keyword sets overlap (Jaccard >= minSimilarity).
 // It must run after SyncL1NodesFromL2 and before DecayNetwork so freshly
-// created edges are decayed by the same pass. Edge weight is the Jaccard
-// similarity; updates keep the max of old and new so decayed weights are
-// never silently restored by stale similarities. Stale edges are left to
-// DecayNetwork (natural forgetting), never deleted here. Returns the
-// number of edges created or updated.
-func BuildHyperedges(engine *core.StorageEngine, agentID uint64, minSimilarity float32) (int, error) {
+// created edges are decayed by the same pass, and it takes the node ids that
+// pass wrote: an edge's weight may rise only over evidence one of its endpoints
+// has changed since. Re-measuring two keyword sets that did not change returns
+// the similarity the edge was already weighted by, so without that gate every
+// pass would lift a decayed edge back to full strength and edge forgetting would
+// never accumulate. Stale edges are left to DecayNetwork (natural forgetting),
+// never deleted here. Returns the number of edges created or strengthened.
+func BuildHyperedges(engine *core.StorageEngine, agentID uint64, minSimilarity float32, touched map[uint64]struct{}) (int, error) {
 	nodes := core.CollectAllSceneNodes(engine, agentID)
 	if len(nodes) < 2 {
 		return 0, nil
@@ -48,7 +50,9 @@ func BuildHyperedges(engine *core.StorageEngine, agentID uint64, minSimilarity f
 				if !ok || sim < minSimilarity {
 					continue
 				}
-				if written, err := upsertSceneEdge(engine, agentID, lo, hi, sim, now); err != nil {
+				_, aChanged := touched[lo]
+				_, bChanged := touched[hi]
+				if written, err := upsertSceneEdge(engine, agentID, lo, hi, sim, now, aChanged || bChanged); err != nil {
 					return changed, err
 				} else if written {
 					changed++
@@ -107,9 +111,10 @@ func jaccard(setA, setB map[string]struct{}) (float32, bool) {
 
 // upsertSceneEdge writes the co-occurrence edge between two scene nodes
 // (ID = hash("l1edge:"+min+":"+max), deterministic and idempotent) and
-// attaches it to both nodes' EdgeIDs. Weight keeps max(old, new); returns
-// whether the edge was actually written.
-func upsertSceneEdge(engine *core.StorageEngine, agentID uint64, nodeA, nodeB uint64, weight float32, now int64) (bool, error) {
+// attaches it to both nodes' EdgeIDs. A new edge is weighted by the similarity;
+// an existing one only rises when evidenceChanged says one endpoint's keyword
+// evidence moved. Returns whether the edge was actually written.
+func upsertSceneEdge(engine *core.StorageEngine, agentID uint64, nodeA, nodeB uint64, weight float32, now int64, evidenceChanged bool) (bool, error) {
 	lo, hi := min(nodeA, nodeB), max(nodeA, nodeB)
 	edgeID := common.HashID(fmt.Sprintf("l1edge:%d:%d", lo, hi))
 	edge, err := core.ReadSceneEdge(engine, agentID, edgeID)
@@ -117,8 +122,8 @@ func upsertSceneEdge(engine *core.StorageEngine, agentID uint64, nodeA, nodeB ui
 	case err != nil && common.CodeOf(err) != common.ErrNotFound:
 		// An edge that is there but will not read back is not an edge that is
 		// missing: rebuilding it restarts CreatedAt, which is what the decay clock
-		// runs on, and skips the weight comparison that keeps an older similarity
-		// from resurrecting an edge decayed away from.
+		// runs on, and hands back the full similarity an aged edge had decayed away
+		// from — with no record of the weight it was holding.
 		return false, err
 	case err != nil:
 		edge = &core.SceneEdge{
@@ -129,8 +134,13 @@ func upsertSceneEdge(engine *core.StorageEngine, agentID uint64, nodeA, nodeB ui
 		}
 	case weight <= edge.Weight:
 		return false, nil // existing edge is at least as strong; nothing to refresh
+	case !evidenceChanged:
+		// The similarity above the current weight is the one this edge was already
+		// weighted by: nothing has been re-experienced, the same two sets were read
+		// a second time. Raising on it would undo whatever decay has taken.
+		return false, nil
 	}
-	edge.Weight = max(edge.Weight, weight)
+	edge.Weight = weight
 	if err := core.WriteSceneEdge(engine, agentID, edgeID, edge); err != nil {
 		return false, err
 	}

@@ -6,7 +6,9 @@
 ## 分工（一功能一包）
 
 - `engram/`：L1 场景超图的共现建边（Jaccard）与遗忘衰减
-  （`BuildHyperedges`/`DecayNetwork`/`RebuildFromL2`）。
+  （`BuildHyperedges`/`DecayNetwork`/`RebuildFromL2`）。一条已存在的边的权重只在
+  某一端点的关键词证据动过时才上升：端点集合没变时重算出的就是建边时那个相似度，
+  按它抬权等于每轮把衰减抹平。
 - `llmops/`：三类 LLM 调用点的 prompt 契约、输出解析与自愈重试预算
   （`ExtractKeywords`/`Consolidate`/`Distill`）；传输经注入的 `Chat` 接口。
 - `profile/`：L0 画像的初始值（`Default`）、紧凑摘要（`Brief`）、蒸馏样本与排名

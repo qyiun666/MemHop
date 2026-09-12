@@ -167,6 +167,10 @@ func decayOneNode(engine *core.StorageEngine, agentID uint64, cfg *DecayParams, 
 		}
 		node.EdgeIDs = nil
 	}
+	// The clock is read and re-based in the same step, so a node's importance
+	// accrues decay per Dream interval, not from its last activity. A node the
+	// sync pass restamped because its scene gained a turn lands here with dt≈0:
+	// a scene still being lived through is not faded by the pass that saw it grow.
 	node.UpdatedAt = nowMs
 	if err := core.WriteSceneNode(engine, agentID, node.IDHash, node); err != nil {
 		return err

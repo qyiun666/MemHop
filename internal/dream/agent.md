@@ -11,6 +11,8 @@
   `discardFusedGroup` 回滚整组：只照本组自己写过的 id 定点撤销（话题上没有引用清单可
   回填，也不需要看域里别的记录——要看就可能被正是引发回滚的那一条挡住）。
 - `StructureStages`：L2Meta 重建并即刻装回 → L1 同步/建边/重建/衰减（用装回那份）→ L0 蒸馏。
+  同步那一步交回的是**它本轮写过哪些节点**，这份集合原样递给建边：一条已存在的边只允许在
+  某个端点的证据本轮真的动过时抬权，否则每轮重算同一份关键词就等于把衰减抹平。
 - `DistillL0Stage`：L0 蒸馏，只被本包的 `StructureStages` 调用。
 - 阶段报告：`AppendStage`/`StageCancelled`/`stageStatus`。`StageCancelled` 交出的是
   带码的 `ErrCancelled`，cause 留着 `ctx.Err()`，所以 `stageStatus` 仍按 `errors.Is`

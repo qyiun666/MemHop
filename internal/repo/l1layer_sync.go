@@ -26,28 +26,32 @@ func DeleteSceneNodeL1(engine *core.StorageEngine, agentID uint64, sceneID uint6
 }
 
 // SyncL1NodesFromL2 rebuilds one L1 node per scene from the current
-// depth<=2 topics. The node ID (hash("scene-node:"+sceneID)) is stable across
-// runs: existing nodes keep Importance/Valence/Arousal — this pass never decays
-// them — and are refreshed only when the topic set changed, so UpdatedAt keeps
-// accumulating decay. Returns the number of nodes created or updated. A topic or
-// node that will not read back stops the pass with that cause, since both would
-// otherwise be written as a record that lost fields.
-func SyncL1NodesFromL2(engine *core.StorageEngine, agentID uint64) (int, error) {
+// depth<=2 topics and returns the ids of the nodes it wrote. The node ID
+// (hash("scene-node:"+sceneID)) is stable across runs: existing nodes keep
+// Importance/Valence/Arousal — this pass never decays them — while a scene whose
+// topic set changed has its UpdatedAt moved to now, so a scene still being talked
+// about restarts the clock its decay runs on. The returned set is the only new
+// evidence the co-occurrence pass may strengthen an existing edge from: keyword
+// sets that did not change carry nothing a live edge was not already weighted by.
+// A topic or node that will not read back stops the pass with that cause, since
+// both would otherwise be written as a record that lost fields.
+func SyncL1NodesFromL2(engine *core.StorageEngine, agentID uint64) (map[uint64]struct{}, error) {
 	byScene, err := collectTopicIDsByScene(engine, agentID)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	now := time.Now().UnixMilli()
-	changed := 0
+	touched := make(map[uint64]struct{})
 	for sceneID, set := range byScene {
-		ids := sortedIDs(set)
-		count, err := syncOneSceneNode(engine, agentID, sceneID, ids, now)
-		changed += count
+		nodeID, changed, err := syncOneSceneNode(engine, agentID, sceneID, sortedIDs(set), now)
 		if err != nil {
-			return changed, err
+			return touched, err
+		}
+		if changed {
+			touched[nodeID] = struct{}{}
 		}
 	}
-	return changed, nil
+	return touched, nil
 }
 
 // collectTopicIDsByScene groups live topic idHashes per scene, keeping
@@ -73,9 +77,9 @@ func collectTopicIDsByScene(engine *core.StorageEngine, agentID uint64) (map[uin
 }
 
 // syncOneSceneNode refreshes one scene's node when its topic set changed;
-// unchanged nodes keep UpdatedAt so decay accumulates. Returns 1 when the
-// node was created or updated.
-func syncOneSceneNode(engine *core.StorageEngine, agentID uint64, sceneID uint64, ids []uint64, now int64) (int, error) {
+// unchanged nodes keep UpdatedAt so decay accumulates. It returns the node's id
+// and whether this pass wrote it.
+func syncOneSceneNode(engine *core.StorageEngine, agentID uint64, sceneID uint64, ids []uint64, now int64) (uint64, bool, error) {
 	nodeID := core.SceneNodeID(sceneID)
 	node, err := core.ReadSceneNode(engine, agentID, nodeID)
 	if err != nil {
@@ -84,12 +88,12 @@ func syncOneSceneNode(engine *core.StorageEngine, agentID uint64, sceneID uint64
 			// missing: a fresh one would overwrite it with no emotion, no
 			// importance history and no EdgeIDs, and the hyperedges naming it
 			// would be left pointing at a node that denies them.
-			return 0, err
+			return nodeID, false, err
 		}
 		node = nil
 	}
 	if node != nil && slices.Equal(node.TopicIDs, ids) {
-		return 0, nil
+		return nodeID, false, nil
 	}
 	if node == nil {
 		node = &core.SceneNode{IDHash: nodeID, SceneID: sceneID, CreatedAt: now, Importance: 1.0}
@@ -97,9 +101,9 @@ func syncOneSceneNode(engine *core.StorageEngine, agentID uint64, sceneID uint64
 	node.TopicIDs = ids
 	node.UpdatedAt = now
 	if err := core.WriteSceneNode(engine, agentID, nodeID, node); err != nil {
-		return 1, common.NewError(common.ErrIO, "write l1 scene node", err)
+		return nodeID, false, common.NewError(common.ErrIO, "write l1 scene node", err)
 	}
-	return 1, nil
+	return nodeID, true, nil
 }
 
 // sortedIDs renders an idHash set as a sorted slice so node TopicIDs are

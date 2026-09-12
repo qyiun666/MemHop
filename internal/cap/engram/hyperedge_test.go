@@ -36,7 +36,8 @@ func mustCreateTopic(t *testing.T, engine *core.StorageEngine, sceneID uint64, u
 }
 
 // TestBuildHyperedges covers edge creation from keyword-overlap Jaccard,
-// threshold filtering, idempotent refresh and weight strengthening (max wins).
+// threshold filtering, idempotent re-measurement and weight strengthening over a
+// node whose evidence moved.
 func TestBuildHyperedges(t *testing.T) {
 	engine := tempEngine(t)
 	sceneA := common.HashID("sceneA")
@@ -46,12 +47,13 @@ func TestBuildHyperedges(t *testing.T) {
 	mustCreateTopic(t, engine, sceneA, 1000, []string{"memory", "agent"})
 	mustCreateTopic(t, engine, sceneB, 1000, []string{"memory", "database"})
 	mustCreateTopic(t, engine, sceneC, 1000, []string{"cooking", "food"})
-	if _, err := repo.SyncL1NodesFromL2(engine, core.DefaultAgentID); err != nil {
+	touched, err := repo.SyncL1NodesFromL2(engine, core.DefaultAgentID)
+	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
 
 	// A-B share "memory" → Jaccard 1/3 ≈ 0.33 ≥ 0.15; A-C and B-C share nothing.
-	n, err := BuildHyperedges(engine, core.DefaultAgentID, 0.15)
+	n, err := BuildHyperedges(engine, core.DefaultAgentID, 0.15, touched)
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
@@ -74,23 +76,28 @@ func TestBuildHyperedges(t *testing.T) {
 	}
 
 	// Idempotent: same overlap must not refresh (weight unchanged → no write).
-	n, err = BuildHyperedges(engine, core.DefaultAgentID, 0.15)
+	n, err = BuildHyperedges(engine, core.DefaultAgentID, 0.15, touched)
 	if err != nil || n != 0 {
 		t.Fatalf("idempotent rebuild: n=%d err=%v", n, err)
 	}
 
 	// A higher threshold filters the weak edge out (nothing new created).
-	n, err = BuildHyperedges(engine, core.DefaultAgentID, 0.5)
+	n, err = BuildHyperedges(engine, core.DefaultAgentID, 0.5, touched)
 	if err != nil || n != 0 {
 		t.Fatalf("threshold filter: n=%d err=%v", n, err)
 	}
 
-	// More shared terms strengthen the edge (max update wins).
+	// More shared terms strengthen the edge: scene A's evidence moved, so the
+	// higher similarity is a new observation rather than a re-measurement.
 	mustCreateTopic(t, engine, sceneA, 2000, []string{"database"})
-	if _, err := repo.SyncL1NodesFromL2(engine, core.DefaultAgentID); err != nil {
+	touched, err = repo.SyncL1NodesFromL2(engine, core.DefaultAgentID)
+	if err != nil {
 		t.Fatalf("sync #2: %v", err)
 	}
-	n, err = BuildHyperedges(engine, core.DefaultAgentID, 0.15)
+	if len(touched) != 1 {
+		t.Fatalf("only scene A's node moved, got %v", touched)
+	}
+	n, err = BuildHyperedges(engine, core.DefaultAgentID, 0.15, touched)
 	if err != nil || n != 1 {
 		t.Fatalf("strengthen: n=%d err=%v", n, err)
 	}
@@ -104,9 +111,10 @@ func TestBuildHyperedges(t *testing.T) {
 }
 
 // An edge that is there but will not read back is not an edge that is missing.
-// Building a fresh one restarts CreatedAt, which is the baseline every decay is
-// computed from, and skips the weight comparison that keeps an older, weaker
-// similarity from resurrecting an edge that has decayed away from.
+// Building a fresh one restarts CreatedAt, which is what the decay clock runs on,
+// and writes the full similarity over a weight that had decayed away from it —
+// the record of how weak that association had become is exactly what the rebuild
+// throws away.
 func TestBuildHyperedgesReportsUnreadableEdge(t *testing.T) {
 	engine := tempEngine(t)
 	sceneA, sceneB := common.HashID("sceneA"), common.HashID("sceneB")
@@ -115,7 +123,7 @@ func TestBuildHyperedgesReportsUnreadableEdge(t *testing.T) {
 	if _, err := repo.SyncL1NodesFromL2(engine, core.DefaultAgentID); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
-	if _, err := BuildHyperedges(engine, core.DefaultAgentID, 0.15); err != nil {
+	if _, err := BuildHyperedges(engine, core.DefaultAgentID, 0.15, nil); err != nil {
 		t.Fatalf("build: %v", err)
 	}
 	nodeA, err := core.ReadSceneNode(engine, core.DefaultAgentID, core.SceneNodeID(sceneA))
@@ -127,11 +135,72 @@ func TestBuildHyperedgesReportsUnreadableEdge(t *testing.T) {
 		t.Fatalf("make the edge unreadable: %v", err)
 	}
 
-	if _, err := BuildHyperedges(engine, core.DefaultAgentID, 0.15); common.CodeOf(err) != common.ErrDeserialization {
+	if _, err := BuildHyperedges(engine, core.DefaultAgentID, 0.15, nil); common.CodeOf(err) != common.ErrDeserialization {
 		t.Fatalf("the build must report the edge it could not read, got %v", err)
 	}
 	rt, data, err := engine.ReadRecord(core.DefaultAgentID, edgeID)
 	if err != nil || rt != core.RecL1Hyperedge || string(data) != `{"id":` {
 		t.Fatalf("the refused pass rewrote the edge anyway: rt=%d data=%q err=%v", rt, data, err)
+	}
+}
+
+// The two scenes' keyword sets are the whole input to an edge's weight, so
+// recomputing them over records that have not moved returns the similarity that
+// edge was created from. Taking that as a strengthening — which is what an
+// unconditional max did — put the weight back where decay had found it, every
+// pass, forever: co-occurrence could not fade unless the scenes' vocabulary
+// changed out from under it. A rise now needs one endpoint's evidence to have
+// moved, and the same pass that says so gets the rise.
+func TestBuildHyperedgesKeepsADecayedEdgeDecayed(t *testing.T) {
+	engine := tempEngine(t)
+	sceneA, sceneB := common.HashID("sceneA"), common.HashID("sceneB")
+	mustCreateTopic(t, engine, sceneA, 1000, []string{"memory", "agent"})
+	mustCreateTopic(t, engine, sceneB, 1000, []string{"memory", "database"})
+	if _, err := repo.SyncL1NodesFromL2(engine, core.DefaultAgentID); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if _, err := BuildHyperedges(engine, core.DefaultAgentID, 0.15, nil); err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	nodeA, err := core.ReadSceneNode(engine, core.DefaultAgentID, core.SceneNodeID(sceneA))
+	if err != nil || len(nodeA.EdgeIDs) != 1 {
+		t.Fatalf("node A should hold 1 edge: %+v err=%v", nodeA, err)
+	}
+	edge, err := core.ReadSceneEdge(engine, core.DefaultAgentID, nodeA.EdgeIDs[0])
+	if err != nil {
+		t.Fatalf("read edge: %v", err)
+	}
+	full := edge.Weight
+	edge.Weight = full / 2
+	if err := core.WriteSceneEdge(engine, core.DefaultAgentID, edge.IDHash, edge); err != nil {
+		t.Fatalf("age the edge: %v", err)
+	}
+
+	if n, err := BuildHyperedges(engine, core.DefaultAgentID, 0.15, nil); err != nil || n != 0 {
+		t.Fatalf("a re-measurement with nothing moved must write nothing: n=%d err=%v", n, err)
+	}
+	aged, err := core.ReadSceneEdge(engine, core.DefaultAgentID, edge.IDHash)
+	if err != nil {
+		t.Fatalf("read the aged edge: %v", err)
+	}
+	if math.Abs(float64(aged.Weight)-float64(full)/2) > 1e-6 {
+		t.Fatalf("decay was undone by re-reading the same keywords: weight %.4f, was %.4f", aged.Weight, full/2)
+	}
+
+	// One new turn in scene B moves the evidence the pair is measured over.
+	mustCreateTopic(t, engine, sceneB, 2000, []string{"agent"})
+	touched, err := repo.SyncL1NodesFromL2(engine, core.DefaultAgentID)
+	if err != nil {
+		t.Fatalf("sync #2: %v", err)
+	}
+	if n, err := BuildHyperedges(engine, core.DefaultAgentID, 0.15, touched); err != nil || n != 1 {
+		t.Fatalf("changed evidence should strengthen the edge: n=%d err=%v", n, err)
+	}
+	risen, err := core.ReadSceneEdge(engine, core.DefaultAgentID, edge.IDHash)
+	if err != nil {
+		t.Fatalf("read the strengthened edge: %v", err)
+	}
+	if risen.Weight <= aged.Weight {
+		t.Fatalf("the edge did not strengthen over new evidence: %.4f after %.4f", risen.Weight, aged.Weight)
 	}
 }

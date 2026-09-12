@@ -88,20 +88,21 @@ func StructureStages(ctx context.Context, ac *domain.Context, agentID uint64, re
 
 // l1Stages runs the L1 portion of the pipeline: scene nodes synced from the
 // current L2 structure, co-occurrence hyperedges (keyword-overlap Jaccard
-// >= l1EdgeMinSimilarity; fresh edges decayed like every other edge),
-// stale-node rebuild and finally time decay.
+// >= l1EdgeMinSimilarity, and an existing edge only strengthens over a node this
+// sync moved; fresh edges decayed like every other edge), stale-node rebuild and
+// finally time decay.
 func l1Stages(ctx context.Context, ac *domain.Context, agentID uint64, newL2Meta *index.L2MetaIndex, decayParams *engram.DecayParams, rep *core.DreamReport) error {
 	start := time.Now()
-	synced, err := repo.SyncL1NodesFromL2(ac.Engine, agentID)
+	touched, err := repo.SyncL1NodesFromL2(ac.Engine, agentID)
 	if err != nil {
 		AppendStage(rep, "l1_nodes", start, err)
 		return err
 	}
-	rep.L1NodesAdded += synced
+	rep.L1NodesAdded += len(touched)
 	AppendStage(rep, "l1_nodes", start, nil)
 
 	start = time.Now()
-	added, err := engram.BuildHyperedges(ac.Engine, agentID, l1EdgeMinSimilarity)
+	added, err := engram.BuildHyperedges(ac.Engine, agentID, l1EdgeMinSimilarity, touched)
 	cErr := err
 	if cErr == nil {
 		cErr = StageCancelled(ctx, "l1_hyperedges")
