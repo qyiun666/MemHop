@@ -287,7 +287,10 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    （Name/Role/Personality/Preferences），`EmotionState`/`MBTI` 一律从库里
    现值继承（只有它们的首次建立走蒸馏路径），`UpdatedAtMs` 由库戳写。门面不再靠
    入站映射丢弃那三项——宿主能传的 `api.ProfileInput` 就只有那四项，库自有的三项
-   不是「传了不采信」而是没有位置可传。`MergeDistill` 是反过来只写蒸馏项。
+   不是「传了不采信」而是没有位置可传。`MergeDistill` 是反过来只写蒸馏项，但
+   `Personality` 是例外：那一项有**两个写者**（已裁定「都写」），且两边不对称——蒸馏
+   只在真的有话要说时盖掉它（空串保留现值），`UpdateL0` 照宿主交来的写、空串也算一个值，
+   于是留空的宿主会抹掉上一次蒸馏出的那句，下一次 Dream 再写回来。
    `Name` 是三个写画像的入口（`Open` 播种主域、`SubAgent` 建/取注册域、
    `UpdateL0` 改）共同的必填项：域就靠它被称呼，`UpdateL0` 是唯一能把它清掉的
    口，所以空白名一律 `ErrInvalidQuery` 拒绝，而不是存下一个无从指认的画像。

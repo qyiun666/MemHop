@@ -262,7 +262,7 @@ rep, err := db.Dream(ctx, "")      // empty sceneID sweeps every scene of the do
 Usually **the host does not need to call it**: once a scene's depth-1 topic count passes `Defaults.SceneDreamTopicThreshold` (default 24), `Update` schedules that scene's Dream in the background (one in flight per scene).
 
 Runs L2→L1→L0 compression / decay / profile distillation (several LLM calls, slow) — keep it in a goroutine or between turns.
-Returns a structured `*DreamReport`: `ConsolidatedScenes / L2TopicsCompressed / L1NodesAdded|Removed / L1EdgesAdded|Removed / L0Updated` plus `Stages []DreamStage{Name, Status, DurationMs}` (status `ok | skipped | cancelled | error`). Two of those figures are easy to misread: `L2TopicsCompressed` counts the topics sunk into fused groups, not the number of groups, and `L1EdgesAdded` counts the co-occurrence edges created **or strengthened** by the pass. An empty report is not an error; a mid-pipeline failure returns the partial report with the error. What a host reads back is bounded by convergence, not by a cap: passing the threshold schedules that scene's Dream, and Dream only merges the groups the model judges one — topics it never picked stay at depth 1.
+Returns a structured `*DreamReport`: `ConsolidatedScenes / L2TopicsCompressed / L1NodesAdded|Removed / L1EdgesAdded|Removed / L0Updated` plus `Stages []DreamStage{Name, Status, DurationMs}` (status `ok | skipped | cancelled | error`). Three of those figures are easy to misread: `L2TopicsCompressed` counts the topics sunk into fused groups, not the number of groups; `L1NodesAdded` counts the scene nodes the sync wrote, which includes an existing node re-stamped because its topic set moved, not only newly created ones; and `L1EdgesAdded` counts the co-occurrence edges created **or strengthened** by the pass. The two removal counters span both stages that remove — the stale rebuild and the decay — and count the edges each took with it as well as the nodes. An empty report is not an error; a mid-pipeline failure returns the partial report with the error. What a host reads back is bounded by convergence, not by a cap: passing the threshold schedules that scene's Dream, and Dream only merges the groups the model judges one — topics it never picked stay at depth 1.
 
 ---
 
@@ -309,10 +309,18 @@ err = db.UpdateL0(&api.ProfileInput{Name: "..."})
 owns — `Name`, `Role`, `Personality`, `Preferences`. The rest of the stored
 profile is not in that shape because it is not the host's to state: `EmotionState`
 and `MBTI` are evolved by Dream, `UpdatedAtMs` is stamped by the library, and
-`AgentType` is decided when the domain is created. A write inherits all four from
-the record, so there is no need to `GetL0` and fill values back, and no read-only
-field can be smuggled in — the compiler refuses. The distilled half refreshes
+`AgentType` is decided when the domain is created. A write inherits those two
+distilled signals and `AgentType` from the record and stamps `UpdatedAtMs` itself,
+so there is no need to `GetL0` and fill values back, and no read-only field can be
+smuggled in — the compiler refuses. The distilled half refreshes
 automatically with Dream: there is no standalone distill entry point.
+
+`Personality` is the one field with two writers, and the one a write does *not*
+inherit: Dream's distillation replaces it with the personality summary the model
+derived from this domain's memories, so it reads back as whichever of the two ran
+last. An `UpdateL0` that leaves it empty therefore clears the distilled summary,
+and the next pass evolves it again — carry the value back from `GetL0` if you mean
+to keep it. `Name`, `Role` and `Preferences` have the host as their only writer.
 
 ### L2 scenes
 

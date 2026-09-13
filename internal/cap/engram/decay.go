@@ -36,28 +36,43 @@ type DecayReport struct {
 
 // RebuildFromL2 removes stale L1 nodes (empty TopicIDs, missing first
 // topic, or over-deep topics not meeting the keep rule) with their edge
-// references; returns the hex IDs of removed nodes.
-func RebuildFromL2(engine *core.StorageEngine, agentID uint64, l2Meta *index.L2MetaIndex, cfg *DecayParams) ([]string, error) {
+// references; returns the hex IDs of removed nodes and the number of edges
+// that went with them — dropping a member takes a co-occurrence edge below
+// MinEdgeNodes, so a rebuild that removed nodes removed edges too, and a pass
+// that reported only the decay stage's would undercount its own work.
+func RebuildFromL2(engine *core.StorageEngine, agentID uint64, l2Meta *index.L2MetaIndex, cfg *DecayParams) ([]string, int, error) {
 	var updated []string
-	for _, node := range core.CollectAllSceneNodes(engine, agentID) {
+	var edgesRemoved int
+	// The set is read whole: a node this enumeration steps over is one no pass ever
+	// judges stale, so it survives every rebuild and the edges naming it keep a
+	// member nobody can read.
+	nodes, err := core.CollectAllStrict[core.SceneNode](engine, agentID, core.RecL1SceneNode)
+	if err != nil {
+		return updated, edgesRemoved, err
+	}
+	for _, node := range nodes {
 		stale, err := isNodeStale(&node, engine, agentID, l2Meta)
 		if err != nil {
-			return updated, err
+			return updated, edgesRemoved, err
 		}
 		if !stale {
 			continue
 		}
 		for _, edgeID := range node.EdgeIDs {
-			if _, err := removeNodeFromEdge(engine, agentID, edgeID, node.IDHash, cfg); err != nil {
-				return updated, err
+			gone, err := removeNodeFromEdge(engine, agentID, edgeID, node.IDHash, cfg)
+			if err != nil {
+				return updated, edgesRemoved, err
+			}
+			if gone {
+				edgesRemoved++
 			}
 		}
 		if _, err := engine.DeleteRecord(agentID, node.IDHash); err != nil {
-			return updated, err
+			return updated, edgesRemoved, err
 		}
 		updated = append(updated, common.FormatHash(node.IDHash))
 	}
-	return updated, nil
+	return updated, edgesRemoved, nil
 }
 
 func isNodeStale(node *core.SceneNode, engine *core.StorageEngine, agentID uint64, l2Meta *index.L2MetaIndex) (bool, error) {
@@ -125,7 +140,14 @@ func DecayNetwork(engine *core.StorageEngine, agentID uint64, l2Meta *index.L2Me
 func decayNodes(engine *core.StorageEngine, agentID uint64, l2Meta *index.L2MetaIndex, cfg *DecayParams, nowMs int64, report *DecayReport) (map[uint64]bool, map[uint64]map[uint64]bool, error) {
 	removedNodeIDs := make(map[uint64]bool)
 	clearedEdges := make(map[uint64]map[uint64]bool)
-	for _, node := range core.CollectAllSceneNodes(engine, agentID) {
+	// Decay is the only pass that ever removes a node, so one this scan steps over
+	// never fades, never reaches the removal threshold and keeps its edges pointing
+	// at a member nobody can read.
+	nodes, err := core.CollectAllStrict[core.SceneNode](engine, agentID, core.RecL1SceneNode)
+	if err != nil {
+		return removedNodeIDs, clearedEdges, err
+	}
+	for _, node := range nodes {
 		if skipDeepNode(&node, l2Meta) {
 			continue
 		}

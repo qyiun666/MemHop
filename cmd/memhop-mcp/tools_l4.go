@@ -133,7 +133,7 @@ func registerL4Tools(s *mcp.Server, db *memhop.Session) {
 
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_archive_get",
-		Description: "按 ID 读取一条 L4 对话原文档案。",
+		Description: "按 ID 读取一条 L4 内容记录：对话原文与操作事件同住这一层，本工具不按 kind 过滤，两者都取得回。返回里的三个数值字段与 memhop_archive_search 同一套词表——kind 0=utterance / 1=event；role 0=user / 1=agent / 2=system，role 3 是库盖在融合组摘要上的自有标记（写侧不接受它）；type 0=text / 1=image / 2=video / 3=document / 4=audio / 5=code / 255=other，event 记录恒为 0（事件没有媒介）。ID 不存在或已被保留窗清理时返回 [3001]。",
 		InputSchema: objSchema(map[string]any{
 			"id": strProp("档案 ID（16 位 hex），必填"),
 		}, "id"),

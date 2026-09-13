@@ -72,10 +72,14 @@ type (
 	// order applies. Start and End filter that creation time in milliseconds since
 	// the epoch, the unit a stored record's CreatedAt carries. NodeSeq keeps one plan
 	// step and its whole subtree, and is refused without TopicID because a step is
-	// addressed inside a turn. A Kind or Type outside the defined vocabulary is
-	// refused rather than answered with an
-	// empty set — a filter that can match nothing is indistinguishable from a turn
-	// that holds nothing.
+	// addressed inside a turn. IDs keeps only the archives it names — the ids an
+	// earlier read handed back, which is the only way to fetch one archive again —
+	// and is the one condition answered by id rather than by a scan when it is the
+	// only one set. Keyword is a case-insensitive substring of the stored content
+	// text alone: it searches neither an event's name nor a topic's keyword track. A
+	// Kind or Type outside the defined vocabulary is refused rather than answered
+	// with an empty set — a filter that can match nothing is indistinguishable from
+	// a turn that holds nothing.
 	L4Query = internal.L4Query
 	// ScenePatch is UpdateScene's partial payload: a nil field is left alone, and
 	// an empty Name is refused. An empty L3ID clears the anchor. Force is read only
@@ -118,8 +122,13 @@ type (
 	// DreamReport is one consolidation pass: what it actually did, stage by stage.
 	// A pass that stopped partway returns the report filled so far beside the
 	// error, so a non-nil report is not a success. ConsolidatedScenes counts scenes
-	// where at least one merge group landed; the L1/L2 counters count records this
-	// pass added or removed.
+	// where at least one merge group landed. Three counters do not count what their
+	// bare names suggest: L2TopicsCompressed is the topics sunk into fused groups
+	// (one group over two turns counts 2), L1NodesAdded is the scene nodes the sync
+	// wrote — created, or re-stamped because their topic set moved — and
+	// L1EdgesAdded is the co-occurrence edges created or strengthened. The two
+	// removal counters span both stages that remove: the stale rebuild and the
+	// decay, each counting the edges it took with it as well as the nodes.
 	DreamReport = internal.DreamReport
 	// DreamStage is one stage of that pass. Name is one of l4_prune, l5_prune,
 	// l2_compress, index_rebuild, l1_nodes, l1_hyperedges, l1_rebuild, l1_decay or
@@ -134,11 +143,13 @@ type (
 	// only — so a fused group reads as its summary there, and this is the one read
 	// that still shows what those turns actually said.
 	SceneContext = internal.SceneContext
-	// SceneContextTopic is one topic of that transcript. Depth is 1 for a turn or a
-	// fused group at the surface and 2 for a turn Dream sank; ParentID is not
-	// reported, so a fused parent and its children come back as one flat list and
-	// ChildCount says how many topics in that list name this one as their parent.
-	// Keywords is the topic's distilled track.
+	// SceneContextTopic is one topic of that transcript. Depth says only whether a
+	// topic is still at the surface (1) or has been folded away under a fused group
+	// (2); it is not a parent-or-child marker, because a later pass folds the fused
+	// parent itself and it then sits at depth 2 beside the turns it once owned.
+	// ParentID is not reported, so a fused parent and its children come back as one
+	// flat list and ChildCount is what identifies a parent: how many topics in that
+	// list name this one as theirs. Keywords is the topic's distilled track.
 	SceneContextTopic = internal.SceneContextTopic
 	// SceneMessage is one line of a topic's dialogue, in the Seq order it was
 	// written to. Seq is the slot the line holds in a space its topic's events
@@ -150,11 +161,18 @@ type (
 
 // ---- response DTOs (ids are 16-char hex strings) ----
 
-// ProfileSlot is the L0 profile as the library hands it back: the host-owned
-// fields plus the ones only the library writes. The internal ID hash is hidden
+// ProfileSlot is the L0 profile as the library hands it back: the fields a host
+// writes plus the ones only the library writes. The internal ID hash is hidden
 // because it is an implementation detail. No call takes this type as an argument:
 // a profile is written with a ProfileInput, which has no place to put one of the
 // library-owned fields.
+//
+// Personality is the one field with two writers: a host seeds it through
+// ProfileInput, and Dream's distillation replaces it with the personality summary
+// the model derived from this domain's memories, so it reads back as whichever of
+// the two ran last. A host write is a whole write — an UpdateL0 that leaves
+// Personality empty clears what Dream put there, and the next pass evolves it
+// again. Name, Role and Preferences have the host as their only writer.
 //
 // The two distilled fields carry the library's own vocabularies. EmotionState's
 // three signals each run 0..1: valence 0 = very negative → 0.5 = neutral →
@@ -183,7 +201,9 @@ type ProfileSlot struct {
 // SubAgent and UpdateL0. It holds exactly the fields the host owns: a domain's
 // name, its role, its personality and its preferences. Name is required at all
 // three entries (a blank one is refused) because it is how the domain is
-// addressed; the other three may be left empty.
+// addressed; the other three may be left empty, and an empty Personality clears
+// the one Dream last evolved — this input is a whole write, and that field has
+// two writers (see ProfileSlot).
 //
 // The library-owned fields are absent rather than ignored. On an inbound record
 // a blank EmotionState or a zero UpdatedAtMs cannot be told apart from "leave
@@ -204,10 +224,11 @@ type ProfileInput struct {
 // the pipeline is the only writer. Importance starts at 1.0 when the scene gains
 // its first turn and only falls from there; Valence runs 0 = very negative →
 // 0.5 = neutral → 1 = very positive and Arousal 0 = calm → 1 = highly excited, so
-// a 0 here is an extreme reading, not a missing one. EdgeIDs name the
-// co-occurrence edges incident on the node. An edge has no read of its own, so
-// those ids are useful exactly one way — two nodes sharing one are a pair Dream
-// judged related.
+// a 0 here is an extreme reading, not a missing one. TopicIDs are the depth-1 and
+// depth-2 topics the last Dream's sync found under the scene — a snapshot, not a
+// live listing. EdgeIDs name the co-occurrence edges incident on the node. An edge
+// has no read of its own, so those ids are useful exactly one way — two nodes
+// sharing one are a pair Dream judged related.
 type SceneNodeView struct {
 	IDHash     string   `json:"id_hash"`
 	SceneID    string   `json:"scene_id"`
@@ -284,7 +305,10 @@ type HypergraphNode struct {
 
 // HypergraphEdge is a hyperedge within an L3 hypergraph: an unordered relation
 // over its member nodes, distinguished by Kind (the edge id covers members and
-// kind, so one node pair can carry several relations at once).
+// kind, so one node pair can carry several relations at once). IDHash identifies
+// the edge for a host comparing two reads; no method takes one. An edge is created
+// by ImportL3 and deleted only with its graph by DeleteL3 — no pass edits or decays
+// one.
 type HypergraphEdge struct {
 	IDHash    string        `json:"id_hash"`
 	GraphID   string        `json:"graph_id"`

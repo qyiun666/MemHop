@@ -45,7 +45,7 @@
   全等平手取较小 id）。`NewImportBatch` 播种是 map 迭代顺序，两张同名槽不加裁决就会让
   同一个 domain 每次导入随机进一张——节点 id 是 `hash(graphID:title)`，换图即换节点 id，
   重导幂等性随之失效。
-- 三张索引都走严格那份（`core.CollectAllGraphSlotsStrict` / `CollectAllStrict[Node]` /
+- 三张索引都走严格那份（`core.CollectAllGraphSlots` / `CollectAllStrict[Node]` /
   `[Edge]`）：读不回的记录**仍然占着它的标签、它的标题、它的边**。跳过槽就是把「有人占着」
   答成「没人占」，导入那侧会铸出第二张同名图、两半节点集从此各自独立，改名那侧会把名字改到
   别人占着的标签上；跳过节点则是让 Merge 导入答「这个标题没有」，于是按位置式 id 原地覆写

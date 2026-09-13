@@ -116,12 +116,13 @@ func l1Stages(ctx context.Context, ac *domain.Context, agentID uint64, newL2Meta
 	}
 
 	start = time.Now()
-	removedIDs, err := engram.RebuildFromL2(ac.Engine, agentID, newL2Meta, decayParams)
+	removedIDs, edgesRemoved, err := engram.RebuildFromL2(ac.Engine, agentID, newL2Meta, decayParams)
 	cErr = err
 	if cErr == nil {
 		cErr = StageCancelled(ctx, "l1_rebuild")
 	}
 	rep.L1NodesRemoved += len(removedIDs)
+	rep.L1EdgesRemoved += edgesRemoved
 	AppendStage(rep, "l1_rebuild", start, cErr)
 	if err != nil {
 		return err

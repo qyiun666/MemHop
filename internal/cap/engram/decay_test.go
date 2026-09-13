@@ -91,15 +91,15 @@ func TestRebuildFromL2StopsOnUnreadableDeepTopic(t *testing.T) {
 		t.Fatalf("replace the topic payload with an undecodable one: %v", err)
 	}
 
-	removed, err := RebuildFromL2(engine, core.DefaultAgentID, l2Meta, &DecayParams{MinEdgeNodes: 2})
+	removed, edgesRemoved, err := RebuildFromL2(engine, core.DefaultAgentID, l2Meta, &DecayParams{MinEdgeNodes: 2})
 	if err == nil {
 		t.Fatal("an unreadable topic must stop the pass, not delete the node standing on it")
 	}
 	if common.CodeOf(err) != common.ErrDeserialization {
 		t.Fatalf("want the read's own classification, got %v", err)
 	}
-	if len(removed) != 0 {
-		t.Fatalf("a stopped pass removes nothing, got %v", removed)
+	if len(removed) != 0 || edgesRemoved != 0 {
+		t.Fatalf("a stopped pass removes nothing, got nodes %v edges %d", removed, edgesRemoved)
 	}
 	if _, err := core.ReadSceneNode(engine, core.DefaultAgentID, nodeID); err != nil {
 		t.Fatalf("the node must still be there: %v", err)
@@ -205,5 +205,109 @@ func TestEmotionalBoostMeasuresDistanceFromNeutral(t *testing.T) {
 				t.Fatalf("valence %v arousal %v escaped the band: lambda %v not in (0, %v]", v, a, got, base)
 			}
 		}
+	}
+}
+
+// All three L1 passes act on the whole scene-node set, and each of them is the
+// only path that does what it does: decay is the only thing that ever removes a
+// node, the rebuild is the only thing that drops a stale one, and an edge nobody
+// builds never reports itself missing. So a node the enumeration steps over is not
+// one less row — it is a node no pass ever acts on again.
+func TestL1PassesRefuseANodeTheyCannotRead(t *testing.T) {
+	engine, err := core.Create(filepath.Join(t.TempDir(), "l1strict.meh"))
+	if err != nil {
+		t.Fatalf("create engine: %v", err)
+	}
+	t.Cleanup(func() { _ = engine.Close() })
+
+	const (
+		liveID    = uint64(0xA1)
+		damagedID = uint64(0xA2)
+		topicID   = uint64(0xB1)
+	)
+	if err := core.WriteTopicSlot(engine, core.DefaultAgentID, topicID,
+		&core.TopicSlot{ID: topicID, SceneID: 7, Depth: 1}); err != nil {
+		t.Fatalf("write topic: %v", err)
+	}
+	if err := core.WriteSceneNode(engine, core.DefaultAgentID, liveID, &core.SceneNode{
+		IDHash: liveID, SceneID: 7, TopicIDs: []uint64{topicID},
+		Importance: 1, CreatedAt: 1000, UpdatedAt: 1000,
+	}); err != nil {
+		t.Fatalf("write node: %v", err)
+	}
+	if _, err := engine.WriteRecord(core.DefaultAgentID, core.RecL1SceneNode, damagedID,
+		[]byte(`{"id":`)); err != nil {
+		t.Fatalf("write the undecodable node: %v", err)
+	}
+
+	l2Meta := index.BuildL2MetaFromEngine(engine, core.DefaultAgentID)
+	cfg := &DecayParams{LambdaNode: 0.01, LambdaEdge: 0.02, MinEdgeNodes: 2}
+	if _, err := BuildHyperedges(engine, core.DefaultAgentID, 0.15, nil); common.CodeOf(err) != common.ErrDeserialization {
+		t.Errorf("BuildHyperedges over a damaged node = %v, want the read's own code", err)
+	}
+	if _, _, err := RebuildFromL2(engine, core.DefaultAgentID, l2Meta, cfg); common.CodeOf(err) != common.ErrDeserialization {
+		t.Errorf("RebuildFromL2 over a damaged node = %v, want the read's own code", err)
+	}
+	if _, err := DecayNetwork(engine, core.DefaultAgentID, l2Meta, cfg); common.CodeOf(err) != common.ErrDeserialization {
+		t.Errorf("DecayNetwork over a damaged node = %v, want the read's own code", err)
+	}
+	// A refused pass changes nothing: the readable node keeps its importance and the
+	// clock decay would have re-based.
+	got, err := core.ReadSceneNode(engine, core.DefaultAgentID, liveID)
+	if err != nil {
+		t.Fatalf("read the live node: %v", err)
+	}
+	if got.Importance != 1 || got.UpdatedAt != 1000 {
+		t.Fatalf("a refused pass moved the live node: %+v", got)
+	}
+}
+
+// Dropping a stale node takes its two-member co-occurrence edge below
+// MinEdgeNodes, so the edge goes with it — and a pass that counted only the decay
+// stage's removals reported fewer edges than it deleted.
+func TestRebuildFromL2CountsTheEdgeItTakesWithIt(t *testing.T) {
+	engine, err := core.Create(filepath.Join(t.TempDir(), "rebuild.meh"))
+	if err != nil {
+		t.Fatalf("create engine: %v", err)
+	}
+	t.Cleanup(func() { _ = engine.Close() })
+
+	const (
+		staleID = uint64(0xA1)
+		liveID  = uint64(0xA2)
+		edgeID  = uint64(0xE1)
+		topicID = uint64(0xB1)
+	)
+	if err := core.WriteTopicSlot(engine, core.DefaultAgentID, topicID,
+		&core.TopicSlot{ID: topicID, SceneID: 8, Depth: 1}); err != nil {
+		t.Fatalf("write topic: %v", err)
+	}
+	// The stale one is stale on its own terms: no topics at all.
+	if err := core.WriteSceneNode(engine, core.DefaultAgentID, staleID, &core.SceneNode{
+		IDHash: staleID, SceneID: 7, Importance: 1, EdgeIDs: []uint64{edgeID}, CreatedAt: 1, UpdatedAt: 1,
+	}); err != nil {
+		t.Fatalf("write the stale node: %v", err)
+	}
+	if err := core.WriteSceneNode(engine, core.DefaultAgentID, liveID, &core.SceneNode{
+		IDHash: liveID, SceneID: 8, TopicIDs: []uint64{topicID},
+		Importance: 1, EdgeIDs: []uint64{edgeID}, CreatedAt: 1, UpdatedAt: 1,
+	}); err != nil {
+		t.Fatalf("write the live node: %v", err)
+	}
+	if err := core.WriteSceneEdge(engine, core.DefaultAgentID, edgeID,
+		&core.SceneEdge{IDHash: edgeID, NodeIDs: []uint64{staleID, liveID}, Weight: 0.5}); err != nil {
+		t.Fatalf("write the edge: %v", err)
+	}
+
+	l2Meta := index.BuildL2MetaFromEngine(engine, core.DefaultAgentID)
+	removed, edgesRemoved, err := RebuildFromL2(engine, core.DefaultAgentID, l2Meta, &DecayParams{MinEdgeNodes: 2})
+	if err != nil {
+		t.Fatalf("rebuild: %v", err)
+	}
+	if len(removed) != 1 || edgesRemoved != 1 {
+		t.Fatalf("rebuild took %d node(s) and reported %d edge(s), want 1 and 1: %v", len(removed), edgesRemoved, removed)
+	}
+	if _, err := core.ReadSceneEdge(engine, core.DefaultAgentID, edgeID); common.CodeOf(err) != common.ErrNotFound {
+		t.Fatalf("the edge must have gone with the node, read gives %v", err)
 	}
 }

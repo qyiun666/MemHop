@@ -104,23 +104,27 @@ func TestSSEMultiTenantIsolation(t *testing.T) {
 			t.Errorf("%s: input schema is %T, want the decoded object", want.name, tool.InputSchema)
 			continue
 		}
-		props, _ := schema["properties"].(map[string]any)
-		required, _ := schema["required"].([]any)
-		var got []string
-		for _, entry := range required {
-			name, ok := entry.(string)
-			if !ok {
-				t.Errorf("%s: a required entry is %T, want an argument name", want.name, entry)
-				continue
-			}
-			got = append(got, name)
-			if _, declared := props[name]; !declared {
-				t.Errorf("%s: %q is required but is not one of its properties", want.name, name)
-			}
-		}
-		if !slices.Equal(got, want.required) {
+		if got := requiredNames(t, want.name, schema); !slices.Equal(got, want.required) {
 			t.Errorf("%s: required = %v, want %v", want.name, got, want.required)
 		}
+	}
+
+	// An import item is validated against the inner schema, not the tool's, so
+	// that list has to say what the batch pre-check refuses — title and domain.
+	// A required entry nothing enforces makes every client send a field it need
+	// not, and one the pre-check does enforce but the list omits lets a client
+	// believe an item is acceptable that then fails the whole batch.
+	importSchema, ok := toolsByName["memhop_knowledge_import"].InputSchema.(map[string]any)
+	if !ok {
+		t.Fatal("memhop_knowledge_import: input schema is not the decoded object")
+	}
+	items, _ := importSchema["properties"].(map[string]any)["items"].(map[string]any)
+	item, _ := items["items"].(map[string]any)
+	if item == nil {
+		t.Fatal("memhop_knowledge_import: items does not describe its element")
+	}
+	if got := requiredNames(t, "memhop_knowledge_import item", item); !slices.Equal(got, []string{"title", "domain"}) {
+		t.Errorf("memhop_knowledge_import item required = %v, want [title domain]", got)
 	}
 
 	// memhop_status: no-arg tool on the alice session.
@@ -304,6 +308,28 @@ func TestSSETenantConcurrentFirstConnect(t *testing.T) {
 }
 
 // ---- helpers ----
+
+// requiredNames reads one object schema's required list. A required name that is
+// not one of the schema's properties is reported on the way out: a client is then
+// told to send something the schema never describes.
+func requiredNames(t *testing.T, what string, schema map[string]any) []string {
+	t.Helper()
+	props, _ := schema["properties"].(map[string]any)
+	required, _ := schema["required"].([]any)
+	var names []string
+	for _, entry := range required {
+		name, ok := entry.(string)
+		if !ok {
+			t.Errorf("%s: a required entry is %T, want an argument name", what, entry)
+			continue
+		}
+		names = append(names, name)
+		if _, declared := props[name]; !declared {
+			t.Errorf("%s: %q is required but is not one of its properties", what, name)
+		}
+	}
+	return names
+}
 
 // testLLM returns the LLM endpoint for offline tests. Credentials are test-only
 // placeholders injected via environment variables, mirroring how the server reads

@@ -109,7 +109,7 @@ func registerMaintenanceTools(s *mcp.Server, m *memhop.DB, db *memhop.Session) {
 
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_status",
-		Description: "数据库健康状态：是否已关闭、已登记多少场景（= 宿主会话数）。",
+		Description: "数据库健康状态：closed 是整个共享文件的状态（多租户共用一份库），scene_count 只数本租户域里已登记的场景（= 本租户的宿主会话数）。",
 		InputSchema: objSchema(nil),
 	}, handleNoArgs[statusResult](func() (statusResult, error) {
 		scenes, err := db.ListScenes("")

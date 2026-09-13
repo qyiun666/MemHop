@@ -75,8 +75,12 @@ func (s *Session) GetL0() (*ProfileSlot, error) {
 // Open and SubAgent: a blank name is refused, not stored. The library-owned half
 // of the stored profile is inherited by the write itself: EmotionState and MBTI,
 // which Dream evolves, and AgentType, stamped once when the domain was created.
-// UpdatedAtMs is stamped here. So a profile edit never wipes the distilled half,
-// and never moves a domain between primary and sub.
+// UpdatedAtMs is stamped here. So a profile edit never moves a domain between
+// primary and sub, and never wipes the two distilled signals.
+//
+// Personality is the one field Dream evolves that this write does not inherit:
+// it is host-seeded and Dream-refined, so an edit that leaves it empty clears the
+// summary the last pass distilled, and the next pass evolves it again.
 func (s *Session) UpdateL0(profile *ProfileInput) error {
 	if profile == nil {
 		return NewError(ErrInvalidQuery, "UpdateL0: profile is required")
@@ -395,6 +399,10 @@ func (s *Session) SceneContext(sceneID string) (*SceneContext, error) {
 // not among the topics this retargets. Its id names a scene that is now gone, the
 // turn can never be settled, and whatever the host appended under it is reclaimed
 // by the retention window like any other transcript.
+//
+// A secondary's L1 node goes with it, and the primary's node picks the retargeted
+// topics up at the next Dream. A hyperedge that pointed at a merged scene loses
+// the member to that same pass's edge decay.
 func (s *Session) MergeScenes(primaryID string, secondaryIDs []string) error {
 	return s.session.MergeScenes(primaryID, secondaryIDs)
 }
@@ -413,6 +421,11 @@ func (s *Session) DeleteScene(sceneID string) error {
 // memory-correction counterpart of Update. Nothing is left hanging: the subtree
 // goes with the topic, so a surviving topic never keeps a parent that is gone.
 // Deleting a topic that does not exist is an error, not a no-op.
+//
+// One listing does lag. The scene survives with its L1 node, and that node's
+// TopicIDs are what the last Dream found under the scene — so a topic deleted
+// since is still named there until the next Dream rebuilds the list. Reading such
+// an id back answers ErrNotFound, which is the correct answer: it is gone.
 func (s *Session) DeleteTopic(topicID string) error {
 	return s.session.DeleteTopic(topicID)
 }

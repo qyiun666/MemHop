@@ -247,6 +247,7 @@ func TestMappedListsEncodeAsEmptyNotNull(t *testing.T) {
 	}{
 		{"a topic with no keyword track", mustEncode(t, fromTopicSlot(internal.TopicSlot{})), `"fused_keywords":[]`},
 		{"a node with no keywords", mustEncode(t, fromHypergraphNode(internal.HypergraphNode{})), `"keywords":[]`},
+		{"a profile with no preferences", mustEncode(t, fromProfileSlot(internal.ProfileSlot{})), `"preferences":{}`},
 	} {
 		if !strings.Contains(string(tc.body), tc.want) {
 			t.Errorf("%s: json = %s, want it to hold %s", tc.name, tc.body, tc.want)

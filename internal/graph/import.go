@@ -68,7 +68,7 @@ func NewImportBatch(engine *core.StorageEngine, agentID uint64, mode core.L3Impo
 	if err != nil {
 		return nil, err
 	}
-	slots, err := core.CollectAllGraphSlotsStrict(engine, agentID)
+	slots, err := core.CollectAllGraphSlots(engine, agentID)
 	if err != nil {
 		return nil, err
 	}
@@ -137,7 +137,7 @@ func preferGraphID(name string, cur, next uint64) bool {
 // same reason: a slot the engine cannot decode still holds its label, and
 // stepping over it would let a rename take a label that is in use.
 func CheckName(engine *core.StorageEngine, agentID uint64, id uint64, name string) error {
-	slots, err := core.CollectAllGraphSlotsStrict(engine, agentID)
+	slots, err := core.CollectAllGraphSlots(engine, agentID)
 	if err != nil {
 		return err
 	}

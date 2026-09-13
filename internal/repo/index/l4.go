@@ -42,9 +42,12 @@ func NewL4Index() *L4Index {
 	return &L4Index{byTopic: make(map[uint64][]l4Entry)}
 }
 
-// BuildL4FromEngine scans one agent domain's L4 records into a fresh index.
-// Corrupt or unparsable records are skipped, the tolerance every rebuild shares:
-// a torn tail must not make the domain unopenable.
+// BuildL4FromEngine scans one agent domain's L4 records into a fresh index,
+// dropping whatever will not decode: the frames it walks already passed CRC at
+// open, so this is a payload that does not fit its shape, and refusing it would
+// make the whole domain unopenable. What a drop costs is a Seq MaxSeq no longer
+// sees — the next append to that topic is handed the dropped slot's Seq and
+// overwrites it. Each drop is logged with its id by the scan itself.
 func BuildL4FromEngine(engine *core.StorageEngine, agentID uint64) *L4Index {
 	idx := NewL4Index()
 	for _, arc := range core.CollectAllArchives(engine, agentID) {

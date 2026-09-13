@@ -222,7 +222,11 @@ func TestImportL3RejectsUnknownMode(t *testing.T) {
 	if err == nil || common.CodeOf(err) != common.ErrInvalidQuery {
 		t.Fatalf("expected ErrInvalidQuery, got %v", err)
 	}
-	if got := core.CollectAllGraphSlots(db.engine, core.SharedPoolAgentID); len(got) != 0 {
+	got, err := core.CollectAllGraphSlots(db.engine, core.SharedPoolAgentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
 		t.Fatalf("no graph should be created for invalid mode: %+v", got)
 	}
 }
@@ -955,5 +959,73 @@ func TestImportL3RefusesADomainNamingANodeAddress(t *testing.T) {
 	}
 	if n := countRecords(db.engine, core.SharedPoolAgentID, core.RecL3GraphSlot); n != 1 {
 		t.Fatalf("the pool holds %d graph slots after a refused create, want 1", n)
+	}
+}
+
+// The L3 read faces answer with the whole pool or with the record they could not
+// read. A listing one entry short is not a smaller graph: to a host it is a claim
+// that the pool never held that node, and a missing edge is a claim that two nodes
+// are unrelated, because the subgraph walk can only report what the adjacency
+// relates.
+func TestL3ReadsRefuseARecordTheyCannotDecode(t *testing.T) {
+	db := newL3TestDB(t)
+	res, err := db.ImportL3(core.DefaultAgentID, []L3ImportItem{
+		{Title: "a", Domain: "d", NodeType: "concept",
+			Related: []L3Relation{{Kind: core.EdgeRelated, Titles: []string{"b"}}}},
+		{Title: "b", Domain: "d", NodeType: "concept"},
+	}, L3ImportSkip)
+	if err != nil {
+		t.Fatal(err)
+	}
+	graphHex := res.GraphIDs[0]
+	graphHash, err := common.ParseID(graphHex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodeA := common.FormatHash(repo.NodeIDL3(graphHash, "a"))
+	nodeB := repo.NodeIDL3(graphHash, "b")
+	edges, err := repo.ListEdgeL3(db.engine, core.SharedPoolAgentID, graphHash)
+	if err != nil || len(edges) != 1 {
+		t.Fatalf("want the one imported edge, got %v err %v", edges, err)
+	}
+	undecodable := []byte(`{"id":`)
+	wantCode := common.ErrDeserialization
+
+	// A damaged node: the graph view and the node query both read the node set, and
+	// neither may answer one node short.
+	if _, err := db.engine.WriteRecord(core.SharedPoolAgentID, core.RecL3GraphNode, nodeB, undecodable); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.GetL3(core.DefaultAgentID, graphHex); common.CodeOf(err) != wantCode {
+		t.Errorf("GetL3 over a damaged node = %v, want the read's own code", err)
+	}
+	if _, err := db.QueryL3Nodes(core.DefaultAgentID, L3NodeQuery{GraphID: graphHex}); common.CodeOf(err) != wantCode {
+		t.Errorf("QueryL3Nodes over a damaged node = %v, want the read's own code", err)
+	}
+
+	// Put the node back and damage the edge instead: the adjacency decides
+	// reachability, so the subgraph must refuse rather than report the two nodes as
+	// unrelated, and the graph view must not hand back a graph without its edge.
+	if err := core.WriteHypergraphNode(db.engine, core.SharedPoolAgentID, nodeB,
+		&core.HypergraphNode{IDHash: nodeB, GraphID: graphHash, Title: "b", NodeType: "concept"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.engine.WriteRecord(core.SharedPoolAgentID, core.RecL3GraphEdge, edges[0].IDHash, undecodable); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.GetL3(core.DefaultAgentID, graphHex); common.CodeOf(err) != wantCode {
+		t.Errorf("GetL3 over a damaged edge = %v, want the read's own code", err)
+	}
+	if _, err := db.QueryL3Subgraph(core.DefaultAgentID, graphHex, nodeA, 1, nil); common.CodeOf(err) != wantCode {
+		t.Errorf("QueryL3Subgraph over a damaged edge = %v, want the read's own code", err)
+	}
+
+	// A damaged graph slot: the pool listing is what a host resolves its scene
+	// anchors against, so it must refuse rather than answer that the pool is empty.
+	if _, err := db.engine.WriteRecord(core.SharedPoolAgentID, core.RecL3GraphSlot, graphHash, undecodable); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ListL3(core.DefaultAgentID); common.CodeOf(err) != wantCode {
+		t.Errorf("ListL3 over a damaged slot = %v, want the read's own code", err)
 	}
 }

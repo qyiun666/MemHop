@@ -114,7 +114,7 @@ func registerL3Tools(s *mcp.Server, db *memhop.Session) {
 func registerKnowledgeReadTools(s *mcp.Server, db *memhop.Session) {
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_knowledge_get",
-		Description: "读取一个 L3 知识超图（图元信息 + 全部节点与边）。",
+		Description: "读取一个 L3 知识超图（图元信息 + 全部节点与边）。返回的边里 kind 是数字：0=related / 1=causal / 2=part_of / 3=sequence / 4=dependency / 5=custom（写侧 memhop_knowledge_import 收的是这些名字）。图里没有节点或边时对应清单为空而不是缺键。",
 		InputSchema: objSchema(map[string]any{
 			"id": strProp("知识图 ID（16 位 hex），必填"),
 		}, "id"),
@@ -146,7 +146,7 @@ func registerKnowledgeImportTool(s *mcp.Server, db *memhop.Session) {
 					"title":      strProp("条目标题，必填"),
 					"domain":     strProp("所属领域，必填"),
 					"node_type":  strProp("节点类型"),
-					"content":    strProp("条目内容，必填"),
+					"content":    strProp("条目内容（可空：整批预校验只认 title 与 domain）"),
 					"keywords":   arrProp("关键词列表", "string"),
 					"source_ref": strProp("位置引用（file:line / URL，可选）"),
 					"related": map[string]any{
@@ -161,7 +161,7 @@ func registerKnowledgeImportTool(s *mcp.Server, db *memhop.Session) {
 						}, "titles"),
 						"description": "同图关系边列表（可选）。一条 related 项 = 一条超边，成员是本条目 + titles 全部目标；给两个以上目标就是 N 元事实（「这些属于同一组」），不拆成两两边。",
 					},
-				}, "title", "domain", "content"),
+				}, "title", "domain"),
 				"description": "知识条目列表，必填",
 			},
 			"mode": strProp("导入模式：Skip | Merge | Overwrite，必填"),

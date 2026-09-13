@@ -45,6 +45,12 @@ func defaultProfile() *core.ProfileSlot {
 // keywords a sample carries come from its topics, one record read each, so
 // collecting them before the cut would price the whole L1 set for the 200 rows
 // that survive it.
+//
+// ponytail: the node enumeration stays tolerant where the L1 passes over the same
+// set are strict. Every one of them runs earlier in the same pipeline and stops on
+// a record it cannot read, so a damaged node never reaches this function; refusing
+// here as well would be a second copy of a refusal that already fired. If a caller
+// ever samples outside that pipeline, this becomes the place to read strictly.
 func Samples(engine *core.StorageEngine, agentID uint64) []core.DistillSample {
 	nowMs := time.Now().UnixMilli()
 	nodes := core.CollectAllSceneNodes(engine, agentID)

@@ -1,10 +1,14 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// Package api is the public facade of MemHop. It contains no business logic:
-// handle types embed the internal domain-bound session (internal.Session) so the
-// promoted method set is exactly the externally callable surface, and every
-// remaining method is a one-line forward to the internal composition root.
+// Package api is the public facade of MemHop. It contains no business logic: the
+// handle types hold the internal session and DB as unexported fields, and every
+// callable method is declared here — nothing is promoted, so the declared set is
+// exactly the externally callable surface and the internal handles are
+// unreachable from outside. Methods that need no DTO mapping forward in one line,
+// and carry the contract a host cannot read anywhere else (lock scope, LLM cost,
+// cascade range, replay semantics); the rest map internal shapes to the published
+// DTOs, rendering every id as 16-character hex.
 //
 // Open is the single entry point. It takes the file path, the LLM endpoint, the
 // tuning knobs and the primary agent's profile, and whether it succeeds depends on

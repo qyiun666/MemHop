@@ -86,18 +86,24 @@ func ResolveSubgraphStart(engine *core.StorageEngine, agentID uint64, graphID, s
 
 // SubgraphAdjacency builds the undirected adjacency map from the graph's
 // edges (restricted to edgeKinds when non-empty) and returns the kept
-// edges alongside.
-func SubgraphAdjacency(engine *core.StorageEngine, agentID uint64, graphID uint64, edgeKinds []core.GraphEdgeKind) (map[uint64]map[uint64]struct{}, []core.HypergraphEdge) {
+// edges alongside. An edge that will not read back stops the build: the
+// adjacency is what decides reachability, so a gap in it is not one less
+// edge but a member the walk can no longer reach.
+func SubgraphAdjacency(engine *core.StorageEngine, agentID uint64, graphID uint64, edgeKinds []core.GraphEdgeKind) (map[uint64]map[uint64]struct{}, []core.HypergraphEdge, error) {
 	adj := make(map[uint64]map[uint64]struct{})
 	var edges []core.HypergraphEdge
-	for _, e := range repo.ListEdgeL3(engine, agentID, graphID) {
+	all, err := repo.ListEdgeL3(engine, agentID, graphID)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, e := range all {
 		if len(edgeKinds) > 0 && !slices.Contains(edgeKinds, e.Kind) {
 			continue
 		}
 		edges = append(edges, e)
 		connectNodes(adj, e.NodeIDs)
 	}
-	return adj, edges
+	return adj, edges, nil
 }
 
 // BfsWithinDepth returns the ids reachable from start within maxDepth

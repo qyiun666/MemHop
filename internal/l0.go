@@ -39,6 +39,9 @@ func (db *DB) GetL0(agentID uint64) (*core.ProfileSlot, error) {
 // record: EmotionState and MBTI, which Dream evolves, and AgentType, stamped
 // when the domain was created — so a host editing its profile never wipes the
 // distilled half and never moves its domain between primary and sub.
+// Personality is the exception in both directions: Dream evolves it too, and this
+// write does not inherit it, so a host that leaves it empty clears whatever the
+// last pass distilled and the next one evolves it again.
 // UpdatedAtMs is stamped here rather than taken from the caller. ID
 // is forced to hash("profile"); the domain lock comes from the agent context.
 func (db *DB) UpdateL0(agentID uint64, slot *core.ProfileSlot) error {

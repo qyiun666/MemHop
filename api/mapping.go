@@ -40,13 +40,20 @@ func formatPtr(id *uint64) *string {
 }
 
 func fromProfileSlot(s internal.ProfileSlot) ProfileSlot {
+	prefs := s.Preferences
+	if prefs == nil {
+		// One shape per "no preferences": a host that wrote its profile without the
+		// map stored a JSON null, and every other empty collection this facade hands
+		// back encodes as empty rather than as null.
+		prefs = map[string]string{}
+	}
 	return ProfileSlot{
 		Name:         s.Name,
 		Role:         s.Role,
 		Personality:  s.Personality,
 		EmotionState: s.EmotionState,
 		MBTI:         s.MBTI,
-		Preferences:  s.Preferences,
+		Preferences:  prefs,
 		AgentType:    s.AgentType,
 		UpdatedAtMs:  s.UpdatedAtMs,
 	}

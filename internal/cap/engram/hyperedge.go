@@ -28,7 +28,12 @@ import (
 // never accumulate. Stale edges are left to DecayNetwork (natural forgetting),
 // never deleted here. Returns the number of edges created or strengthened.
 func BuildHyperedges(engine *core.StorageEngine, agentID uint64, minSimilarity float32, touched map[uint64]struct{}) (int, error) {
-	nodes := core.CollectAllSceneNodes(engine, agentID)
+	// A node this enumeration steps over pairs with nothing, and unlike a node this
+	// pass refuses to fade, the missing edge never reports itself later.
+	nodes, err := core.CollectAllStrict[core.SceneNode](engine, agentID, core.RecL1SceneNode)
+	if err != nil {
+		return 0, err
+	}
 	if len(nodes) < 2 {
 		return 0, nil
 	}

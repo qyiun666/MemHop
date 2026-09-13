@@ -24,7 +24,9 @@ import (
 // Naming only the graph therefore lists its nodes. Results are sorted by id and
 // Limit keeps the first N of that order, so a capped query is the same subset
 // every time. A malformed node id or a graph that does not exist is an error —
-// an empty result means the graph exists and nothing matched.
+// an empty result means the graph exists and nothing matched, and a node that
+// will not read back is reported rather than left out of the listing, so an
+// empty result never stands in for a damaged one.
 func (db *DB) QueryL3Nodes(agentID uint64, q L3NodeQuery) ([]core.HypergraphNode, error) {
 	ac, err := db.lockSharedPool(agentID)
 	if err != nil {
@@ -43,8 +45,12 @@ func (db *DB) QueryL3Nodes(agentID uint64, q L3NodeQuery) ([]core.HypergraphNode
 	if err != nil {
 		return nil, err
 	}
+	nodes, err := repo.ListNodeL3(db.engine, core.SharedPoolAgentID, graphHash)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]core.HypergraphNode, 0)
-	for _, n := range repo.ListNodeL3(db.engine, core.SharedPoolAgentID, graphHash) {
+	for _, n := range nodes {
 		if filter.Matches(n) {
 			out = append(out, n)
 		}
@@ -97,8 +103,15 @@ func (db *DB) QueryL3Subgraph(agentID uint64, graphID, startNodeID string, maxDe
 		maxDepth = 1
 	}
 
-	// Adjacency: all graph edges (filtered by edgeKinds), hyperedge nodeIDs fully connected.
-	adj, edges := graph.SubgraphAdjacency(db.engine, core.SharedPoolAgentID, graphHash, edgeKinds)
+	// Adjacency: all graph edges (filtered by edgeKinds), hyperedge nodeIDs fully
+	// connected. An edge that will not read back stops the query here: the walk
+	// below can only report what the adjacency relates, so a gap in it comes back
+	// as "these two nodes are unrelated" — a claim about the knowledge rather than
+	// a report of damage.
+	adj, edges, err := graph.SubgraphAdjacency(db.engine, core.SharedPoolAgentID, graphHash, edgeKinds)
+	if err != nil {
+		return nil, err
+	}
 
 	// BFS level order: maxDepth hops, one hop per round.
 	visited := graph.BfsWithinDepth(startHash, adj, maxDepth)

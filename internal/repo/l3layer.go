@@ -61,10 +61,17 @@ func EdgeKeyL3(nodeIDs []uint64, kind core.GraphEdgeKind) string {
 // ListEdgeL3 lists one graph's edges sorted by id. The order is part of the
 // contract: the record index under the collect is a hash map, so an unsorted
 // listing would answer the same call twice in two different orders and let a
-// caller's cap fall on an arbitrary subset.
-func ListEdgeL3(engine *core.StorageEngine, agentID uint64, graphID uint64) []core.HypergraphEdge {
+// caller's cap fall on an arbitrary subset. The collect is the strict one: this
+// listing is what a caller builds connectivity from, so an edge that will not
+// decode is not one less row — it is two members the graph stops relating, and
+// the host reads that as a fact about the knowledge rather than as damage.
+func ListEdgeL3(engine *core.StorageEngine, agentID uint64, graphID uint64) ([]core.HypergraphEdge, error) {
+	all, err := core.CollectAllStrict[core.HypergraphEdge](engine, agentID, core.RecL3GraphEdge)
+	if err != nil {
+		return nil, err
+	}
 	var out []core.HypergraphEdge
-	for _, edge := range core.CollectAllHypergraphEdges(engine, agentID) {
+	for _, edge := range all {
 		if edge.GraphID == graphID {
 			out = append(out, edge)
 		}
@@ -72,7 +79,7 @@ func ListEdgeL3(engine *core.StorageEngine, agentID uint64, graphID uint64) []co
 	slices.SortFunc(out, func(a, b core.HypergraphEdge) int {
 		return cmp.Compare(a.IDHash, b.IDHash)
 	})
-	return out
+	return out, nil
 }
 
 // createGraphL3 writes a graph slot; ID = hash(name). An address some other
@@ -193,10 +200,17 @@ func NodeIDL3(graphID uint64, title string) uint64 {
 }
 
 // ListNodeL3 lists one graph's nodes sorted by id, for the same reason
-// `ListEdgeL3` is sorted — the index under the collect is a hash map.
-func ListNodeL3(engine *core.StorageEngine, agentID uint64, graphID uint64) []core.HypergraphNode {
+// `ListEdgeL3` is sorted — the index under the collect is a hash map — and
+// strict for the same reason it is: a node that will not decode is not one less
+// row, it is a member the graph stops holding, and a caller's `Limit` over a
+// silently short listing keeps a subset nobody chose.
+func ListNodeL3(engine *core.StorageEngine, agentID uint64, graphID uint64) ([]core.HypergraphNode, error) {
+	all, err := core.CollectAllStrict[core.HypergraphNode](engine, agentID, core.RecL3GraphNode)
+	if err != nil {
+		return nil, err
+	}
 	var out []core.HypergraphNode
-	for _, node := range core.CollectAllHypergraphNodes(engine, agentID) {
+	for _, node := range all {
 		if node.GraphID == graphID {
 			out = append(out, node)
 		}
@@ -204,7 +218,7 @@ func ListNodeL3(engine *core.StorageEngine, agentID uint64, graphID uint64) []co
 	slices.SortFunc(out, func(a, b core.HypergraphNode) int {
 		return cmp.Compare(a.IDHash, b.IDHash)
 	})
-	return out
+	return out, nil
 }
 
 // MutateNodeL3 reads one node, applies mutate and writes it back; the merge

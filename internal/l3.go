@@ -38,34 +38,47 @@ func (db *DB) getL3Graph(id string) (*L3Graph, error) {
 	if err != nil {
 		return nil, err
 	}
-	return db.graphView(slot), nil
+	return db.graphView(slot)
 }
 
 // graphView assembles the host-facing graph around an already-read slot. An
 // empty member set renders as an empty slice, not nil, so a graph with nothing
-// in it is distinguishable from a field the engine forgot to fill.
-func (db *DB) graphView(slot *core.HypergraphSlot) *L3Graph {
-	nodes := repo.ListNodeL3(db.engine, core.SharedPoolAgentID, slot.IDHash)
-	edges := repo.ListEdgeL3(db.engine, core.SharedPoolAgentID, slot.IDHash)
+// in it is distinguishable from a field the engine forgot to fill. A member that
+// will not read back stops the assembly: this view is the whole graph, so one
+// node short is not a smaller answer but a claim that the graph never held it.
+func (db *DB) graphView(slot *core.HypergraphSlot) (*L3Graph, error) {
+	nodes, err := repo.ListNodeL3(db.engine, core.SharedPoolAgentID, slot.IDHash)
+	if err != nil {
+		return nil, err
+	}
+	edges, err := repo.ListEdgeL3(db.engine, core.SharedPoolAgentID, slot.IDHash)
+	if err != nil {
+		return nil, err
+	}
 	if nodes == nil {
 		nodes = []core.HypergraphNode{}
 	}
 	if edges == nil {
 		edges = []core.HypergraphEdge{}
 	}
-	return &L3Graph{Slot: *slot, Nodes: nodes, Edges: edges}
+	return &L3Graph{Slot: *slot, Nodes: nodes, Edges: edges}, nil
 }
 
 // ListL3 lists every graph of the file-wide pool, sorted by id: the scan under
 // it is a hash map, so without a sort one host would see the same graphs in a
-// different order on each call.
+// different order on each call. The scan is the strict one — a host resolves its
+// anchors against this answer, so a slot missing from it reads as "the pool holds
+// no such graph", which is the same reading the import path refuses to give.
 func (db *DB) ListL3(agentID uint64) ([]core.HypergraphSlot, error) {
 	ac, err := db.lockSharedPool(agentID)
 	if err != nil {
 		return nil, err
 	}
 	defer ac.Mu.Unlock()
-	all := core.CollectAllGraphSlots(db.engine, core.SharedPoolAgentID)
+	all, err := core.CollectAllGraphSlots(db.engine, core.SharedPoolAgentID)
+	if err != nil {
+		return nil, err
+	}
 	slices.SortFunc(all, func(a, b core.HypergraphSlot) int {
 		return cmp.Compare(a.IDHash, b.IDHash)
 	})
@@ -163,7 +176,7 @@ func (db *DB) UpdateL3(agentID uint64, id string, name *string) (*L3Graph, error
 	if err != nil {
 		return nil, err
 	}
-	return db.graphView(slot), nil
+	return db.graphView(slot)
 }
 
 // DeleteL3 cascades: deletes the graph with all its nodes and edges from the

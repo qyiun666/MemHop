@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"iter"
+	"log/slog"
 	"slices"
 
 	"github.com/qyiun666/MemHop/internal/common"
@@ -55,15 +56,25 @@ func TopicEntry(agentID uint64, topic *TopicSlot) (RecordEntry, error) {
 	return RecordEntry{AgentID: agentID, RecordType: RecL2Topic, IDHash: topic.ID, Data: data}, nil
 }
 
-// IterAll iterates over all records of type rt inside one agent domain;
-// corrupt or unparsable records are skipped, preserving the historical
-// scan tolerance.
+// IterAll iterates over all records of type rt inside one agent domain, dropping
+// the ones that will not read back. A rebuild may answer from what survives; a set
+// that decides a deletion or an overwrite may not, and uses CollectAllStrict.
+// What dropping costs is the caller's to know — the mirrors built on this scan hand
+// out the dropped record's slot again — so each drop is logged with its id. An id
+// the index has not caught up with after a tombstone is not damage and stays quiet.
 func IterAll[T any](engine *StorageEngine, agentID uint64, rt uint8) iter.Seq[T] {
 	return func(yield func(T) bool) {
+		var shape T
+		label := fmt.Sprintf("%T", shape)
 		for idHash := range engine.IndexByType(agentID, rt) {
-			slot, err := readJSON[T](engine, agentID, idHash, rt, "")
+			slot, err := readJSON[T](engine, agentID, idHash, rt, label)
 			if err != nil {
-				continue // skip corrupt records; keep scanning
+				if common.CodeOf(err) != common.ErrNotFound {
+					slog.Warn("core: a record will not read back and is left out of the scan",
+						"agent", common.FormatHash(agentID),
+						"record", common.FormatHash(idHash), "err", err)
+				}
+				continue
 			}
 			if !yield(*slot) {
 				return
@@ -80,8 +91,10 @@ func IterAll[T any](engine *StorageEngine, agentID uint64, rt uint8) iter.Seq[T]
 // not evidence that the domain does not hold it.
 func CollectAllStrict[T any](engine *StorageEngine, agentID uint64, rt uint8) ([]T, error) {
 	var out []T
+	var shape T
+	label := fmt.Sprintf("%T", shape)
 	for idHash := range engine.IndexByType(agentID, rt) {
-		slot, err := readJSON[T](engine, agentID, idHash, rt, "")
+		slot, err := readJSON[T](engine, agentID, idHash, rt, label)
 		if err != nil {
 			// The index and one record read are not one atomic step, so an id the
 			// sweep has already tombstoned is a legitimate hole, not a damage report.
@@ -186,24 +199,13 @@ func WriteGraphSlot(engine *StorageEngine, agentID, id uint64, slot *HypergraphS
 	return writeJSON(engine, agentID, RecL3GraphSlot, id, slot, "HypergraphSlot")
 }
 
-func CollectAllGraphSlots(engine *StorageEngine, agentID uint64) []HypergraphSlot {
-	return slices.Collect(IterAll[HypergraphSlot](engine, agentID, RecL3GraphSlot))
-}
-
-// CollectAllGraphSlotsStrict is CollectAllGraphSlots for a caller that decides a
-// write from the list — which graph a domain label resolves to is asked of
-// exactly this enumeration, so a slot that will not read back has to stop the
-// write instead of reading as a label the pool does not hold.
-func CollectAllGraphSlotsStrict(engine *StorageEngine, agentID uint64) ([]HypergraphSlot, error) {
+// CollectAllGraphSlots reads the pool's graph slots whole. Every caller decides
+// something from the list — which graph a domain label resolves to, or which
+// graphs exist for a host to anchor a scene to — so a slot that will not read
+// back has to stop the read instead of answering as a label the pool does not
+// hold.
+func CollectAllGraphSlots(engine *StorageEngine, agentID uint64) ([]HypergraphSlot, error) {
 	return CollectAllStrict[HypergraphSlot](engine, agentID, RecL3GraphSlot)
-}
-
-func CollectAllHypergraphNodes(engine *StorageEngine, agentID uint64) []HypergraphNode {
-	return slices.Collect(IterAll[HypergraphNode](engine, agentID, RecL3GraphNode))
-}
-
-func CollectAllHypergraphEdges(engine *StorageEngine, agentID uint64) []HypergraphEdge {
-	return slices.Collect(IterAll[HypergraphEdge](engine, agentID, RecL3GraphEdge))
 }
 
 func ReadArchiveSlot(engine *StorageEngine, agentID, id uint64) (*ArchiveSlot, error) {

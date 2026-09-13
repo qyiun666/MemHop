@@ -146,6 +146,16 @@ README 的版本表与 git log。
     - **本轮撤回与驳回的两条**：「蒸馏回包应当要求七个轴全都答到」撤回——`{"emotion":{},"mbti":{}}` 必须能解析、MBTI 只答两轴时类型词导出 `XNFX`，这是被 `llmops_test.go` 与 `cap/agent.md` 第 6 条钉住的既有契约（两块都在而安静是关于情绪的真实回答，四个静默的维度什么都不答，所以不声称类型词），不是缺陷；「取样排名的年龄项在唯一调用路径上是死的」驳回一半——depth>2 的节点不被 `skipDeepNode`/`decayOneNode` 改写 `UpdatedAt`，那一项对它们是活的，删掉的只是那个没人读的字段。
     - **本轮记下但没有动的三件事**：`cmd/memhop-mcp` 跑的是 `MemHopDefaults` 的零值而不是 `DefaultMemHopDefaults`（三条后果已全部写进 `docs/mcp/README.md`：自动巩固不触发、压缩下限 0 同时关掉「话题太少就跳过」并把 prompt 里的目标条数渲染成「往 0 压」、`AgentIdleTTLMs=0` 不回收空闲域）——换成默认值是一次**行为变更**而不是门面变更，等裁定；`memhop_trajectory_read` 的入参名叫 `session_id`，而它要的是 `Search` 带回的轮次话题 id，改名断线上客户端，等裁定；`api.ProfileSlot` 那两个字段类型仍无公开别名（第 38 项已记）。
 
+40. **第 17 轮审查（会做决定的宽容枚举 / 留下来那份开始留痕 / 门面与工具面的失真）**：
+    - **同一份宽容被用在了两种清单上**：`CollectAll*` 跳过读不回的记录，这对「可以从幸存者重建」的清单是对的，而本轮查出七处用它的地方并不重建清单、而是**拿这份集合做决定**。L3 的四个读口（`GetL3`/`QueryL3Nodes`/`QueryL3Subgraph`/`ListL3`）交回的是「这张图有什么」，其中子图那份邻接表还决定 BFS 能走到谁——少一个成员不是少一条边，是那个成员从此不可达；L1 的三处按域枚举（建边、陈旧重建、衰减）里，衰减是唯一会移除节点的通道，被扫描跳过的节点永远不会淡出，而建边按这份集合决定谁与谁相关。七处全部改走 `core.CollectAllStrict`：读不回即带着它自己那一档码停下这一轮，并点名那个 id（引擎没有任何读面能指出「哪条坏了」）（`TestL1PassesRefuseANodeTheyCannotRead`、`TestL3ReadsRefuseARecordTheyCannotDecode`）。变异证据：把严格那份改回跳过，六条断言全红，且衰减顺手把一个活节点的 `Importance` 抹成 0。
+    - **三份宽容的孪生实现随之净删**：宽容版 `CollectAllGraphSlots`/`CollectAllHypergraphNodes`/`CollectAllHypergraphEdges` 删除，严格版 `CollectAllGraphSlotsStrict` 去掉后缀成为 `CollectAllGraphSlots`——**这是一处重命名**，调用方（`internal/graph`、`internal/l3.go`）同批改完。
+    - **留下来的那份宽容现在开始留痕**：`IterAll` 每丢一条记录就记一行 WARN 并点名 id（索引尚未跟上的那个合法空洞不记），错误文本也带上形状（`unmarshal core.ArchiveSlot:` 而不是 `unmarshal :`）。`BuildL4FromEngine` 的理由改准：撕裂尾帧根本走不到这次扫描——能进索引的帧都已在开库时过了 CRC；一次丢弃真正的代价是 `MaxSeq` 看不见的那个 Seq，于是这个话题的下一次 append 会盖掉那条记录。`profile.Samples` 是**刻意保留**的宽容，`ponytail:` 注明理由：它排在那三处 L1 枚举之后、同一次持锁之内，坏节点早已让本轮停下，在这里再拒一次只是同一份拒绝的第二份副本。
+    - **陈旧重建带走的边此前不进报告**：`RebuildFromL2` 现在把它连同移除的节点一起交回，`l1_edges_removed` 因此如实覆盖两个会移除的阶段（`TestRebuildFromL2CountsTheEdgeItTakesWithIt`）。
+    - **一个没写过偏好的画像此前序列化成 `"preferences":null`**：门面交回的其余每一份集合恒为 `[]`/`{}`，`fromProfileSlot` 现在把 nil 归一成空 map（`TestMappedListsEncodeAsEmptyNotNull` 加一例）。
+    - **`Personality` 有两个写者，而全部文档都说它归宿主**（已裁定「都写」）：宿主的 `UpdateL0` 与 Dream 的 `MergeDistill` 都写它。本轮把 `api/types.go`、`api/session.go`、`internal/l0.go`、两份接入指南与 `AGENTS.md` 改成陈述这件事，而不是把其中一个写者藏起来。
+    - **门面与工具面另有十处失真改准**：`api/open.go` 仍说门面靠内嵌提升方法（那个字段第 15 轮已转私、26 个方法全部显式声明）；`DeleteTopic` 补上 L1 的滞后（节点的 `TopicIDs` 是上一次同步的快照，删掉的话题要等下一次 Dream 才从里面消失，期间按它去读答 `ErrNotFound`）；`MergeScenes` 补上被并掉那个场景的 L1 节点随它一起走、指名它的超边留给边衰减（与 `DeleteScene` 同形）；`SceneNodeView.TopicIDs` 与 `HypergraphEdge.IDHash` 各补一句定义（后者没有任何方法收它：边只由 `ImportL3` 建、只随 `DeleteL3` 删，没有哪个阶段改写或衰减它）；工具面上 `memhop_scene_topics` 的 depth/child_count 规则、`memhop_archive_get` 也会交回事件（并复述词表与 `[3001]`）、`memhop_knowledge_get` 的数字 kind 词表、`memhop_status` 的两个数不同域（`closed` 是整份共享文件的、`scene_count` 只数本租户）各改准；`memhop_knowledge_import` 不再声称 `content` 必填——整批预校验只拒缺 title 或 domain，那条嵌套 required 清单同批被一条新断言钉住。
+    - **第 39 项记下的三件待裁定事项原样留着**（`cmd/memhop-mcp` 跑的零值 `MemHopDefaults`、`memhop_trajectory_read` 的入参名、`api.ProfileSlot` 那两个没有公开别名的字段类型）。
+
 ## v1.6.3 — 2026-09-10 — L4 是一轮唯一的内容层，L5 只剩计划树，`Update` 只蒸馏
 
 一轮发生过什么，此前被劈在两层：L4 存两条对话原文，轨迹层存事件与计划节点。两层早就共用

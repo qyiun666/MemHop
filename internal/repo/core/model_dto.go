@@ -139,7 +139,7 @@ type L4Query struct {
 	Keyword string       `json:"keyword,omitempty"`  // case-insensitive substring of Content
 	Start   int64        `json:"start,omitempty"`    // created at or after (ms)
 	End     int64        `json:"end,omitempty"`      // created at or before (ms)
-	IDs     []string     `json:"ids,omitempty"`      // 16 位 hex 档案 ID
+	IDs     []string     `json:"ids,omitempty"`      // only these archive ids, 16-char hex
 	TopicID *string      `json:"topic_id,omitempty"` // only archives of this topic
 	Type    *ContentType `json:"type,omitempty"`     // only archives of this content type
 	Kind    *ArchiveKind `json:"kind,omitempty"`     // utterance or event; unset selects both
@@ -172,8 +172,8 @@ type DreamReport struct {
 	L1NodesAdded       int          `json:"l1_nodes_added"`       // 同步创建/更新的场景节点
 	L1EdgesAdded       int          `json:"l1_edges_added"`       // 新建或抬权的超边
 	L1NodesRemoved     int          `json:"l1_nodes_removed"`     // 陈旧重建 + 衰减移除
-	L1EdgesRemoved     int          `json:"l1_edges_removed"`
-	L0Updated          bool         `json:"l0_updated"` // 本轮执行了情感/MBTI 蒸馏并回写
+	L1EdgesRemoved     int          `json:"l1_edges_removed"`     // 陈旧重建 + 衰减各自带走的边
+	L0Updated          bool         `json:"l0_updated"`           // 本轮执行了情感/MBTI 蒸馏并回写
 	Stages             []DreamStage `json:"stages,omitempty"`
 }
 
