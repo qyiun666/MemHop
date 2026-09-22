@@ -4,9 +4,9 @@
 // Offline interface tests for the L5 plan tree and the turn's event track (L4
 // content). A host drives this the way meowagent does, one loop iteration per
 // turn: `Search` reads the scene and hands back the topic id of the turn about to
-// run, the host plans a step at a time with `PlanCreate`/`PlanNodeAdd` and
-// restates one with `PlanNodeUpdate`, each step's work goes into L4 with
-// `AppendArchive` bound to one created step, and `Update` settles the turn's
+// run, the host adds steps one at a time with `PlanNodeAdd` (parentSeq 0 opens the
+// tree) and restates one with `PlanNodeUpdate`, each step's work goes into L4 with
+// `AppendArchive` bound to one created step, and `Settle` closes the turn's
 // dialogue into its topic. After a restart the host reads the tree back with a
 // turn topic it already holds: the tree is addressed by the ordinals the library
 // returned, so what a host must survive a restart holding is the turn's topic id
@@ -157,7 +157,7 @@ func TestInterfacePlanTreeLivesOnItsTurn(t *testing.T) {
 
 // A created tree folds a parent's conclusion out of its children once every child
 // has settled, and a refused write leaves nothing behind.
-func TestInterfacePlanCreateAndFold(t *testing.T) {
+func TestInterfacePlanAddAndFold(t *testing.T) {
 	db, _ := openTestDB(t)
 	sceneID := openSession(t, db)
 	topicID := openTurn(t, db, sceneID)
