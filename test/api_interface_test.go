@@ -131,7 +131,7 @@ func TestInterfaceOpenClose(t *testing.T) {
 }
 
 // The memory loop contract offline: an empty-id Search mints a session, one
-// Update settles one turn (topic + two originals + exactly one distillation),
+// Settle closes one turn (topic + two originals + exactly one distillation),
 // and the same session read hands it back.
 func TestInterfaceSearchUpdateL2L4(t *testing.T) {
 	db, llm := openTestDB(t)
@@ -155,14 +155,14 @@ func TestInterfaceSearchUpdateL2L4(t *testing.T) {
 		t.Fatalf("turn: %v", err)
 	}
 	if calls := llm.calls["keywords"]; calls != before+1 {
-		t.Fatalf("Update distilled %d times, want exactly one per turn", calls-before)
+		t.Fatalf("Settle distilled %d times, want exactly one per turn", calls-before)
 	}
 
 	// The turn is now the session's read surface, with the content it appended
 	// held under its own id.
 	after, err := db.Search(memhop.SearchQuery{SceneID: sceneID})
 	if err != nil {
-		t.Fatalf("Search after Update: %v", err)
+		t.Fatalf("Search after Settle: %v", err)
 	}
 	if len(after.Topics) != 1 || after.Topics[0].ID != topicID {
 		t.Fatalf("surface = %+v, want the one turn topic %s", after.Topics, topicID)

@@ -76,7 +76,7 @@ func TestExtractKeywordsLongInputRealLLM(t *testing.T) {
 
 // TestUpdateLongTurnSettles runs the write chain (real LLM) with whole-session
 // long inputs. The invariant under test is the strict one: either the turn
-// settles with a real keyword track, or Update fails and settles nothing. A
+// settles with a real keyword track, or Settle fails and settles nothing. A
 // topic written with degraded keywords is the outcome that must never happen.
 func TestUpdateLongTurnSettles(t *testing.T) {
 	db := testsupport.OpenMemHop(t)
@@ -98,12 +98,12 @@ func TestUpdateLongTurnSettles(t *testing.T) {
 			// Failing loudly is allowed; settling a degraded turn is not.
 			res, rerr := db.Search(memhop.SearchQuery{SceneID: sceneID})
 			if rerr != nil {
-				t.Fatalf("attempt %d: Update failed (%v) and the scene cannot be read: %v", i, err, rerr)
+				t.Fatalf("attempt %d: Settle failed (%v) and the scene cannot be read: %v", i, err, rerr)
 			}
 			if len(res.Topics) != i {
-				t.Fatalf("attempt %d: Update failed (%v) but settled %d topics, want %d", i, err, len(res.Topics), i)
+				t.Fatalf("attempt %d: Settle failed (%v) but settled %d topics, want %d", i, err, len(res.Topics), i)
 			}
-			t.Logf("attempt %d: Update refused without degrading the turn: %v", i, err)
+			t.Logf("attempt %d: Settle refused without degrading the turn: %v", i, err)
 			continue
 		}
 	}

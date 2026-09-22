@@ -104,7 +104,7 @@ func surfaceKeywords(res *memhop.SearchResult) []string {
 	return out
 }
 
-// TestKeywordFidelity verifies point 1: the keywords Update distills from a
+// TestKeywordFidelity verifies point 1: the keywords Settle distills from a
 // finished turn faithfully carry that turn's meaning — the keywords ARE the
 // host's context, so this is the quality bar of the whole design.
 func TestKeywordFidelity(t *testing.T) {

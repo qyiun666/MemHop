@@ -81,7 +81,7 @@ func TestCoreCycleUpdateDream(t *testing.T) {
 		t.Fatalf("open session: %v", err)
 	}
 
-	// Phase 1: settle each turn with Update (the real host pattern), checking
+	// Phase 1: one Settle per turn (the real host pattern), checking
 	// L0/L2/L4 consistency every few turns.
 	for i, f := range facts {
 		ts := base + int64(i)*1000

@@ -47,7 +47,7 @@ func loadLocomoSmoke(tb testing.TB) *locomoFixture {
 }
 
 // benchTurn runs one host turn the way a host runs it: the opening read that
-// mints the turn's topic id, then the Update that settles it.
+// mints the turn's topic id, then the Settle that closes it.
 func benchTurn(tb testing.TB, db *testsupport.Handle, sceneID, user, agent string, ts int64) {
 	tb.Helper()
 	_, turnID, err := db.OpenTurn(sceneID)
@@ -158,7 +158,7 @@ func BenchmarkDreamConsolidation(b *testing.B) {
 	}
 }
 
-// BenchmarkMemoryLoop measures the real host memory loop: Update-only turns
+// BenchmarkMemoryLoop measures the real host memory loop: Settle-only turns
 // in one session with the automatic Dream the engine schedules once the
 // session surface passes the threshold, plus periodic L0/L2 verification.
 func BenchmarkMemoryLoop(b *testing.B) {
@@ -166,7 +166,7 @@ func BenchmarkMemoryLoop(b *testing.B) {
 	defer db.Close()
 
 	// Same-topic turns: once the session surface exceeds
-	// SceneDreamTopicThreshold(24), Update schedules a Dream on its own.
+	// SceneDreamTopicThreshold(24), Settle schedules a Dream on its own.
 	related := []string{
 		"我喜欢早上六点去公园慢跑", "跑步的时候我习惯听播客", "我每周跑步大概三次，每次五公里",
 		"跑完步我会喝一杯蛋白粉", "我早上六点出门跑步", "慢跑时我听健身播客",
