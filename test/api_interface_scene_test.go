@@ -384,8 +384,8 @@ func TestInterfaceDeleteSceneAndTopic(t *testing.T) {
 	keepB := settleTurn(t, db, keep, "要删掉的那一轮", "删掉")
 	dropA := settleTurn(t, db, drop, "整个场景作废", "一起作废")
 
-	// A turn's originals are addressed by its own topic id — that is the whole
-	// replacement for the reference list topics used to carry.
+	// A turn's originals are addressed by its own topic id: the record carries no
+	// list of them, so this read is the whole answer for what a turn is made of.
 	ownedIDs := func(topicID string) []string {
 		t.Helper()
 		id := topicID

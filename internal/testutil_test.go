@@ -85,51 +85,57 @@ func mustWriteScene(t *testing.T, engine *core.StorageEngine, agentID uint64, sc
 	}
 }
 
-// mockLLMServer answers every chat completion request with the same content —
-// the plain stub for tests that only need the LLM call to succeed.
-func mockLLMServer(t *testing.T, content string) *httptest.Server {
-	t.Helper()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+// chatPath serves the one endpoint the engine calls; any other path 404s, which is
+// how a test notices the engine asking for something it was never configured to use.
+func chatPath(h func(w http.ResponseWriter, r *http.Request)) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
 			http.NotFound(w, r)
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"choices": []map[string]any{{
-				"message": map[string]any{"role": "assistant", "content": content},
-			}},
-		})
-	}))
+		h(w, r)
+	}
+}
+
+// answerCompletion writes one OpenAI-style non-streaming completion.
+func answerCompletion(w http.ResponseWriter, content string) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"choices": []map[string]any{{
+			"message": map[string]any{"role": "assistant", "content": content},
+		}},
+	})
+}
+
+// mockServer starts a chat endpoint over h and closes it with the test.
+func mockServer(t *testing.T, h func(w http.ResponseWriter, r *http.Request)) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(chatPath(h))
 	t.Cleanup(srv.Close)
 	return srv
+}
+
+// mockLLMServer answers every chat completion request with the same content —
+// the plain stub for tests that only need the LLM call to succeed.
+func mockLLMServer(t *testing.T, content string) *httptest.Server {
+	return mockServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		answerCompletion(w, content)
+	})
 }
 
 // mockLLMServerSeq answers successive chat completion requests from contents in
 // order, wrapping around — for a pipeline whose stages must each get their own
 // reply. The cursor is guarded because the server runs on its own goroutine.
 func mockLLMServerSeq(t *testing.T, contents ...string) *httptest.Server {
-	t.Helper()
 	var mu sync.Mutex
 	idx := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
-			http.NotFound(w, r)
-			return
-		}
+	return mockServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		mu.Lock()
 		content := contents[idx%len(contents)]
 		idx++
 		mu.Unlock()
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"choices": []map[string]any{{
-				"message": map[string]any{"role": "assistant", "content": content},
-			}},
-		})
-	}))
-	t.Cleanup(srv.Close)
-	return srv
+		answerCompletion(w, content)
+	})
 }
 
 // contractLLMServer answers each of the three LLM contracts with a valid reply of
@@ -138,12 +144,7 @@ func mockLLMServerSeq(t *testing.T, contents ...string) *httptest.Server {
 // is the stage's contract working (a reply carrying no emotion/mbti block is no
 // answer), not something a scene-read test means to exercise.
 func contractLLMServer(t *testing.T) *httptest.Server {
-	t.Helper()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
-			http.NotFound(w, r)
-			return
-		}
+	return mockServer(t, func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Messages []struct {
 				Role    string `json:"role"`
@@ -161,15 +162,8 @@ func contractLLMServer(t *testing.T) *httptest.Server {
 				content = `{"l2_groups":[]}`
 			}
 		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"choices": []map[string]any{{
-				"message": map[string]any{"role": "assistant", "content": content},
-			}},
-		})
-	}))
-	t.Cleanup(srv.Close)
-	return srv
+		answerCompletion(w, content)
+	})
 }
 
 // cancellingLLMServer answers like mockLLMServerSeq and cancels cancel right
@@ -177,52 +171,29 @@ func contractLLMServer(t *testing.T) *httptest.Server {
 // when the cancellation must land after a stage has already written: then it is
 // the next checkpoint that exits the pipeline, not a failed model call.
 func cancellingLLMServer(t *testing.T, cancel context.CancelFunc, cancelOn int, contents ...string) *httptest.Server {
-	t.Helper()
 	var mu sync.Mutex
 	idx := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
-			http.NotFound(w, r)
-			return
-		}
+	return mockServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		mu.Lock()
 		at := idx + 1
 		idx = at
 		content := contents[(at-1)%len(contents)]
 		mu.Unlock()
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"choices": []map[string]any{{
-				"message": map[string]any{"role": "assistant", "content": content},
-			}},
-		})
+		answerCompletion(w, content)
 		if at == cancelOn {
 			cancel()
 		}
-	}))
-	t.Cleanup(srv.Close)
-	return srv
+	})
 }
 
 // countingLLMServer answers every chat request with content and records how
 // many times it was called — the read path must leave the counter at zero.
 func countingLLMServer(t *testing.T, content string) (*httptest.Server, *atomic.Int64) {
-	t.Helper()
 	calls := &atomic.Int64{}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
-			http.NotFound(w, r)
-			return
-		}
+	srv := mockServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		calls.Add(1)
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"choices": []map[string]any{{
-				"message": map[string]any{"role": "assistant", "content": content},
-			}},
-		})
-	}))
-	t.Cleanup(srv.Close)
+		answerCompletion(w, content)
+	})
 	return srv, calls
 }
 
@@ -249,39 +220,21 @@ func (r *recordedRequests) snapshot() []string {
 // request body, so a test can assert what the engine actually sent — that a
 // transcript reached the prompt with its speakers labelled, for instance.
 func recordingLLMServer(t *testing.T, content string) (*httptest.Server, *recordedRequests) {
-	t.Helper()
 	var seen recordedRequests
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
-			http.NotFound(w, r)
-			return
-		}
+	srv := mockServer(t, func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		seen.add(string(body))
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"choices": []map[string]any{{
-				"message": map[string]any{"role": "assistant", "content": content},
-			}},
-		})
-	}))
-	t.Cleanup(srv.Close)
+		answerCompletion(w, content)
+	})
 	return srv, &seen
 }
 
 // failingLLMServer returns status for every chat completion request
 // (non-retryable codes only, so tests do not wait out the backoff).
 func failingLLMServer(t *testing.T, status int) *httptest.Server {
-	t.Helper()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
-			http.NotFound(w, r)
-			return
-		}
+	return mockServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "mock llm failure", status)
-	}))
-	t.Cleanup(srv.Close)
-	return srv
+	})
 }
 
 // countRecords counts the live records of one type in an agent domain.
