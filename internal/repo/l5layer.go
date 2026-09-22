@@ -4,9 +4,7 @@
 // L5 plan-node primitives: write one node, batch delete by id or by owning
 // topic, and group a domain's nodes into per-topic aggregates. L5 holds nothing
 // but plan nodes — a turn's events are L4 content beside its dialogue originals.
-// The tree view, the subtree walk and the retention sweep go through the domain's
-// PlanCache in the internal layer, which owns every plan write and delete under
-// the domain lock.
+// This package keeps no plan cache and runs no retention sweep.
 package repo
 
 import (
@@ -17,12 +15,10 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
-// WritePlanNode writes one node record, preserving its caller-derived IDHash
-// (core.HashPlanNode(node.TopicID, node.Seq)) so the node's address stays stable
-// across writes. A node has no ordinal a caller may invent: the plan cache hands
-// it out, the id follows from it, and a mismatch is refused rather than written
-// sideways onto another step. The address is the caller's own, so nothing comes
-// back but the outcome.
+// WritePlanNode writes one node record. The IDHash must already be
+// core.HashPlanNode(node.TopicID, node.Seq): the ordinal is handed out
+// elsewhere and the id follows from it, so a mismatch is a step written
+// sideways onto another address and is refused.
 func WritePlanNode(engine *core.StorageEngine, agentID uint64, node *core.PlanNode) error {
 	if node == nil {
 		return common.NewError(common.ErrInvalidQuery, "plan node is nil")
@@ -36,13 +32,9 @@ func WritePlanNode(engine *core.StorageEngine, agentID uint64, node *core.PlanNo
 	return core.WritePlanNode(engine, agentID, node.IDHash, node)
 }
 
-// DeletePlanNodesByIDs batch-deletes plan nodes by record id. It reads nothing and
-// reports no count: the ids come from an enumeration the caller already ran, so
-// "how many went away" is a figure the caller can take from its own list.
+// DeletePlanNodesByIDs batch-deletes plan nodes by record id. It reads nothing
+// and reports no count: the ids come from an enumeration the caller already ran.
 func DeletePlanNodesByIDs(engine *core.StorageEngine, agentID uint64, idHashes []uint64) error {
-	if len(idHashes) == 0 {
-		return nil
-	}
 	if _, err := engine.DeleteRecordBatch(agentID, idHashes); err != nil {
 		return common.NewError(common.ErrIO, "delete plan nodes", err)
 	}
@@ -50,10 +42,9 @@ func DeletePlanNodesByIDs(engine *core.StorageEngine, agentID uint64, idHashes [
 }
 
 // PlanNodeIDsByTopicIDs enumerates the record ids of every plan node a listed
-// topic owns. A node has no content-side key to hang on, so the owning topic is
-// found by scanning the node bucket — strictly, because the result is what a
-// cascade tombstones afterwards, exactly like a topic subtree. This only
-// enumerates: whoever deletes runs every enumeration before the first tombstone.
+// topic owns, found by a strict scan of the node bucket — the result is what a
+// cascade tombstones afterwards. This only enumerates: whoever deletes runs
+// every enumeration before the first tombstone.
 func PlanNodeIDsByTopicIDs(engine *core.StorageEngine, agentID uint64, topics []uint64) ([]uint64, error) {
 	if len(topics) == 0 {
 		return nil, nil
@@ -107,8 +98,8 @@ func RecomputePlanAgg(agg *PlanAggregate) {
 }
 
 // CollectPlanNodes groups one agent domain's plan nodes by the turn topic that
-// opened them, reading the node bucket strictly: its output drives the retention
-// sweep, so an incomplete set cannot be trusted to decide a deletion.
+// opened them, reading the node bucket strictly: its output drives the
+// retention sweep.
 func CollectPlanNodes(engine *core.StorageEngine, agentID uint64) ([]PlanAggregate, error) {
 	nodes, err := core.CollectAllPlanNodesStrict(engine, agentID)
 	if err != nil {
@@ -117,9 +108,8 @@ func CollectPlanNodes(engine *core.StorageEngine, agentID uint64) ([]PlanAggrega
 	return GroupPlanNodes(nodes), nil
 }
 
-// GroupPlanNodes aggregates a caller-supplied node set by owning topic. A key
-// yields an aggregate exactly while at least one of its nodes is in the set: a
-// plan whose whole tree has been pruned is gone. Result is TopicID-ascending for
+// GroupPlanNodes aggregates a caller-supplied node set by owning topic: a topic
+// with no node in the set yields no aggregate. Result is TopicID-ascending for
 // determinism.
 func GroupPlanNodes(nodes []core.PlanNode) []PlanAggregate {
 	byTopic := make(map[uint64]*PlanAggregate)

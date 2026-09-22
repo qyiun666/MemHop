@@ -54,8 +54,6 @@ func (db *DB) ListScenes(agentID uint64, l3ID string) ([]core.SceneSlot, error) 
 // value, so the library's own "session:<id>" naming and the turn history are
 // never touched by accident. Anchoring is write-once: moving a scene that
 // already has a *different* domain over needs Force, while clearing always does.
-// Handing back the written scene is what makes a host's read-back cheap — it
-// does not have to list every scene to confirm one anchor.
 func (db *DB) UpdateScene(agentID uint64, sceneID string, patch ScenePatch) (core.SceneSlot, error) {
 	ac, err := db.lockAgent(agentID)
 	if err != nil {
@@ -101,11 +99,10 @@ func (db *DB) UpdateScene(agentID uint64, sceneID string, patch ScenePatch) (cor
 }
 
 // RenameTopic gives one topic the name its host chose and returns the topic as
-// stored afterwards. An empty name is refused: a topic is created unnamed and
-// stays so until somebody names it, so "" is the absence of a name rather than
-// one, and clearing a name has no use that absence does not already cover. The
-// keyword track and the tree links are the engine's and survive untouched. A
-// topic that is not there is ErrNotFound — nothing is created for it.
+// stored afterwards. An empty name is refused: a topic is created unnamed, so
+// "" is the absence of a name rather than one. The keyword track and the tree
+// links survive untouched. A topic that is not there is ErrNotFound — nothing
+// is created for it.
 func (db *DB) RenameTopic(agentID uint64, topicID, name string) (core.TopicSlot, error) {
 	if name == "" {
 		return core.TopicSlot{}, common.NewError(common.ErrInvalidQuery, "topic name is required")
@@ -242,9 +239,9 @@ func (db *DB) SceneContext(agentID uint64, sceneID string) (*SceneContext, error
 }
 
 // DeleteTopic removes a topic and its whole subtree (children at any
-// depth), the L4 archives they own, and their L2Meta cache entries,
-// so the deleted topic no longer surfaces in any scene read. Deleting a
-// missing topic returns ErrNotFound.
+// depth), the L4 archives and plan trees they own, and their L2Meta cache
+// entries, so the deleted topic no longer surfaces in any scene read. Deleting
+// a missing topic returns ErrNotFound.
 func (db *DB) DeleteTopic(agentID uint64, topicID string) error {
 	ac, err := db.lockAgent(agentID)
 	if err != nil {
@@ -266,8 +263,8 @@ func (db *DB) DeleteTopic(agentID uint64, topicID string) error {
 }
 
 // DeleteScene removes a scene: its scene record, every topic (all depths),
-// the L4 archives those topics own, and their L2Meta cache entries, so the
-// scene disappears from listings and reads.
+// the L4 archives and plan trees those topics own, and their L2Meta cache
+// entries, so the scene disappears from listings and reads.
 func (db *DB) DeleteScene(agentID uint64, sceneID string) error {
 	ac, err := db.lockAgent(agentID)
 	if err != nil {

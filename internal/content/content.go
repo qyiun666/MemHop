@@ -1,14 +1,11 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// Package content holds the small methods over a topic's L4 content: the key
-// every one of them is addressed by, the write contract, appending one record,
-// reading a topic's two tracks back, rendering a transcript for distillation,
-// and the per-record payload budgets.
-//
-// It is named for what it serves rather than for a layer: a turn's dialogue
-// originals and its operation events are the same records differing only in
-// Kind, so one write path serves both.
+// Package content holds the small methods over a topic's L4 content: the key every
+// one of them is addressed by, the write contract, appending one record, reading a
+// topic's two tracks back, rendering a transcript for distillation, and the
+// per-record payload budgets. A turn's dialogue originals and its operation events
+// are the same records differing only in Kind, so one write path serves both.
 package content
 
 import (
@@ -22,8 +19,7 @@ import (
 )
 
 // ParseTopicID parses the one key a turn's records are addressed by and rejects
-// 0. Zero is the unset value of every record's owning id, so admitting it would
-// let a caller address the unkeyed residue of a domain.
+// 0 — the unset value of every record's owning id.
 func ParseTopicID(topicID string) (uint64, error) {
 	h, err := common.ParseID(topicID)
 	if err != nil {
@@ -40,21 +36,16 @@ func ParseTopicID(topicID string) (uint64, error) {
 // exactly like a complete one.
 const MaxEventPayload = 4 * 1024
 
-// MaxUtterancePayload caps a single dialogue original. The budget is what keeps
-// one append from turning into an unbounded number of LLM round-trips held inside
-// the domain lock: the calls a text costs grow with its length, so an unbounded
-// text is an unbounded lock hold.
+// MaxUtterancePayload caps a single dialogue original. The budget bounds the LLM
+// round-trips one text costs inside the domain lock, which grow with its length.
 const MaxUtterancePayload = 64 * 1024
 
-// ValidateAppend checks what every content write path requires of a record,
-// before any record or plan node is touched. Only the axes are looked at: the
-// owning topic and the derived id are the library's to assign, and Seq 0 means
-// "allocate" rather than being a value to validate.
+// ValidateAppend checks what every content write path requires of a record, before
+// any record or plan node is touched. Only the axes are looked at: the owning topic
+// and the derived id are the library's to assign, and Seq 0 means "allocate".
 //
-// The two kinds own the three axes differently, and the rules below are what keep
-// Kind, Role, ContentType and EventType from disagreeing about one record:
-// an event names itself and carries no speaker; an utterance has a speaker and a
-// medium and no event name.
+// The two kinds own the axes differently: an event names itself and carries no
+// speaker; an utterance has a speaker and a medium and no event name.
 func ValidateAppend(in core.ArchiveSlot) error {
 	if !in.Kind.Valid() {
 		return common.NewError(common.ErrInvalidQuery, "undefined content kind")
@@ -72,9 +63,8 @@ func ValidateAppend(in core.ArchiveSlot) error {
 		if in.EventType == "" {
 			return common.NewError(common.ErrInvalidQuery, "an event requires EventType")
 		}
-		// The name is part of the record. Measuring only the body would leave an
-		// unbounded text one field away from the budget, which is the same token
-		// stream the budget exists to keep out.
+		// The event name is part of the record: measuring only the body leaves an
+		// unbounded text one field away from the budget.
 		return checkPayload(len(in.EventType)+len(in.Content), MaxEventPayload, "event")
 	}
 	if in.EventType != "" {
@@ -102,12 +92,11 @@ func checkPayload(size, budget int, what string) error {
 
 // A record's timestamp is milliseconds since the epoch — the retention sweep and
 // every L4 time filter compare it against a millisecond cutoff. The two bands below
-// are the shapes a host produces by mistake, and each is a silent loss rather than an
-// error: a seconds-scale record is already older than the retention window, so the
-// next Dream sweeps the whole turn's transcript, and a microsecond-scale one never
-// expires. Anything under the seconds band is left alone: those are relative counters
-// and fixtures, not a wrong unit, and refusing them would refuse a caller that stamps
-// its own ordering rather than a wall clock.
+// are the shapes a host produces by mistake, and each is a silent loss: a
+// seconds-scale record is already older than the retention window, so the next Dream
+// sweeps the whole turn's transcript, and a microsecond-scale one never expires.
+// Anything under the seconds band is left alone — those are relative counters, not a
+// wrong unit.
 const (
 	secondsScaleFloor = 1_000_000_000       // 1e9: 2001-09-09 read as seconds
 	secondsScaleCeil  = 100_000_000_000     // 1e11: 5138-11-16 read as seconds
@@ -125,26 +114,21 @@ func checkTimestamp(v int64) error {
 	return nil
 }
 
-// Append is this package's only write path, and the one every host-side record of
-// a turn goes through: it lands one entry on the topic's content track and hands
-// back the slot it took. There is no id beyond (topic, Seq) — the record's
-// address is its position — and the host needs the position when it allocates:
-// replaying the same turn means writing the same slots again.
+// Append is this package's only write path: it lands one entry on the topic's
+// content track and returns the slot it took. There is no id beyond (topic, Seq) —
+// the address is the position — and a replay of a turn rewrites the same slots.
 //
-// Field ownership is the contract. Of the record a caller passes, the ones the
-// utterance kind owns are adopted verbatim (Role, ContentType, EventType,
-// Content, CreatedAt) and the rest are assigned here — Kind is what the caller
-// chose to validate against, IDHash follows from (topic, Seq), and an event
-// leaves Role 0 and ContentType text because a thing that happened has no
-// speaker and no medium. So neither kind can forge the other's shape.
+// Field ownership: of the record a caller passes, Role, ContentType, EventType,
+// Content and CreatedAt are adopted verbatim; Kind is what the caller validated
+// against and IDHash follows from (topic, Seq). An event leaves Role 0 and
+// ContentType text — a thing that happened has no speaker and no medium.
 //
-// Seq 0 allocates a slot above every one the topic already holds, including the
-// two reserved for dialogue: a caller records events while the turn runs and
-// appends the originals afterwards, and the originals must still land on Seq 1
-// and 2. A non-zero Seq writes that slot, and taking a slot that is already held
-// is an overwrite, not an error — that is what lets a replayed turn converge
-// instead of accumulating versions, and it reaches across Kind: naming a slot an
-// event holds replaces the event.
+// Seq 0 allocates above every slot the topic already holds, including the two
+// reserved for dialogue: events recorded while the turn runs must not push the
+// originals off Seq 1 and 2. A non-zero Seq writes that slot, and taking a slot
+// already held is an overwrite rather than an error — that is what makes a
+// replayed turn converge — and it reaches across Kind: naming a slot an event
+// holds replaces the event.
 func Append(ac *domain.Context, agentID, topicID uint64, in core.ArchiveSlot) (uint64, error) {
 	if err := ValidateAppend(in); err != nil {
 		return 0, err
@@ -152,11 +136,11 @@ func Append(ac *domain.Context, agentID, topicID uint64, in core.ArchiveSlot) (u
 	seq := in.Seq
 	if seq == 0 {
 		seq = max(ac.L4.MaxSeq(topicID), core.LastUtteranceSeq) + 1
-		// Allocating is the library choosing an address, and the number it chose comes
-		// from a mirror whose rebuild skips records it cannot decode — so the slot can
-		// still be held by one, its ordinal living on in the derived id. Read that
-		// address before taking it. A named Seq is unchecked on purpose: overwriting a
-		// slot the caller points at is this write path's replay contract.
+		// The offered slot comes from a mirror whose rebuild skips records it cannot
+		// decode, so the slot can still be held by one — its ordinal lives on in the
+		// derived id. Read that address before taking it. A named Seq is unchecked on
+		// purpose: overwriting the slot a caller points at is this path's replay
+		// contract.
 		if _, err := core.ReadArchiveSlot(ac.Engine, agentID, core.HashContent(topicID, seq)); err != nil && common.CodeOf(err) != common.ErrNotFound {
 			return 0, common.NewError(common.CodeOf(err), "read the slot the content mirror offered", err)
 		}
@@ -179,13 +163,13 @@ func Read(agentID uint64, ac *domain.Context, topicID uint64, kind core.ArchiveK
 }
 
 // RenderForDistill turns a topic's utterances into the one text a keyword call
-// reads: Seq order, each entry labelled with its speaker. A record's own newlines
-// are written out as they came in, so an entry can span several lines.
+// reads: Seq order, each entry labelled with its speaker; a record's own newlines
+// are written out as they came in.
 //
 // Seq order is the order the topic reads back in, so the text that produced a
-// topic's keywords is the text its transcript reads back as. The speaker labels
-// are not decoration: without them the sides of an exchange collapse into one
-// undifferentiated text and the extraction loses who asserted what.
+// topic's keywords is the text its transcript reads back as. The labels are not
+// decoration: without them the sides of an exchange collapse and the extraction
+// loses who asserted what.
 func RenderForDistill(utterances []core.ArchiveSlot) string {
 	var b strings.Builder
 	for i, u := range utterances {

@@ -23,18 +23,16 @@ import (
 )
 
 // Settle distills one turn's appended utterances into the keyword track of the
-// topic id Search issued for it, and returns the topic as stored — the track
-// among it, so the host that just closed a turn reads back what the turn was
-// distilled into without a second read. The distill runs before the topic is
-// written, so a failed LLM call leaves the scene exactly as it was — no
-// contentless topic. Settling the same topic id twice rewrites that track from
-// whatever the topic holds now. What may be settled is a turn topic of the named
-// scene only — a Dream-fused topic, another scene's topic, or an id that names
-// some other record is refused.
+// topic id Search issued for it, and returns the topic as stored. The distill
+// runs before the topic is written, so a failed LLM call leaves the scene
+// exactly as it was — no contentless topic. Settling the same topic id twice
+// rewrites the track from whatever the topic holds now. Only a turn topic of
+// the named scene may settle: a Dream-fused topic, another scene's topic, or
+// an id naming some other record is refused.
 //
-// A topic with no utterances left is refused with ErrInvalidQuery before any LLM
-// call: the retention window reclaimed what was said, so there is nothing to
-// distill and inventing an empty keyword track would read back as the real one.
+// A topic with no utterances left is refused with ErrInvalidQuery before any
+// LLM call: the retention window reclaimed what was said, and an empty track
+// would read back as a distilled one.
 func (db *DB) Settle(agentID uint64, sceneID, topicID string) (*core.TopicSlot, error) {
 	ac, parsedTopic, err := db.lockSession(agentID, topicID)
 	if err != nil {
@@ -45,9 +43,6 @@ func (db *DB) Settle(agentID uint64, sceneID, topicID string) (*core.TopicSlot, 
 	if err != nil {
 		return nil, common.NewError(common.ErrInvalidQuery, "parse scene id", err)
 	}
-	// A turn must land in a scene the host already opened with Search; an
-	// unknown id is rejected before any write so nothing settles in a scene
-	// nobody owns.
 	slot, err := core.ReadSceneSlot(db.engine, agentID, parsedScene)
 	if err != nil {
 		return nil, err
@@ -76,9 +71,8 @@ func (db *DB) Settle(agentID uint64, sceneID, topicID string) (*core.TopicSlot, 
 		slices.MinFunc(utterances, byCreatedAt).CreatedAt,
 		slices.MaxFunc(utterances, byCreatedAt).CreatedAt)
 	if err != nil {
-		// The settle is the last step of a turn: whatever stopped it — a stored
-		// record that will not read back or a write that failed — is the reason the
-		// host hears, with its own code.
+		// A read-back or write failure keeps its own code: the host hears
+		// what actually stopped the settle.
 		return nil, common.NewError(common.CodeOf(err), "create turn topic", err)
 	}
 	ac.SyncL2Meta(topic)
@@ -93,7 +87,7 @@ func byCreatedAt(a, b core.ArchiveSlot) int {
 // consolidateScene keeps one scene's read surface bounded: once its depth-1
 // topic count passes the threshold, a background Dream compresses it (the
 // scene is compressed by a later hit if this Dream is already in flight).
-// Best-effort and asynchronous — Update never waits on the pipeline. A zero
+// Best-effort and asynchronous — Settle never waits on the pipeline. A zero
 // threshold disables the trigger.
 func (db *DB) consolidateScene(ac *domain.Context, sceneID uint64) {
 	t := db.config.Defaults.SceneDreamTopicThreshold

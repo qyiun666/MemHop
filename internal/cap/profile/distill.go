@@ -19,8 +19,7 @@ import (
 )
 
 // maxDistillSamples bounds both prompt cost and LLM input size for L0
-// distillation. 200 top-ranked nodes is far more signal than emotion/MBTI
-// extraction needs.
+// distillation: 200 top-ranked nodes is far more signal than emotion/MBTI needs.
 const maxDistillSamples = 200
 
 // maxDistillKeywordsPerSample bounds the keyword list sent for each node.
@@ -42,15 +41,13 @@ func defaultProfile() *core.ProfileSlot {
 
 // Samples ranks L1 nodes by Importance×exp(-lambda×age) and returns the top
 // maxDistillSamples for distillation. Ranking runs on the node fields alone: the
-// keywords a sample carries come from its topics, one record read each, so
-// collecting them before the cut would price the whole L1 set for the 200 rows
-// that survive it.
+// keywords a sample carries cost one record read each, so collecting them before the
+// cut would price the whole L1 set for the rows that survive it.
 //
 // ponytail: the node enumeration stays tolerant where the L1 passes over the same
 // set are strict. Every one of them runs earlier in the same pipeline and stops on
-// a record it cannot read, so a damaged node never reaches this function; refusing
-// here as well would be a second copy of a refusal that already fired. If a caller
-// ever samples outside that pipeline, this becomes the place to read strictly.
+// a record it cannot read, so a damaged node never reaches this function. If a
+// caller ever samples outside that pipeline, this is where to read strictly.
 func Samples(engine *core.StorageEngine, agentID uint64) []core.DistillSample {
 	nowMs := time.Now().UnixMilli()
 	nodes := core.CollectAllSceneNodes(engine, agentID)
@@ -64,9 +61,8 @@ func Samples(engine *core.StorageEngine, agentID uint64) []core.DistillSample {
 	for i := range nodes {
 		keywords := sampleKeywords(engine, agentID, nodes[i].TopicIDs)
 		if len(keywords) == 0 {
-			// A row with no keywords is no signal, and the prompt asks the model to
-			// infer an emotional state from what each row carries: a node whose topics
-			// would not read back must thin the sample set, not join it as an empty one.
+			// A row with no keywords is no signal, and the prompt infers an emotional
+			// state from what each row carries: thin the sample set, don't join it empty.
 			continue
 		}
 		samples = append(samples, core.DistillSample{
@@ -89,9 +85,8 @@ func sampleRank(node *core.SceneNode, nowMs int64) float64 {
 func MergeDistill(engine *core.StorageEngine, agentID uint64, emo core.EmotionScore, mbti core.MBTIScore, personality string) error {
 	slot, err := repo.GetProfileL0(engine, agentID)
 	if err != nil {
-		// Only a profile that was never written seeds a default one: treating a
-		// transient read failure as "absent" would rewrite the profile from an
-		// empty slot and drop the identity fields.
+		// Only a profile that was never written seeds a default one: a transient read
+		// failure treated as absent would rewrite the profile from an empty slot.
 		if common.CodeOf(err) != common.ErrNotFound {
 			return err
 		}

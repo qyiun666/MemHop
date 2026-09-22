@@ -403,7 +403,7 @@ func TestUpdateFailsLoudlyWhenTheLLMCannotExtract(t *testing.T) {
 	if len(again.Topics) != 0 {
 		t.Fatalf("a failed Update settled %d topics", len(again.Topics))
 	}
-	// The content the host appended survives: Update never owned it and has no
+	// The content the host appended survives: Settle never owned it and has no
 	// business undoing it, so the retry distills what is still there.
 	if arcs, err := sess.SearchL4(L4Query{}); err != nil || len(arcs) != 2 {
 		t.Fatalf("a failed Update disturbed the turn's content: %d (err=%v)", len(arcs), err)

@@ -9,7 +9,6 @@ package llmops
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -19,7 +18,7 @@ import (
 )
 
 // distillMaxTokens bounds one distill call's output; reasoning models can
-// exhaust it mid-JSON, hence the retry with the consolidation ceiling.
+// exhaust it mid-JSON, hence the escalation the transport applies.
 const distillMaxTokens = 2048
 
 // distillPersonalityMaxRunes caps the distilled personality summary so the
@@ -27,9 +26,7 @@ const distillMaxTokens = 2048
 const distillPersonalityMaxRunes = 160
 
 // L1Sample is a distill input assembled from an L1 node and its topics (keywords
-// come from linked L2 topics). It is the sample the ranking pass produces, not a
-// second shape for the prompt: the prompt reads every field it carries, and the
-// node clock the ranking consumed stays on the record it came from.
+// come from linked L2 topics); the prompt reads every field it carries.
 type L1Sample = core.DistillSample
 
 type EmotionScore = core.EmotionScore
@@ -40,14 +37,13 @@ type DistillOutput struct {
 	Emotion     EmotionScore
 	MBTI        MBTIScore
 	Personality string
-	// PerNode is addressed by node id, so a caller never re-parses what the
-	// parser already resolved to decide a row was one of ours.
+	// PerNode is keyed by node id — the parser already resolved which row is whose.
 	PerNode map[uint64]core.NodeEmotion
 }
 
 // systemDistill states the reply contract. The personality budget it quotes is the
-// one the parser enforces: a target here that the engine does not apply would let
-// the model write to a length the reply is then cut at mid-sentence.
+// one the parser enforces, so the model never writes to a length the reply is then
+// cut at.
 var systemDistill = fmt.Sprintf(`You analyze an AI agent's L1 associative memory samples and derive its current emotional state, MBTI-style personality dimensions, and a short personality summary.
 
 Output ONLY a JSON object:
@@ -67,9 +63,7 @@ Rules:
 - per_node: at most 20 rows, only the nodes with the strongest emotional signal (skip neutral ones)
 - No markdown, no code fences, no commentary — JSON only`, distillPersonalityMaxRunes)
 
-// distillFormatRetry is appended to the user prompt for the
-// format-constrained retry (same self-healing pattern as keyword
-// extraction): plain re-asks measurably recover non-JSON replies.
+// distillFormatRetry is appended to the user prompt for the format-constrained retry.
 const distillFormatRetry = `
 
 Output ONLY valid JSON per the schema. No markdown, no code fences, no commentary.`
@@ -80,37 +74,19 @@ func Distill(ctx context.Context, chat Chat, samples []L1Sample) (*DistillOutput
 	if len(samples) == 0 {
 		return nil, common.NewError(common.ErrLLM, "distill: no samples")
 	}
-	// The ids this prompt offered, so a row naming one it invented is dropped
-	// rather than handed downstream as a node to backfill.
+	// The ids this prompt offered; see parseDistillResponse for what happens to a
+	// row naming anything else.
 	known := make(map[uint64]struct{}, len(samples))
 	for _, s := range samples {
 		known[s.IDHash] = struct{}{}
 	}
-	user := buildDistillPrompt(samples)
-	budget := minTokens(chat.MaxOutputTokens(), distillMaxTokens)
-	// Two-budget attempt first: reasoning tokens can exhaust the 2048
-	// first-pass budget, cutting the JSON mid-stream.
-	response, err := chat.ChatWithRetry(ctx, systemDistill, user, budget, escalationCeiling(chat))
-	if err != nil {
-		return nil, err
-	}
-	out, perr := parseDistillResponse(response, known)
-	if perr == nil {
-		return out, nil
-	}
-	// One format-constrained retry before failing the call.
-	retry, rerr := chat.Chat(ctx, systemDistill, user+distillFormatRetry, budget)
-	if rerr != nil {
-		// The retry's own failure is the answer: it may be a cancellation or an
-		// endpoint that refused, and reporting the first reply's parse failure
-		// instead would send the host to look for a model that never refused it.
-		return nil, common.NewError(common.CodeOf(rerr),
-			"distill format retry after an off-contract reply", errors.Join(perr, rerr))
-	}
-	if out, perr = parseDistillResponse(retry, known); perr != nil {
-		return nil, perr
-	}
-	return out, nil
+	return askJSON(ctx, chat, jsonExchange{
+		what:        "distill",
+		system:      systemDistill,
+		user:        buildDistillPrompt(samples),
+		formatRetry: distillFormatRetry,
+		ceiling:     distillMaxTokens,
+	}, func(reply string) (*DistillOutput, error) { return parseDistillResponse(reply, known) })
 }
 
 func buildDistillPrompt(samples []L1Sample) string {
@@ -125,8 +101,8 @@ func buildDistillPrompt(samples []L1Sample) string {
 }
 
 // parseDistillResponse reads one reply against the contract. known is the id set
-// this pass put in front of the model: a row naming anything else is dropped,
-// because the only nodes the caller can backfill are the ones it sampled.
+// this pass put in front of the model: a row naming anything else is dropped, since
+// only a sampled node has somewhere to backfill into.
 func parseDistillResponse(response string, known map[uint64]struct{}) (*DistillOutput, error) {
 	cleaned := stripCodeBlocks(response)
 	var raw struct {
@@ -147,9 +123,8 @@ func parseDistillResponse(response string, known map[uint64]struct{}) (*DistillO
 	if err := json.Unmarshal([]byte(cleaned), &raw); err != nil {
 		return nil, common.NewError(common.ErrLLM, "distill response parse failed", err)
 	}
-	// Valid JSON that answers none of the contract is not a thin answer, it is no
-	// answer: merging the zeros it decodes to would erase the distilled emotion and
-	// hand back a personality type derived from four silent dimensions.
+	// Valid JSON that answers none of the contract is no answer: its zeros would
+	// erase the distilled emotion and derive a type word from four silent dimensions.
 	if raw.Emotion == nil || raw.MBTI == nil {
 		return nil, common.NewError(common.ErrLLM, "distill response carries no emotion or mbti block")
 	}

@@ -21,12 +21,11 @@ import (
 
 // QueryL3Nodes reads one graph's nodes through every condition the query
 // names; the conditions AND together, and an unset condition does not filter.
-// Naming only the graph therefore lists its nodes. Results are sorted by id and
-// Limit keeps the first N of that order, so a capped query is the same subset
-// every time. A malformed node id or a graph that does not exist is an error —
-// an empty result means the graph exists and nothing matched, and a node that
-// will not read back is reported rather than left out of the listing, so an
-// empty result never stands in for a damaged one.
+// Results are sorted by id and Limit keeps the first N of that order, so a
+// capped query is the same subset every time. A malformed node id or a graph
+// that does not exist is an error, and a node that will not read back is
+// reported rather than left out: an empty result means the graph exists and
+// nothing matched, never that the data is damaged.
 func (db *DB) QueryL3Nodes(agentID uint64, q L3NodeQuery) ([]core.HypergraphNode, error) {
 	ac, err := db.lockSharedPool(agentID)
 	if err != nil {
@@ -61,8 +60,8 @@ func (db *DB) QueryL3Nodes(agentID uint64, q L3NodeQuery) ([]core.HypergraphNode
 	return out, nil
 }
 
-// nodeFilter parses the query's conditions; a node id that does not parse is
-// refused rather than dropped.
+// nodeFilter builds the graph filter from the query; a node id that does not
+// parse is refused rather than dropped.
 func nodeFilter(q L3NodeQuery) (graph.NodeFilter, error) {
 	f := graph.NodeFilter{Keyword: strings.ToLower(q.Keyword), NodeType: q.NodeType}
 	if len(q.IDs) > 0 {
@@ -78,12 +77,11 @@ func nodeFilter(q L3NodeQuery) (graph.NodeFilter, error) {
 	return f, nil
 }
 
-// QueryL3Subgraph BFS from startNodeID up to maxDepth; edgeKinds restricts
-// reachable edges (maxDepth<=0 means 1). Nodes come back sorted by id, and so do
-// edges, because the listings under both are assembled from a hash-map scan.
-// A kind outside the vocabulary is refused: the import boundary refuses to store
-// one, and an empty subgraph is the answer a host reads back as "this graph holds
-// no such edges".
+// QueryL3Subgraph BFS from startNodeID up to maxDepth (maxDepth<=0 means 1);
+// edgeKinds restricts reachable edges. Nodes and edges come back sorted by id,
+// because both listings are assembled from a hash-map scan. A kind outside the
+// vocabulary is refused — the write boundary refuses to store one, and an
+// empty subgraph would read back as "this graph holds no such edges".
 func (db *DB) QueryL3Subgraph(agentID uint64, graphID, startNodeID string, maxDepth int, edgeKinds []core.GraphEdgeKind) (*L3Subgraph, error) {
 	for _, kind := range edgeKinds {
 		if !kind.Valid() {
@@ -103,20 +101,17 @@ func (db *DB) QueryL3Subgraph(agentID uint64, graphID, startNodeID string, maxDe
 		maxDepth = 1
 	}
 
-	// Adjacency: all graph edges (filtered by edgeKinds), hyperedge nodeIDs fully
-	// connected. An edge that will not read back stops the query here: the walk
-	// below can only report what the adjacency relates, so a gap in it comes back
-	// as "these two nodes are unrelated" — a claim about the knowledge rather than
-	// a report of damage.
+	// Adjacency: all graph edges (filtered by edgeKinds), hyperedge nodeIDs
+	// fully connected. An edge that will not read back stops the query: a gap
+	// in the adjacency would answer as "these two nodes are unrelated" — a
+	// claim about the knowledge rather than a report of damage.
 	adj, edges, err := graph.SubgraphAdjacency(db.engine, core.SharedPoolAgentID, graphHash, edgeKinds)
 	if err != nil {
 		return nil, err
 	}
 
-	// BFS level order: maxDepth hops, one hop per round.
 	visited := graph.BfsWithinDepth(startHash, adj, maxDepth)
 
-	// Subgraph extraction: visited nodes plus edges with both ends visited.
 	nodes := make([]core.HypergraphNode, 0, len(visited))
 	for _, h := range slices.Sorted(maps.Keys(visited)) {
 		// A visited id is one an edge named, and an edge is only written over

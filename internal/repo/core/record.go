@@ -13,16 +13,24 @@ import (
 	"iter"
 	"log/slog"
 	"slices"
+	"strings"
 
 	"github.com/qyiun666/MemHop/internal/common"
 )
+
+// typeLabel names T without Go's package qualifier or pointer star, so an error
+// reads "unmarshal TopicSlot" rather than "unmarshal core.TopicSlot".
+func typeLabel(v any) string {
+	t := strings.TrimPrefix(fmt.Sprintf("%T", v), "*")
+	return t[strings.LastIndex(t, ".")+1:]
+}
 
 // readJSON decodes the record at id as T. rt is part of the read: an id names
 // exactly one record type, and a typed reader that ignored the frame's type
 // would decode a foreign slot into T — the caller's next write would then
 // convert that record. A mismatch reports ErrNotFound, the same answer an
 // absent id gives.
-func readJSON[T any](engine *StorageEngine, agentID, id uint64, rt uint8, label string) (*T, error) {
+func readJSON[T any](engine *StorageEngine, agentID, id uint64, rt uint8) (*T, error) {
 	stored, data, err := engine.ReadRecord(agentID, id)
 	if err != nil {
 		return nil, err
@@ -32,15 +40,15 @@ func readJSON[T any](engine *StorageEngine, agentID, id uint64, rt uint8, label 
 	}
 	var slot T
 	if err := json.Unmarshal(data, &slot); err != nil {
-		return nil, common.NewError(common.ErrDeserialization, "unmarshal "+label, err)
+		return nil, common.NewError(common.ErrDeserialization, "unmarshal "+typeLabel(slot), err)
 	}
 	return &slot, nil
 }
 
-func writeJSON[T any](engine *StorageEngine, agentID uint64, rt uint8, id uint64, v *T, label string) error {
+func writeJSON[T any](engine *StorageEngine, agentID uint64, rt uint8, id uint64, v *T) error {
 	data, err := json.Marshal(v)
 	if err != nil {
-		return common.NewError(common.ErrSerialization, "marshal "+label, err)
+		return common.NewError(common.ErrSerialization, "marshal "+typeLabel(v), err)
 	}
 	_, err = engine.WriteRecord(agentID, rt, id, data)
 	return err
@@ -59,15 +67,13 @@ func TopicEntry(agentID uint64, topic *TopicSlot) (RecordEntry, error) {
 // IterAll iterates over all records of type rt inside one agent domain, dropping
 // the ones that will not read back. A rebuild may answer from what survives; a set
 // that decides a deletion or an overwrite may not, and uses CollectAllStrict.
-// What dropping costs is the caller's to know — the mirrors built on this scan hand
-// out the dropped record's slot again — so each drop is logged with its id. An id
-// the index has not caught up with after a tombstone is not damage and stays quiet.
+// Each drop is logged with its id: a mirror built on this scan hands the dropped
+// record's slot again. An id already tombstone but still named by the index is
+// not damage and stays quiet.
 func IterAll[T any](engine *StorageEngine, agentID uint64, rt uint8) iter.Seq[T] {
 	return func(yield func(T) bool) {
-		var shape T
-		label := fmt.Sprintf("%T", shape)
 		for idHash := range engine.IndexByType(agentID, rt) {
-			slot, err := readJSON[T](engine, agentID, idHash, rt, label)
+			slot, err := readJSON[T](engine, agentID, idHash, rt)
 			if err != nil {
 				if common.CodeOf(err) != common.ErrNotFound {
 					slog.Warn("core: a record will not read back and is left out of the scan",
@@ -84,17 +90,13 @@ func IterAll[T any](engine *StorageEngine, agentID uint64, rt uint8) iter.Seq[T]
 }
 
 // CollectAllStrict reads one agent domain's whole rt set, reporting the first
-// member that will not read back rather than skipping it. The CollectAll*
-// helpers below drop what they cannot read because a listing is allowed to be
-// rebuilt from what survives; that answer is not good enough where the set
-// decides a deletion or an overwrite — a member that merely would not read is
-// not evidence that the domain does not hold it.
+// member that will not read back rather than skipping it: where the set decides
+// a deletion or an overwrite, a member that merely would not read is not
+// evidence that the domain does not hold it.
 func CollectAllStrict[T any](engine *StorageEngine, agentID uint64, rt uint8) ([]T, error) {
 	var out []T
-	var shape T
-	label := fmt.Sprintf("%T", shape)
 	for idHash := range engine.IndexByType(agentID, rt) {
-		slot, err := readJSON[T](engine, agentID, idHash, rt, label)
+		slot, err := readJSON[T](engine, agentID, idHash, rt)
 		if err != nil {
 			// The index and one record read are not one atomic step, so an id the
 			// sweep has already tombstoned is a legitimate hole, not a damage report.
@@ -116,7 +118,7 @@ func CollectAllStrict[T any](engine *StorageEngine, agentID uint64, rt uint8) ([
 // the axes are the only fact on disk, so the word every reader sees is a
 // function of them rather than a second copy that could drift.
 func ReadProfileSlot(engine *StorageEngine, agentID, id uint64) (*ProfileSlot, error) {
-	slot, err := readJSON[ProfileSlot](engine, agentID, id, RecL0Profile, "ProfileSlot")
+	slot, err := readJSON[ProfileSlot](engine, agentID, id, RecL0Profile)
 	if err != nil {
 		return nil, err
 	}
@@ -125,23 +127,23 @@ func ReadProfileSlot(engine *StorageEngine, agentID, id uint64) (*ProfileSlot, e
 }
 
 func WriteProfileSlot(engine *StorageEngine, agentID, id uint64, slot *ProfileSlot) error {
-	return writeJSON(engine, agentID, RecL0Profile, id, slot, "ProfileSlot")
+	return writeJSON(engine, agentID, RecL0Profile, id, slot)
 }
 
 func ReadSceneNode(engine *StorageEngine, agentID, id uint64) (*SceneNode, error) {
-	return readJSON[SceneNode](engine, agentID, id, RecL1SceneNode, "SceneNode")
+	return readJSON[SceneNode](engine, agentID, id, RecL1SceneNode)
 }
 
 func WriteSceneNode(engine *StorageEngine, agentID, id uint64, slot *SceneNode) error {
-	return writeJSON(engine, agentID, RecL1SceneNode, id, slot, "SceneNode")
+	return writeJSON(engine, agentID, RecL1SceneNode, id, slot)
 }
 
 func ReadSceneEdge(engine *StorageEngine, agentID, id uint64) (*SceneEdge, error) {
-	return readJSON[SceneEdge](engine, agentID, id, RecL1Hyperedge, "SceneEdge")
+	return readJSON[SceneEdge](engine, agentID, id, RecL1Hyperedge)
 }
 
 func WriteSceneEdge(engine *StorageEngine, agentID, id uint64, slot *SceneEdge) error {
-	return writeJSON(engine, agentID, RecL1Hyperedge, id, slot, "SceneEdge")
+	return writeJSON(engine, agentID, RecL1Hyperedge, id, slot)
 }
 
 func CollectAllSceneNodes(engine *StorageEngine, agentID uint64) []SceneNode {
@@ -149,19 +151,19 @@ func CollectAllSceneNodes(engine *StorageEngine, agentID uint64) []SceneNode {
 }
 
 func ReadSceneSlot(engine *StorageEngine, agentID, id uint64) (*SceneSlot, error) {
-	return readJSON[SceneSlot](engine, agentID, id, RecL2Scene, "SceneSlot")
+	return readJSON[SceneSlot](engine, agentID, id, RecL2Scene)
 }
 
 func WriteSceneSlot(engine *StorageEngine, agentID, id uint64, slot *SceneSlot) error {
-	return writeJSON(engine, agentID, RecL2Scene, id, slot, "SceneSlot")
+	return writeJSON(engine, agentID, RecL2Scene, id, slot)
 }
 
 func ReadTopicSlot(engine *StorageEngine, agentID, id uint64) (*TopicSlot, error) {
-	return readJSON[TopicSlot](engine, agentID, id, RecL2Topic, "TopicSlot")
+	return readJSON[TopicSlot](engine, agentID, id, RecL2Topic)
 }
 
 func WriteTopicSlot(engine *StorageEngine, agentID, id uint64, slot *TopicSlot) error {
-	return writeJSON(engine, agentID, RecL2Topic, id, slot, "TopicSlot")
+	return writeJSON(engine, agentID, RecL2Topic, id, slot)
 }
 
 // CollectAllTopicsStrict is the strict topic scan, for a caller whose next move
@@ -188,40 +190,39 @@ func ReadTopicLenient(engine *StorageEngine, agentID, idHash uint64) (*TopicSlot
 }
 
 func ReadHypergraphNode(engine *StorageEngine, agentID, id uint64) (*HypergraphNode, error) {
-	return readJSON[HypergraphNode](engine, agentID, id, RecL3GraphNode, "HypergraphNode")
+	return readJSON[HypergraphNode](engine, agentID, id, RecL3GraphNode)
 }
 
 func WriteHypergraphNode(engine *StorageEngine, agentID, id uint64, slot *HypergraphNode) error {
-	return writeJSON(engine, agentID, RecL3GraphNode, id, slot, "HypergraphNode")
+	return writeJSON(engine, agentID, RecL3GraphNode, id, slot)
 }
 
 func WriteHypergraphEdge(engine *StorageEngine, agentID, id uint64, slot *HypergraphEdge) error {
-	return writeJSON(engine, agentID, RecL3GraphEdge, id, slot, "HypergraphEdge")
+	return writeJSON(engine, agentID, RecL3GraphEdge, id, slot)
 }
 
 func ReadGraphSlot(engine *StorageEngine, agentID, id uint64) (*HypergraphSlot, error) {
-	return readJSON[HypergraphSlot](engine, agentID, id, RecL3GraphSlot, "HypergraphSlot")
+	return readJSON[HypergraphSlot](engine, agentID, id, RecL3GraphSlot)
 }
 
 func WriteGraphSlot(engine *StorageEngine, agentID, id uint64, slot *HypergraphSlot) error {
-	return writeJSON(engine, agentID, RecL3GraphSlot, id, slot, "HypergraphSlot")
+	return writeJSON(engine, agentID, RecL3GraphSlot, id, slot)
 }
 
-// CollectAllGraphSlots reads the pool's graph slots whole. Every caller decides
-// something from the list — which graph a domain label resolves to, or which
-// graphs exist for a host to anchor a scene to — so a slot that will not read
-// back has to stop the read instead of answering as a label the pool does not
-// hold.
+// CollectAllGraphSlots reads the pool's graph slots with the strict scan: every
+// caller decides something from the list (label resolution, anchoring, listing),
+// so a slot that will not read back must stop the read rather than look like a
+// label the pool does not hold.
 func CollectAllGraphSlots(engine *StorageEngine, agentID uint64) ([]HypergraphSlot, error) {
 	return CollectAllStrict[HypergraphSlot](engine, agentID, RecL3GraphSlot)
 }
 
 func ReadArchiveSlot(engine *StorageEngine, agentID, id uint64) (*ArchiveSlot, error) {
-	return readJSON[ArchiveSlot](engine, agentID, id, RecL4Archive, "ArchiveSlot")
+	return readJSON[ArchiveSlot](engine, agentID, id, RecL4Archive)
 }
 
 func WriteArchiveSlot(engine *StorageEngine, agentID, id uint64, slot *ArchiveSlot) error {
-	return writeJSON(engine, agentID, RecL4Archive, id, slot, "ArchiveSlot")
+	return writeJSON(engine, agentID, RecL4Archive, id, slot)
 }
 
 func CollectAllArchives(engine *StorageEngine, agentID uint64) []ArchiveSlot {
@@ -229,11 +230,11 @@ func CollectAllArchives(engine *StorageEngine, agentID uint64) []ArchiveSlot {
 }
 
 func ReadPlanNode(engine *StorageEngine, agentID, id uint64) (*PlanNode, error) {
-	return readJSON[PlanNode](engine, agentID, id, RecL5PlanNode, "PlanNode")
+	return readJSON[PlanNode](engine, agentID, id, RecL5PlanNode)
 }
 
 func WritePlanNode(engine *StorageEngine, agentID, id uint64, node *PlanNode) error {
-	return writeJSON(engine, agentID, RecL5PlanNode, id, node, "PlanNode")
+	return writeJSON(engine, agentID, RecL5PlanNode, id, node)
 }
 
 func CollectAllPlanNodes(engine *StorageEngine, agentID uint64) []PlanNode {

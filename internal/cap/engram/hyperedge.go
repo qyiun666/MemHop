@@ -1,9 +1,9 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// L1 hypergraph edge building: BuildHyperedges creates co-occurrence edges
-// between scenes whose keyword sets overlap, and strengthens an existing edge
-// only over evidence that has moved. This file never forgets — that is decay.go.
+// L1 hypergraph edge building: BuildHyperedges creates co-occurrence edges between
+// scenes whose keyword sets overlap, and strengthens an existing edge only over
+// evidence that has moved. This file never forgets — that is decay.go.
 
 package engram
 
@@ -19,17 +19,13 @@ import (
 
 // BuildHyperedges creates or refreshes co-occurrence hyperedges between
 // scene nodes whose topic keyword sets overlap (Jaccard >= minSimilarity).
-// It must run after SyncL1NodesFromL2 and before DecayNetwork so freshly
-// created edges are decayed by the same pass, and it takes the node ids that
-// pass wrote: an edge's weight may rise only over evidence one of its endpoints
-// has changed since. Re-measuring two keyword sets that did not change returns
-// the similarity the edge was already weighted by, so without that gate every
-// pass would lift a decayed edge back to full strength and edge forgetting would
-// never accumulate. Stale edges are left to DecayNetwork (natural forgetting),
-// never deleted here. Returns the number of edges created or strengthened.
+// It must run after SyncL1NodesFromL2 and before DecayNetwork, so freshly created
+// edges are decayed by the same pass, and takes that pass's changed node ids as
+// touched. Stale edges are left to DecayNetwork, never deleted here. Returns the
+// number of edges created or strengthened.
 func BuildHyperedges(engine *core.StorageEngine, agentID uint64, minSimilarity float64, touched map[uint64]struct{}) (int, error) {
-	// A node this enumeration steps over pairs with nothing, and unlike a node this
-	// pass refuses to fade, the missing edge never reports itself later.
+	// A node this enumeration steps over pairs with nothing, and the missing edge
+	// never reports itself later.
 	nodes, err := core.CollectAllStrict[core.SceneNode](engine, agentID, core.RecL1SceneNode)
 	if err != nil {
 		return 0, err
@@ -84,11 +80,9 @@ func collectNodeKeywordSets(engine *core.StorageEngine, agentID uint64, nodes []
 			topic, err := core.ReadTopicLenient(engine, agentID, topicID)
 			switch {
 			case err != nil && common.CodeOf(err) != common.ErrNotFound:
-				// A topic that will not read back is not a topic that is gone. Taking
-				// it for gone shrinks the set this node is measured by, and an edge that
-				// drops under the similarity floor because of it is never built — and
-				// never comes back on its own, since decay only lowers a weight and
-				// raising one needs an endpoint a later pass can see as changed.
+				// A topic that will not read back is not a topic that is gone: taking it
+				// for one shrinks the set this node is measured by, and an edge that
+				// drops under the similarity floor because of it is never rebuilt.
 				return nil, nil, err
 			case err != nil, topic == nil:
 				continue // gone, or the id names a record of another kind
@@ -137,9 +131,8 @@ func upsertSceneEdge(engine *core.StorageEngine, agentID uint64, nodeA, nodeB ui
 	switch {
 	case err != nil && common.CodeOf(err) != common.ErrNotFound:
 		// An edge that is there but will not read back is not an edge that is
-		// missing: rebuilding it restarts CreatedAt, which is what the decay clock
-		// runs on, and hands back the full similarity an aged edge had decayed away
-		// from — with no record of the weight it was holding.
+		// missing: rebuilding it restarts CreatedAt, the clock decay runs on, and
+		// hands back the full similarity an aged edge had decayed away from.
 		return false, err
 	case err != nil:
 		edge = &core.SceneEdge{
@@ -150,9 +143,8 @@ func upsertSceneEdge(engine *core.StorageEngine, agentID uint64, nodeA, nodeB ui
 	case weight <= edge.Weight:
 		return false, nil // existing edge is at least as strong; nothing to refresh
 	case !evidenceChanged:
-		// The similarity above the current weight is the one this edge was already
-		// weighted by: nothing has been re-experienced, the same two sets were read
-		// a second time. Raising on it would undo whatever decay has taken.
+		// Nothing has been re-experienced, the same two sets were read a second
+		// time; raising on it would undo whatever decay has taken.
 		return false, nil
 	}
 	edge.Weight = weight

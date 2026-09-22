@@ -7,8 +7,7 @@ import (
 	"slices"
 )
 
-// DedupSorted sorts ascending and dedups via the stdlib slices pipeline
-// (Compact requires sorted input).
+// DedupSorted sorts ascending and dedups; slices.Compact requires sorted input.
 func DedupSorted(ids []uint64) []uint64 {
 	return slices.Compact(slices.Sorted(slices.Values(ids)))
 }

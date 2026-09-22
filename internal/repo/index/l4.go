@@ -8,14 +8,13 @@
 // what a topic owns.
 //
 // Entries are ordered by Seq ascending. Seq is one space per topic shared by
-// both kinds, and it is a total order: the dialogue's two slots are 1 and 2 by
-// convention, and anything the topic allocates lands above whatever is held. So Seq alone gives a transcript its
-// question-first reading and an event log its chronology, with no tie-break on
-// timestamp or role.
+// both kinds and a total order: the dialogue's two slots are 1 and 2 by
+// convention, anything allocated lands above what is held. So Seq alone gives
+// a transcript its question-first reading and an event log its chronology.
 //
-// Kind is carried by every entry and takes part in no ordering: the two kinds a
-// topic holds come out of one Seq-ordered list as disjoint sets, so an entry that
-// did not say which kind it is would make a read for one kind answer with the other.
+// Kind is carried by every entry and takes part in no ordering: the two kinds
+// come out of one Seq-ordered list as disjoint sets, so an entry that did not
+// say which kind it is would make a read for one kind answer with the other.
 package index
 
 import (
@@ -43,11 +42,11 @@ func NewL4Index() *L4Index {
 }
 
 // BuildL4FromEngine scans one agent domain's L4 records into a fresh index,
-// dropping whatever will not decode: the frames it walks already passed CRC at
+// dropping whatever will not decode: the frames walked already passed CRC at
 // open, so this is a payload that does not fit its shape, and refusing it would
 // make the whole domain unopenable. What a drop costs is a Seq MaxSeq no longer
-// sees — the next append to that topic is handed the dropped slot's Seq and
-// overwrites it. Each drop is logged with its id by the scan itself.
+// sees — the next append gets the dropped slot's Seq and overwrites it. Each
+// drop is logged by the scan itself.
 func BuildL4FromEngine(engine *core.StorageEngine, agentID uint64) *L4Index {
 	idx := NewL4Index()
 	for _, arc := range core.CollectAllArchives(engine, agentID) {

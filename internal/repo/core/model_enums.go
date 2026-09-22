@@ -8,7 +8,7 @@ package core
 
 import "github.com/qyiun666/MemHop/internal/common"
 
-// ContentType represents the type of content stored in an ArchiveSlot.
+// ContentType is the medium of an L4 record's Content.
 type ContentType uint8
 
 const (
@@ -29,8 +29,8 @@ var contentTypeNames = map[ContentType]string{
 
 func (c ContentType) String() string { return common.EnumString(c, contentTypeNames, "ContentType") }
 
-// Valid reports whether c is one of the defined content types. The names table
-// is the single source of truth, so adding a type needs no second edit here.
+// Valid reports whether c is a defined content type, read off the names table
+// so adding a type needs no second edit here.
 func (c ContentType) Valid() bool {
 	_, ok := contentTypeNames[c]
 	return ok
@@ -52,8 +52,7 @@ var archiveKindNames = map[ArchiveKind]string{
 
 func (k ArchiveKind) String() string { return common.EnumString(k, archiveKindNames, "ArchiveKind") }
 
-// Valid reports whether k is a defined content kind, reading the same table the
-// string form comes from.
+// Valid reports whether k is a defined archive kind, read off the names table.
 func (k ArchiveKind) Valid() bool {
 	_, ok := archiveKindNames[k]
 	return ok
@@ -80,9 +79,7 @@ func (k GraphEdgeKind) String() string {
 	return common.EnumString(k, graphEdgeKindNames, "GraphEdgeKind")
 }
 
-// Valid reports whether k is one of the defined edge kinds — the same question
-// the import boundary asks and the subgraph filter asks, answered from the one
-// names table.
+// Valid reports whether k is a defined edge kind, read off the names table.
 func (k GraphEdgeKind) Valid() bool {
 	_, ok := graphEdgeKindNames[k]
 	return ok

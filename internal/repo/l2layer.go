@@ -25,9 +25,8 @@ func CompressTopicsL2(engine *core.StorageEngine, agentID uint64, ids []uint64, 
 		case err != nil && common.CodeOf(err) == common.ErrNotFound:
 			continue // already gone: this member just drops out of the group
 		case err != nil:
-			// The fused parent is already on disk by the time this runs. Skipping
-			// a member we could not read would leave the scene showing both the
-			// group's summary and that member's own originals, so the read
+			// The fused parent is already on disk: skipping an unreadable member
+			// would show both the group's summary and its originals, so the
 			// failure is the caller's to roll back, not to swallow.
 			return common.NewError(common.ErrIO, "read topic to sink", err)
 		case topic == nil:
@@ -47,25 +46,19 @@ func CompressTopicsL2(engine *core.StorageEngine, agentID uint64, ids []uint64, 
 		}
 		writes = append(writes, entry)
 	}
-	if len(writes) > 0 {
-		if _, err := engine.WriteRecordBatch(writes); err != nil {
-			return err
-		}
+	if _, err := engine.WriteRecordBatch(writes); err != nil {
+		return err
 	}
-	if len(deletes) > 0 {
-		if _, err := engine.DeleteRecordBatch(agentID, deletes); err != nil {
-			return err
-		}
+	if _, err := engine.DeleteRecordBatch(agentID, deletes); err != nil {
+		return err
 	}
 	return nil
 }
 
 // RestoreSunkTopicsL2 undoes one sink: every listed topic that now hangs on
-// parentID comes back up a level with no parent. The parent link is the whole test,
-// so a member the failed batch never reached is left exactly as it stands rather
-// than guessed at — and a member it did reach is named by the very parent this call
-// is erasing. A rolled-back sink is the difference between a turn the next Dream can
-// pick again and one that reads as neither a turn nor a fused group.
+// parentID comes back up a level with no parent. The parent link is the whole
+// test, so a member the failed batch never reached is left exactly as it stands
+// rather than guessed at.
 func RestoreSunkTopicsL2(engine *core.StorageEngine, agentID uint64, ids []uint64, parentID uint64) error {
 	for _, id := range ids {
 		topic, err := core.ReadTopicLenient(engine, agentID, id)
@@ -90,7 +83,7 @@ func RestoreSunkTopicsL2(engine *core.StorageEngine, agentID uint64, ids []uint6
 
 // TopicIDsBySceneL2 enumerates every topic (any depth) owned by one of the
 // given scenes. The scan is strict: the list is what a cascade tombstones
-// afterwards, and a topic that merely would not read must not be dropped from it.
+// afterwards.
 func TopicIDsBySceneL2(engine *core.StorageEngine, agentID uint64, sceneIDs ...uint64) ([]uint64, error) {
 	topics, err := core.CollectAllTopicsStrict(engine, agentID)
 	if err != nil {
@@ -108,14 +101,9 @@ func TopicIDsBySceneL2(engine *core.StorageEngine, agentID uint64, sceneIDs ...u
 
 // DeleteL2Records tombstones the given L2 ids — scene slots and topics in any
 // mix — and reads nothing. The set is complete by the time this runs: every
-// caller derives it from a strict enumeration (TopicIDsBySceneL2,
-// TopicClosureL2) or wrote it itself, so re-scanning here would only add a second
-// answer to a question already answered. An id the disk does not hold simply
-// produces no tombstone.
+// caller derives it from a strict enumeration or wrote it itself. An id the
+// disk does not hold simply produces no tombstone.
 func DeleteL2Records(engine *core.StorageEngine, agentID uint64, ids []uint64) error {
-	if len(ids) == 0 {
-		return nil
-	}
 	_, err := engine.DeleteRecordBatch(agentID, ids)
 	return err
 }
@@ -143,20 +131,17 @@ func MergeScenesL2(engine *core.StorageEngine, agentID uint64, primaryID uint64,
 		}
 		writes = append(writes, entry)
 	}
-	if len(writes) > 0 {
-		if _, err := engine.WriteRecordBatch(writes); err != nil {
-			return err
-		}
+	if _, err := engine.WriteRecordBatch(writes); err != nil {
+		return err
 	}
 	return DeleteL2Records(engine, agentID, secondaryIDs)
 }
 
-// OpenSceneTurn opens the scene's next turn: it bumps the scene's
-// turn counter and returns the updated record so the caller reads back the seq
-// it just allocated rather than a stale snapshot. TurnSeq is load-bearing — the
-// caller hashes it into the turn's topic id, so a failed write must surface as
-// an error, not a lost increment. Reads and writes of one domain are serialized
-// by its lock, so no increment is ever racing away.
+// OpenSceneTurn bumps the scene's turn counter and returns the updated record,
+// so the caller reads back the seq it just allocated rather than a stale
+// snapshot. TurnSeq is load-bearing — the turn's topic id hashes it — so a
+// failed write must surface as an error, not a lost increment; one domain's
+// reads and writes are serialised by its lock.
 func OpenSceneTurn(engine *core.StorageEngine, agentID uint64, sceneID uint64) (*core.SceneSlot, error) {
 	slot, err := core.ReadSceneSlot(engine, agentID, sceneID)
 	if err != nil {
@@ -169,22 +154,30 @@ func OpenSceneTurn(engine *core.StorageEngine, agentID uint64, sceneID uint64) (
 	return slot, nil
 }
 
-// ListScenesL2 reads the named scenes. An id that names no scene is skipped;
-// a scene record that cannot be read is an error — a listing quietly missing
-// one session is indistinguishable from a session that was deleted.
-func ListScenesL2(engine *core.StorageEngine, agentID uint64, ids []uint64) ([]core.SceneSlot, error) {
-	var out []core.SceneSlot
-	for _, sceneHash := range ids {
-		slot, err := core.ReadSceneSlot(engine, agentID, sceneHash)
+// listByID reads each id through get: an id that names no record is skipped
+// (a missing record selects nothing), while a record that will not read back
+// stops the listing — a listing quietly missing one row is indistinguishable
+// from a row that was deleted.
+func listByID[T any](engine *core.StorageEngine, agentID uint64, ids []uint64, get func(uint64) (*T, error)) ([]T, error) {
+	var out []T
+	for _, id := range ids {
+		v, err := get(id)
 		if err != nil {
 			if common.CodeOf(err) == common.ErrNotFound {
 				continue
 			}
 			return nil, err
 		}
-		out = append(out, *slot)
+		out = append(out, *v)
 	}
 	return out, nil
+}
+
+// ListScenesL2 reads the named scenes with the skip-missing listing rule.
+func ListScenesL2(engine *core.StorageEngine, agentID uint64, ids []uint64) ([]core.SceneSlot, error) {
+	return listByID(engine, agentID, ids, func(id uint64) (*core.SceneSlot, error) {
+		return core.ReadSceneSlot(engine, agentID, id)
+	})
 }
 
 // CreateSceneL2 stores a scene record built by the caller. An existing record
@@ -197,31 +190,24 @@ func CreateSceneL2(engine *core.StorageEngine, agentID uint64, slot *core.SceneS
 		return nil
 	}
 	if common.CodeOf(err) != common.ErrNotFound {
-		// "Not there" and "will not read" are different answers, and only the first
-		// one may be written over: a scene record that exists but came back unreadable
-		// still holds the turn counter that mints this domain's turn ids, and storing a
-		// fresh one resets it — the next turns would be issued ids the domain holds.
+		// "Not there" and "will not read" differ, and only the first may be
+		// written over: the unreadable record still holds the turn counter that
+		// mints this domain's turn ids, and a fresh record resets it.
 		return common.NewError(common.CodeOf(err), "create scene: the record under that id will not read", err)
 	}
 	return core.WriteSceneSlot(engine, agentID, slot.SceneID, slot)
 }
 
-// CollectAllScenesL2 returns every scene record of the agent domain. How many
-// topics a scene holds is derived by whoever needs it — the surface read already
-// has the topic set in hand — so this layer does not scan topics to fill a count.
-// A scene the index names but the engine cannot read is reported rather than
-// skipped: a listing quietly missing one session is indistinguishable from a
-// session that was deleted.
+// CollectAllScenesL2 returns every scene record of the agent domain; the scan
+// is strict.
 func CollectAllScenesL2(engine *core.StorageEngine, agentID uint64) ([]core.SceneSlot, error) {
 	return core.CollectAllStrict[core.SceneSlot](engine, agentID, core.RecL2Scene)
 }
 
 // TopicClosureL2 gathers a topic and its recursive children (any depth); the
-// result is empty when the root topic does not exist (DeleteTopic then reports
-// ErrNotFound). The scan is strict because the result is what a cascade deletes:
-// a child that would not read back would survive its own parent. The archives
-// each topic owns are not collected here: they are addressed by the topic's own
-// id, so the caller hands it this closure and the archive index supplies the rest.
+// result is empty when the root topic does not exist. The scan is strict
+// because the result is what a cascade deletes. The archives each topic owns
+// are not collected here — they are addressed by the topic's own id.
 func TopicClosureL2(engine *core.StorageEngine, agentID uint64, root uint64) ([]uint64, error) {
 	topics, err := core.CollectAllTopicsStrict(engine, agentID)
 	if err != nil {

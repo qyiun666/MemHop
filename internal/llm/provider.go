@@ -27,7 +27,7 @@ const (
 	defaultMaxOutputTokens = 8192
 )
 
-// Provider 是 go-openai 客户端的薄封装，供三个调用点共享。
+// Provider 是 go-openai 客户端的薄封装。
 type Provider struct {
 	client          *openai.Client
 	model           string
@@ -97,10 +97,9 @@ func (p *Provider) Chat(ctx context.Context, system, user string, maxTokens int)
 		resp, err := p.client.CreateChatCompletion(ctx, req)
 		if err != nil {
 			if cerr := ctx.Err(); cerr != nil {
-				// The caller's context is gone, so whatever the HTTP stack reported
-				// is that cancellation travelling through it — not an endpoint that
-				// refused. The configured HTTP timeout belongs to the client's own
-				// context, so a deadline set by LlmConfig still classifies below.
+				// The caller's context is gone, so whatever the HTTP stack reported is
+				// that cancellation travelling through it. LlmConfig's own HTTP timeout
+				// belongs to the client's context, so a deadline still classifies below.
 				return "", common.NewError(common.ErrCancelled, "llm call cancelled", cerr)
 			}
 			status, msg := httpError(err)
@@ -123,16 +122,14 @@ func (p *Provider) Chat(ctx context.Context, system, user string, maxTokens int)
 		}
 		return resp.Choices[0].Message.Content, nil
 	}
-	// The last attempt's failure is what the caller gets: the loop only ends here
-	// when that attempt failed on a status it was willing to retry, so lastErr holds
-	// it. Every way out of this function carries a code — a bare error would read as
-	// code 0, which is the success code.
+	// The last attempt's failure is what the caller gets, and lastErr holds it: the
+	// loop only ends here when that attempt failed on a status worth retrying. Every
+	// way out of this function carries a code — a bare error would read as code 0.
 	return "", lastErr
 }
 
-// httpError 从 go-openai 错误中提取 HTTP 状态码与消息体；
-// RequestError 优先（go-openai 可能在其中包裹零值 APIError），
-// 非 HTTP 错误返回 (0, "")。
+// httpError 从 go-openai 错误中提取 HTTP 状态码与消息体；RequestError 优先
+// （go-openai 可能在其中包裹零值 APIError），非 HTTP 错误返回 (0, "")。
 func httpError(err error) (int, string) {
 	var reqErr *openai.RequestError
 	if errors.As(err, &reqErr) && reqErr.HTTPStatusCode > 0 {
@@ -145,9 +142,8 @@ func httpError(err error) (int, string) {
 	return 0, ""
 }
 
-// maxUpstreamEcho 是上游错误正文的死额度。正文原样进错误对象，而错误对象既回给
-// 工具客户端又被 WARN 到 stderr：网关与代理在 4xx 上常回显一整页 HTML，逐字贴
-// 过来会把一次调用失败变成一条巨型日志，而有诊断价值的始终是开头。
+// maxUpstreamEcho 是上游错误正文的死额度：正文原样进错误对象，既回给调用方又被
+// WARN 到 stderr，而网关与代理在 4xx 上常回显一整页 HTML。有诊断价值的始终是开头。
 const maxUpstreamEcho = 256
 
 // clampEcho keeps the head of a body that is not ours in length or charset.

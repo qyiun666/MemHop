@@ -83,7 +83,7 @@ func TestTriggerSceneDreamSchedulesBackground(t *testing.T) {
 }
 
 // TestOpenInitializesDreamState locks the open contract that background Dream
-// state is ready before the first Update consolidation trigger fires.
+// state is ready before the first Settle-time consolidation trigger fires.
 func TestOpenInitializesDreamState(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "open.meh")
 	db, err := OpenDB(path, testLLMConfig(), DefaultMemHopDefaults, primaryProfile("primary"))

@@ -19,10 +19,8 @@ type EmotionScore struct {
 
 // MBTIScore holds four MBTI dimensions in [-1,1] — negative = I/N/T/J,
 // positive = E/S/F/P, magnitude = strength. Type is those four read as one
-// word: an axis answered 0 carries no strength and reads as X, and four silent
-// axes derive no type word at all. It is derived, never stored — the axes are
-// the only fact on disk, and every read re-derives the word from them (see
-// DeriveMBTIType), so the two can never drift apart.
+// word (DeriveMBTIType). It is derived, never stored: the axes are the only
+// fact on disk, so the word can never drift from them.
 type MBTIScore struct {
 	IE   float64 `json:"i_e"`
 	NS   float64 `json:"n_s"`
@@ -66,7 +64,7 @@ type NodeEmotion struct {
 
 // DistillSample is one L1 node prepared for the distillation prompt: the three
 // fields the prompt renders. The node clock the ranking consumed stays on the
-// record it came from — nothing reads it after the cut.
+// record — nothing reads it after the cut.
 type DistillSample struct {
 	IDHash     uint64
 	Keywords   []string

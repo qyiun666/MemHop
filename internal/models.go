@@ -32,26 +32,21 @@ type (
 	DreamReport       = core.DreamReport
 	DreamStage        = core.DreamStage
 
-	// Plan surface types live in the plan small-method package.
 	PlanStatus   = plan.PlanStatus
 	PlanTree     = plan.PlanTree
 	PlanStep     = plan.Step
 	PlanNodeView = plan.PlanNodeView
 
-	// LLM capability contracts (prompt inputs / parsed outputs) live in the
-	// llmops capability package.
 	EmotionScore = llmops.EmotionScore
 	MBTIScore    = llmops.MBTIScore
 )
 
-// Import-mode constants of the L3 import policy (see core.L3ImportMode).
 const (
 	L3ImportSkip      = core.L3ImportSkip
 	L3ImportMerge     = core.L3ImportMerge
 	L3ImportOverwrite = core.L3ImportOverwrite
 )
 
-// Plan lifecycle constants (see plan.PlanStatus).
 const (
 	PlanInProgress = plan.PlanInProgress
 	PlanDone       = plan.PlanDone

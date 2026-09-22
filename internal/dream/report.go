@@ -43,3 +43,12 @@ func StageCancelled(ctx context.Context, stage string) error {
 	}
 	return nil
 }
+
+// stageOutcome is what a stage both reports and returns: its own error when it
+// failed, else this checkpoint's cancellation.
+func stageOutcome(ctx context.Context, stage string, err error) error {
+	if err != nil {
+		return err
+	}
+	return StageCancelled(ctx, stage)
+}

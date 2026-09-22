@@ -18,7 +18,7 @@ import (
 
 // GetL0 reads the profile singleton of one agent. An absent profile is
 // returned as an empty, non-nil ProfileSlot; storage/corruption errors are
-// surfaced. The classification is turn.ReadProfile's — one rule, one place.
+// surfaced.
 func (db *DB) GetL0(agentID uint64) (*core.ProfileSlot, error) {
 	ac, err := db.lockAgent(agentID)
 	if err != nil {
@@ -33,26 +33,21 @@ func (db *DB) GetL0(agentID uint64) (*core.ProfileSlot, error) {
 }
 
 // UpdateL0 writes the host-owned half of the profile (Name/Role/Personality/
-// Preferences). Name is required here as it is at the two creation entries: a
-// domain whose profile lost its name cannot be named back by anything that reads
-// the profile. The three fields the library owns are inherited from the stored
-// record: EmotionState and MBTI, which Dream evolves, and AgentType, stamped
-// when the domain was created — so a host editing its profile never wipes the
-// distilled half and never moves its domain between primary and sub.
-// Personality is the exception in both directions: Dream evolves it too, and this
-// write does not inherit it, so a host that leaves it empty clears whatever the
-// last pass distilled and the next one evolves it again.
-// UpdatedAtMs is stamped here rather than taken from the caller. ID
-// is forced to hash("profile"); the domain lock comes from the agent context.
+// Preferences). Name is required here as at the two creation entries: a domain
+// with a nameless profile cannot be named back by anything that reads it.
+// EmotionState, MBTI and AgentType are inherited from the stored record — a
+// host edit never wipes what Dream evolved and never moves the domain between
+// primary and sub. Personality is the exception in both directions: Dream
+// evolves it too and this write does not inherit it, so leaving it empty
+// clears the last distilled summary until the next pass evolves it again.
+// UpdatedAtMs is stamped here; the stored id stays hash("profile").
+// slot must be non-nil — nil-ness is refused at the facade, not re-checked here.
 func (db *DB) UpdateL0(agentID uint64, slot *core.ProfileSlot) error {
 	ac, err := db.lockAgent(agentID)
 	if err != nil {
 		return err
 	}
 	defer ac.Mu.Unlock()
-	if slot == nil {
-		return common.NewError(common.ErrInvalidQuery, "UpdateL0: slot is required")
-	}
 	if strings.TrimSpace(slot.Name) == "" {
 		return common.NewError(common.ErrInvalidQuery, "UpdateL0: profile Name is required")
 	}

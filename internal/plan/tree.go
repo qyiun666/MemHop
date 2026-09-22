@@ -12,8 +12,7 @@ import (
 )
 
 // planNode is the in-memory tree node while building/folding. It carries the
-// node's derived IDHash so folding can re-persist it via
-// UpdateNodeSummaryLocked.
+// node's derived IDHash so folding can re-persist it.
 type planNode struct {
 	id         uint64
 	seq        uint32
@@ -29,7 +28,7 @@ type planNode struct {
 
 // PlanNodeView is the external tree node; a step is addressed by Seq, the
 // ordinal the library handed out inside its turn, and ParentSeq says which step
-// it hangs under (0 = a root). No record hash crosses the surface.
+// it hangs under (0 = a root).
 type PlanNodeView struct {
 	Seq        uint32         `json:"seq"`
 	ParentSeq  uint32         `json:"parent_seq"`
@@ -42,11 +41,10 @@ type PlanNodeView struct {
 	Children   []PlanNodeView `json:"children"`
 }
 
-// PlanTree is the external forest view of one plan. A plan may hold several
-// roots (each root a step created with no parent); Done/Total are summed over
-// every node of every tree, not just the roots — the roots are where the walk
-// starts. Nodes whose parent record is missing surface as roots too, so an
-// expired root never hides its live subtree.
+// PlanTree is the external forest view of one plan. A plan may hold several roots
+// (each a step created with no parent); Done/Total are summed over every node of
+// every tree, not just the roots. Nodes whose parent record is missing surface as
+// roots too, so an expired root never hides its live subtree.
 type PlanTree struct {
 	Roots      []PlanNodeView `json:"roots"`
 	DoneCount  int            `json:"done_count"`
@@ -80,10 +78,9 @@ func aggregate(ac *domain.Context, topicID uint64) []core.PlanNode {
 	return agg.Nodes
 }
 
-// Forest links stored nodes into root trees by their parent ordinal. Nodes
-// arrive Seq-ascending, so roots and children alike keep the order they were
-// created in. A node whose parent record is missing is surfaced as a root instead
-// of vanishing.
+// Forest links stored nodes into root trees by their parent ordinal. Nodes arrive
+// Seq-ascending, so roots and children alike keep creation order. A node whose
+// parent record is missing is surfaced as a root instead of vanishing.
 func Forest(nodes []core.PlanNode) []*planNode {
 	bySeq := make(map[uint32]*planNode, len(nodes))
 	for i := range nodes {
@@ -111,9 +108,9 @@ func Forest(nodes []core.PlanNode) []*planNode {
 	return roots
 }
 
-// ToNodeView renders one tree node for the surface. An undefined stored status
-// is reported: the tree would otherwise show a step the engine cannot name as
-// one that has not started.
+// ToNodeView renders one tree node for the surface. An undefined stored status is
+// reported: the tree would otherwise show a step the engine cannot name as one
+// that has not started.
 func ToNodeView(n *planNode) (PlanNodeView, error) {
 	status, err := StatusToString(n.status)
 	if err != nil {
@@ -161,10 +158,9 @@ func countTree(v PlanNodeView) (done, total int) {
 	return done, total
 }
 
-// RollupTree walks one turn's plan forest bottom-up: a node's Summary becomes
-// the concatenation of its children's summaries. It NEVER changes a node's
-// Status — a parent's Done is never inferred from its children's.
-// Callers hold ac.Mu.
+// RollupTree walks one turn's plan forest bottom-up: a node's Summary becomes the
+// concatenation of its children's summaries. It NEVER changes a node's Status — a
+// parent's Done is never inferred from its children's. Callers hold ac.Mu.
 func RollupTree(ac *domain.Context, agentID, topicID uint64) error {
 	for _, root := range Forest(aggregate(ac, topicID)) {
 		if err := rollupNode(ac, agentID, root); err != nil {
@@ -175,14 +171,10 @@ func RollupTree(ac *domain.Context, agentID, topicID uint64) error {
 }
 
 // rollupNode recurses children first, then backfills this node's Summary from
-// its children's. Three things must hold for a fold: the node itself is Done (an
-// unfinished parent has no conclusion to carry), its own Summary is empty (one
-// already written, by a caller or an earlier fold, is never clobbered), and
-// every direct child has reached a final state. That last one is why a partial
-// fold is worse than none: "did three things; two of them" is a summary that
-// reads exactly like a complete one, and nothing on the parent says the third
-// child was still open when it was written. A failed child with no summary
-// contributes no text but still settles its branch.
+// theirs. A fold needs three things: the node itself is Done, its own Summary is
+// empty (one already written is never clobbered), and every direct child reached a
+// final state — a partial fold reads exactly like a complete one. A failed child
+// with no summary contributes no text but still settles its branch.
 func rollupNode(ac *domain.Context, agentID uint64, n *planNode) error {
 	for _, c := range n.children {
 		if err := rollupNode(ac, agentID, c); err != nil {

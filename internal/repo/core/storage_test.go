@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+
+	"github.com/qyiun666/MemHop/internal/common"
 )
 
 // helper: temp path for a .meh file
@@ -296,6 +298,44 @@ func TestContainsAndIndex(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("iter count: %d", count)
+	}
+}
+
+// The closed-engine contract: every operation answers with the ErrClosed code
+// — read, write, batch delete, checkpoint, a second Close — and the snapshot
+// iterators yield nothing.
+func TestClosedEngineAnswersErrClosed(t *testing.T) {
+	p := tempPath(t, "closed")
+	eng, err := Create(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.WriteRecord(DefaultAgentID, RecL2Topic, 1, []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := eng.ReadRecord(DefaultAgentID, 1); common.CodeOf(err) != common.ErrClosed {
+		t.Fatalf("ReadRecord after Close: %v", err)
+	}
+	if _, err := eng.WriteRecord(DefaultAgentID, RecL2Topic, 2, []byte("y")); common.CodeOf(err) != common.ErrClosed {
+		t.Fatalf("WriteRecord after Close: %v", err)
+	}
+	if _, err := eng.DeleteRecordBatch(DefaultAgentID, []uint64{1}); common.CodeOf(err) != common.ErrClosed {
+		t.Fatalf("DeleteRecordBatch after Close: %v", err)
+	}
+	if err := eng.Checkpoint(); common.CodeOf(err) != common.ErrClosed {
+		t.Fatalf("Checkpoint after Close: %v", err)
+	}
+	if err := eng.Close(); common.CodeOf(err) != common.ErrClosed {
+		t.Fatalf("second Close: %v", err)
+	}
+	for range eng.IndexByType(DefaultAgentID, RecL2Topic) {
+		t.Fatal("a closed engine yields ids")
+	}
+	for range eng.IterAgents() {
+		t.Fatal("a closed engine yields agents")
 	}
 }
 

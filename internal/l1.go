@@ -16,17 +16,14 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
-// ListL1 returns every scene node of the domain. The values are Dream's:
-// Importance and the two emotion signals are what consolidation computed, and
-// EdgeIDs name the co-occurrence edges incident on the node — two nodes sharing
-// one id are a pair Dream judged related, which is all the structure this read
-// exposes, since an edge itself has no public read.
-//
-// The result is sorted by id because the index underneath is a hash map: without
-// sorting, one domain would answer the same call twice in two different orders. A
-// node the index names but the engine cannot return is reported rather than left
-// out — a listing quietly missing one scene node is otherwise indistinguishable
-// from a node Dream never built.
+// ListL1 returns every scene node of the domain, sorted by id because the
+// index underneath is a hash map. The values are Dream's: Importance and the
+// two emotion signals are what consolidation computed, and EdgeIDs name the
+// co-occurrence edges incident on the node — two nodes sharing one id are a
+// pair Dream judged related, and an edge itself has no public read. A node
+// the index names but the engine cannot return is reported, not left out: a
+// listing quietly missing one node is indistinguishable from a node Dream
+// never built.
 func (db *DB) ListL1(agentID uint64) ([]core.SceneNode, error) {
 	ac, err := db.lockAgent(agentID)
 	if err != nil {

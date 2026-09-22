@@ -1,13 +1,12 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// The public surface of the facade, pinned by reflection. Both handles hold their
-// internal counterpart in an unexported field and declare every method themselves,
-// so nothing becomes host-callable without an edit in this package: these lists are
-// the review gate. Add a name only when the method is meant to be public, and let
-// TestPublicSignaturesCarryNoNumericIds and TestHandlesExposeNoField below enforce
-// the other half of the contract — no id a host can see, in an input or a result,
-// leaves as a number, and no field of a handle is reachable around its methods.
+// The public surface of the facade, pinned by reflection: these lists are the review
+// gate, so nothing becomes host-callable without an edit here. Add a name only when
+// the method is meant to be public. TestPublicSignaturesCarryNoNumericIds and
+// TestHandlesExposeNoField below enforce the other half of the contract — no id a host
+// can see leaves as a number, and no field of a handle is reachable around its
+// methods.
 
 package api
 
@@ -127,8 +126,8 @@ func TestHandlesExposeNoField(t *testing.T) {
 // contract: every id a host can see is a 16-char hex string. Input-only types
 // are deliberately aliases of their internal seam (SearchQuery, L4Query…), so the
 // package path is not what matters — a uint64 field is.
-// The one that started this was UpdateScene, which without its facade override
-// handed back a core.SceneSlot whose SceneID and L3ID are uint64.
+// UpdateScene is the shape to watch: without its facade override the result is a
+// core.SceneSlot, whose SceneID and L3ID are uint64.
 func TestPublicSignaturesCarryNoNumericIds(t *testing.T) {
 	for _, handle := range []struct {
 		name string

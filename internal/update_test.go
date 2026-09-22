@@ -1,9 +1,9 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// Update is the read side of the hot path: the content a turn appended under its
-// own topic id becomes one depth-1 topic, distilled by exactly one LLM call.
-// Update writes no content, so every test here appends first.
+// Settle is the read side of the hot path: the content a turn appended under
+// its own topic id becomes one depth-1 topic, distilled by exactly one LLM
+// call. Settle writes no content, so every test here appends first.
 package internal
 
 import (
@@ -69,7 +69,7 @@ func archivesOfTopic(t *testing.T, engine *core.StorageEngine, topicID uint64) [
 
 // Settling a turn whose content is appended gives that turn one topic: single
 // keyword track, the timestamps of the content it read, and nothing written by
-// Update itself.
+// Settle itself.
 func TestUpdateWritesOneTurnTopic(t *testing.T) {
 	srv, calls := countingLLMServer(t, turnKeywords)
 	db := newSearchTestDB(t, srv.URL)
@@ -77,10 +77,10 @@ func TestUpdateWritesOneTurnTopic(t *testing.T) {
 	appendTurn(t, db, sceneID, topicID, 1000)
 
 	if err := settle(db, sceneID, topicID); err != nil {
-		t.Fatalf("Update: %v", err)
+		t.Fatalf("Settle: %v", err)
 	}
 	if got := calls.Load(); got != 1 {
-		t.Fatalf("Update made %d LLM calls, want exactly 1", got)
+		t.Fatalf("Settle made %d LLM calls, want exactly 1", got)
 	}
 	topic, err := core.ReadTopicLenient(db.engine, core.DefaultAgentID, topicID)
 	if err != nil || topic == nil {
@@ -143,7 +143,7 @@ func TestUpdateSettlesEachScenesTurnsInOrder(t *testing.T) {
 	} {
 		appendTurn(t, db, sceneID, settleTurn.topicID, settleTurn.userTS)
 		if err := settle(db, sceneID, settleTurn.topicID); err != nil {
-			t.Fatalf("Update: %v", err)
+			t.Fatalf("Settle: %v", err)
 		}
 	}
 	res, err := db.Search(core.DefaultAgentID, SearchQuery{SceneID: common.FormatHash(sceneID)})
@@ -231,7 +231,7 @@ func TestUpdateRejectsTurnWithNoContent(t *testing.T) {
 
 // The distillation runs before the topic is written: an LLM failure must not
 // leave a keywordless topic behind. The content the host appended earlier stays —
-// Update never owned it and has no business undoing it — and the retry converges
+// Settle never owned it and has no business undoing it — and the retry converges
 // on the turn rather than duplicating it.
 func TestUpdateDistillFailureLeavesNoTopic(t *testing.T) {
 	srv := failingLLMServer(t, http.StatusBadRequest)
@@ -276,7 +276,7 @@ func TestUpdateDistillsRenderedTranscript(t *testing.T) {
 	appendTurn(t, db, sceneID, topicID, 1000)
 
 	if err := settle(db, sceneID, topicID); err != nil {
-		t.Fatalf("Update: %v", err)
+		t.Fatalf("Settle: %v", err)
 	}
 	bodies := seen.snapshot()
 	if len(bodies) != 1 {
@@ -352,7 +352,7 @@ func TestUpdateReplayIsIdempotent(t *testing.T) {
 	appendTurn(t, db, sceneID, topicID, 1000)
 
 	if err := settle(db, sceneID, topicID); err != nil {
-		t.Fatalf("Update: %v", err)
+		t.Fatalf("Settle: %v", err)
 	}
 	if err := settle(db, sceneID, topicID); err != nil {
 		t.Fatalf("replay Update: %v", err)
@@ -416,13 +416,12 @@ func TestUpdateReplayOverwritesPriorContent(t *testing.T) {
 	}
 }
 
-// Update owns one contract on the write side: the topic it settles must be a
+// Settle owns one contract on the write side: the topic it settles must be a
 // turn topic of the scene it names. A replayed turn and an opened-but-earlier
-// turn both qualify (pinned above); a Dream-fused topic does not — writing one
-// would reset its depth and orphan the turns it folded — and neither does a
-// turn of another scene, nor a depth-2 topic whose id no turn counter issued.
-// A turn Dream has sunk keeps its turn id and is settled again on purpose; the
-// next test pins that replay.
+// turn both qualify; a Dream-fused topic does not — writing one would reset
+// its depth and orphan the turns it folded — and neither does a turn of
+// another scene, nor a depth-2 topic whose id no turn counter issued. A turn
+// Dream has sunk keeps its turn id and is settled again on purpose.
 func TestUpdateRejectsForeignOrFusedTopic(t *testing.T) {
 	srv, calls := countingLLMServer(t, turnKeywords)
 	db := newSearchTestDB(t, srv.URL)
@@ -464,7 +463,7 @@ func TestUpdateRejectsForeignOrFusedTopic(t *testing.T) {
 
 	// The turn Search actually opened still settles.
 	if err := settle(db, sceneID, topicID); err != nil {
-		t.Fatalf("Update of the opened turn: %v", err)
+		t.Fatalf("Settle of the opened turn: %v", err)
 	}
 }
 

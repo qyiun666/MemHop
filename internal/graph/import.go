@@ -38,10 +38,9 @@ type ImportBatch struct {
 // mergeFn is one field-merge policy applied to a node the graph already holds.
 type mergeFn func(*core.HypergraphNode, string, string, []string, string, int64)
 
-// mergePolicy resolves the host's mode into that policy once, where the batch is
-// built. A nil policy is Skip mode: a node the graph holds is left exactly as
-// stored. An undefined mode is refused here rather than answered per item, so no
-// import path carries a fourth case that cannot happen.
+// mergePolicy resolves the host's mode into a field-merge policy once, where the
+// batch is built. A nil policy is Skip mode: a node the graph holds is left exactly
+// as stored. An undefined mode is refused here, not answered per item.
 func mergePolicy(mode core.L3ImportMode) (mergeFn, error) {
 	if !mode.Valid() {
 		return nil, common.NewError(common.ErrInvalidQuery,
@@ -57,12 +56,9 @@ func mergePolicy(mode core.L3ImportMode) (mergeFn, error) {
 }
 
 // NewImportBatch seeds a batch with the domain's existing graph names, so a
-// repeated import extends a graph instead of starting a second one. The seeding
-// scan is strict because its answer decides a write: a slot that will not read
-// back is not a label the pool has free, and treating it as one mints a second
-// graph under the same label. The domain's nodes are then split across two ids —
-// a node id derives from its graph and title — and the graph the host named first
-// keeps whatever it already held, unreachable by label.
+// repeated import extends a graph instead of starting a second one. The seeding scan
+// is strict: its answer decides a write, and treating a slot that will not read back
+// as a free label mints a second graph under a label that is in use.
 func NewImportBatch(engine *core.StorageEngine, agentID uint64, mode core.L3ImportMode) (*ImportBatch, error) {
 	merge, err := mergePolicy(mode)
 	if err != nil {
@@ -95,9 +91,8 @@ func NewImportBatch(engine *core.StorageEngine, agentID uint64, mode core.L3Impo
 }
 
 // loadContents indexes every node title and edge key of the pool, keyed by graph.
-// One strict pass each: the batch needs the whole membership of any graph it is
-// asked about, and reading it record by record is what let an unreadable node look
-// like a title nobody held.
+// Strict: the batch needs the whole membership of a graph it is asked about, and a
+// record-by-record read is what let an undecodable node look like a free title.
 func (b *ImportBatch) loadContents() error {
 	nodes, err := core.CollectAllStrict[core.HypergraphNode](b.engine, b.agentID, core.RecL3GraphNode)
 	if err != nil {
@@ -118,11 +113,10 @@ func (b *ImportBatch) loadContents() error {
 	return nil
 }
 
-// preferGraphID arbitrates two slots that share one domain label. A file can
-// carry that collision, and the record scan visits slots in map order — so
-// without a rule here, importing the label would write into a different graph on
-// each run. The graph whose id derives from the label owns it; a tie falls to the
-// smaller id.
+// preferGraphID arbitrates two slots sharing one domain label. A file can carry
+// that collision and the record scan visits slots in map order, so without a rule
+// here the same import writes a different graph each run. The graph whose id derives
+// from the label owns it; a tie falls to the smaller id.
 func preferGraphID(name string, cur, next uint64) bool {
 	derived := common.HashID(name)
 	if (next == derived) != (cur == derived) {
@@ -132,10 +126,8 @@ func preferGraphID(name string, cur, next uint64) bool {
 }
 
 // CheckName refuses a rename onto a label another graph of this domain already
-// carries. The label is how a domain addresses a graph, so two slots under one
-// label would make that domain resolve ambiguously. The scan is strict for the
-// same reason: a slot the engine cannot decode still holds its label, and
-// stepping over it would let a rename take a label that is in use.
+// carries. The scan is strict for the same reason as the seeding one: a slot the
+// engine cannot decode still holds its label.
 func CheckName(engine *core.StorageEngine, agentID uint64, id uint64, name string) error {
 	slots, err := core.CollectAllGraphSlots(engine, agentID)
 	if err != nil {
@@ -154,10 +146,8 @@ func CheckName(engine *core.StorageEngine, agentID uint64, id uint64, name strin
 func (b *ImportBatch) Result() *core.L3ImportResult { return b.result }
 
 // GraphIDs lists, in hex and sorted, every graph this batch resolved a domain
-// into — which includes one it imported nothing new into. A graph id derives from
-// its domain label, and this is the only place a batch reports which graphs it
-// visited — without it a graph written here could only be found again by listing
-// the domain and matching names.
+// into — including one it imported nothing new into. Without it a graph this batch
+// touched could only be found again by listing the domain and matching names.
 func (b *ImportBatch) GraphIDs() []string {
 	out := make([]string, 0, len(b.touched))
 	for id := range b.touched {
@@ -167,16 +157,14 @@ func (b *ImportBatch) GraphIDs() []string {
 	return out
 }
 
-// StampChanged moves the stored UpdatedAt forward on every graph whose contents
-// this batch actually wrote — a node created, a node merged or overwritten, a
-// hyperedge added. A graph it merely read (a Skip-mode import over nodes it
-// already holds) keeps its clock, so UpdatedAt answers "when did this graph last
-// change" rather than "when was an import last aimed at it".
+// StampChanged moves UpdatedAt forward on every graph whose contents this batch
+// actually wrote — a node created, merged or overwritten, a hyperedge added. A graph
+// it merely read keeps its clock, so UpdatedAt answers "when did this graph last
+// change" and not "when was an import last aimed at it".
 //
-// Call after the whole batch, once: one write per changed graph, not one per
-// record. Failures are joined rather than returned at the first one, and they do
-// not undo the records already stored — a graph whose stamp failed is a graph
-// whose clock reads stale, which the caller reports rather than rolls back.
+// Call once, after the whole batch: one write per changed graph. Failures are joined
+// rather than returned at the first, and they do not undo the records already
+// stored — a graph whose stamp failed reads stale, which the caller reports.
 func (b *ImportBatch) StampChanged() error {
 	graphIDs := make([]uint64, 0, len(b.changed))
 	for graphID := range b.changed {
@@ -226,13 +214,12 @@ func (b *ImportBatch) ImportNode(item *core.L3ImportItem) error {
 	return nil
 }
 
-// ImportRelations resolves one item's Related entries against the graph's node
-// set and creates the hyperedges; every unresolvable entry is recorded in
-// result.Errors while the rest continue. A relation names its whole far side,
-// so the edge it creates spans the item plus every target — an n-node fact
-// stays one edge instead of dissolving into n pairs. An edge the graph already
-// carries (same member set, same kind) is not created again, so re-importing a
-// batch is idempotent at any arity.
+// ImportRelations resolves one item's Related entries against the graph's node set
+// and creates the hyperedges; every unresolvable entry is recorded in result.Errors
+// while the rest continue. A relation names its whole far side, so an n-node fact
+// stays one edge instead of dissolving into n pairs, and an edge the graph already
+// carries (same member set, same kind) is not created again — re-importing a batch
+// is idempotent at any arity.
 func (b *ImportBatch) ImportRelations(item *core.L3ImportItem) {
 	if len(item.Related) == 0 {
 		return
@@ -263,10 +250,9 @@ func (b *ImportBatch) ImportRelations(item *core.L3ImportItem) {
 	}
 }
 
-// relationMembers turns one relation into its sorted member set, or returns
-// the reason it names no valid edge. The source item is always a member, so
-// Titles is the far side: one title is a binary relation, several are one
-// n-ary hyperedge over the whole set.
+// relationMembers turns one relation into its sorted member set, or returns the
+// reason it names no valid edge. The source item is always a member, so Titles is
+// the far side.
 func (b *ImportBatch) relationMembers(graphID uint64, source string, rel core.L3Relation, titles map[string]struct{}) ([]uint64, string) {
 	if !rel.Kind.Valid() {
 		return nil, fmt.Sprintf("invalid edge kind %d", rel.Kind)
@@ -296,10 +282,9 @@ func (b *ImportBatch) relationMembers(graphID uint64, source string, rel core.L3
 	return members, ""
 }
 
-// graphFor returns the graph of a domain, creating its slot only when the
-// domain has none. An existing slot is reused as stored: its Name is a label that
-// may have been changed since the id was derived, and reusing the id must not
-// undo that label.
+// graphFor returns the graph of a domain, creating its slot only when the domain has
+// none. An existing slot is reused as stored: its Name is a label that may have been
+// changed since the id was derived, and reusing the id must not undo that label.
 func (b *ImportBatch) graphFor(domain string) (uint64, error) {
 	graphID, ok := b.graphIDs[domain]
 	if !ok {
@@ -313,8 +298,8 @@ func (b *ImportBatch) graphFor(domain string) (uint64, error) {
 	return graphID, nil
 }
 
-// titles returns the set one graph holds, creating an empty one for a graph with
-// no nodes yet. The batch writes into what it returns, so a new title lands in the
+// titles returns the set one graph holds, creating an empty one for a graph with no
+// nodes yet. The batch writes into what it returns, so a new title lands in the
 // index as well and a later item in the same batch sees it.
 func (b *ImportBatch) titles(graphID uint64) map[string]struct{} {
 	set, ok := b.nodeTitles[graphID]
@@ -336,8 +321,7 @@ func (b *ImportBatch) edges(graphID uint64) map[string]struct{} {
 }
 
 // mutateNode applies the batch's field-merge policy to the stored node of one item
-// and reports that node's id — the write already derived it, so naming the node back
-// to the caller is not a second hash of the same pair.
+// and reports that node's id — the write already derived it.
 func (b *ImportBatch) mutateNode(graphID uint64, item core.L3ImportItem) (uint64, error) {
 	now := time.Now().UnixMilli()
 	return repo.MutateNodeL3(b.engine, b.agentID, graphID, item.Title, func(n *core.HypergraphNode) {

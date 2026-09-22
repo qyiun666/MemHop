@@ -28,10 +28,10 @@ type SearchResult struct {
 }
 
 // SceneMessage is one L4 utterance inside a scene context topic. Type says
-// whether the content is prose or a reference to media. Seq is the slot the
-// utterance holds in its topic, and the topic's events share that slot space: a
-// gap says the slot is empty, not what emptied it — a reclaimed utterance is one
-// such reason and a legal end state for a turn, not a read that lost a line.
+// prose or a reference to media. Seq is the slot the utterance holds in its
+// topic, shared with the topic's events: a gap says the slot is empty — a
+// reclaimed utterance is one such reason, a legal end state for a turn, not a
+// read that lost a line.
 type SceneMessage struct {
 	Role      uint8       `json:"role"`
 	Type      ContentType `json:"type"`
@@ -123,18 +123,13 @@ type L3Subgraph struct {
 }
 
 // L4Query archive query: every field is optional and the set conditions AND
-// together, so a topic-only or type-only read works. L4 holds both kinds of a
-// turn's content, so Kind is a condition like any other — leaving it unset means
-// an empty query selects utterances AND events. The order is what a query spans: Seq
-// within one topic, CreatedAt across topics with the record id breaking ties — and
-// Limit keeps the tail of whichever order applies.
-// Keyword is matched case-insensitively, the same way the L3 node filter matches
-// one. An empty query returns the domain's whole archive set — that is a lot of
-// text for a caller with a context window, so Limit caps the result to the tail of
-// that order. NodeSeq keeps only the records bound to one plan step — that
-// step and every step under it; a step is addressed inside a turn, so it means
-// nothing without TopicID. Zero leaves the condition unset, which is safe because
-// the library hands step ordinals out from 1.
+// together, so an empty query selects the domain's whole content set — utterances
+// AND events alike; Kind is a condition like any other, not a mode switch. The
+// order is what a query spans: Seq within one topic, CreatedAt across topics
+// (id breaking ties), and Limit keeps the tail of whichever order applies.
+// Keyword matches case-insensitively. NodeSeq means a step and its whole
+// subtree — an ordinal inside a turn, so it needs TopicID; zero leaves the
+// condition unset, which is safe because step ordinals start at 1.
 type L4Query struct {
 	Keyword string       `json:"keyword,omitempty"`  // case-insensitive substring of Content
 	Start   int64        `json:"start,omitempty"`    // created at or after (ms)
@@ -167,13 +162,13 @@ type DreamStage struct {
 // what this pass actually did. On mid-pipeline failures the partially filled
 // report is returned together with the error.
 type DreamReport struct {
-	ConsolidatedScenes int          `json:"consolidated_scenes"`  // 场景数（≥1 个合并组生效）
-	L2TopicsCompressed int          `json:"l2_topics_compressed"` // 沉进融合组的话题数，不是组数
-	L1NodesAdded       int          `json:"l1_nodes_added"`       // 同步创建/更新的场景节点
-	L1EdgesAdded       int          `json:"l1_edges_added"`       // 新建或抬权的超边
-	L1NodesRemoved     int          `json:"l1_nodes_removed"`     // 陈旧重建 + 衰减移除
-	L1EdgesRemoved     int          `json:"l1_edges_removed"`     // 陈旧重建 + 衰减各自带走的边
-	L0Updated          bool         `json:"l0_updated"`           // 本轮执行了情感/MBTI 蒸馏并回写
+	ConsolidatedScenes int          `json:"consolidated_scenes"`  // scenes with >=1 applied merge group
+	L2TopicsCompressed int          `json:"l2_topics_compressed"` // topics sunk into groups, not group count
+	L1NodesAdded       int          `json:"l1_nodes_added"`       // scene nodes created or updated by the sync
+	L1EdgesAdded       int          `json:"l1_edges_added"`       // hyperedges created or strengthened
+	L1NodesRemoved     int          `json:"l1_nodes_removed"`     // stale rebuild + decay removals
+	L1EdgesRemoved     int          `json:"l1_edges_removed"`     // edges taken by stale rebuild and decay
+	L0Updated          bool         `json:"l0_updated"`           // emotion/MBTI distillation ran and wrote back
 	Stages             []DreamStage `json:"stages,omitempty"`
 }
 

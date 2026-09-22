@@ -10,7 +10,6 @@ package llmops
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -20,9 +19,7 @@ import (
 )
 
 // L2Group is one merge the model proposed: the topics it claims share a thread and
-// the text reconstructed from their keywords. The wire shape is the anonymous
-// decode struct in parseConsolidateResponse, which is where a quoted node_hash
-// still parses.
+// the text reconstructed from their keywords.
 type L2Group struct {
 	NodeHashes    []uint64
 	MergedSummary string
@@ -33,10 +30,9 @@ type ConsolidationOutput struct {
 	L2Groups []L2Group
 }
 
-// systemConsolidate states the contract for one pass. The topic count it aims at
-// is the caller's configured compression floor, not a constant of this package:
-// a number here that the engine does not run by would have the model merge to a
-// target the next pass then refuses to consider reached.
+// systemConsolidate states the contract for one pass. The topic count it aims at is
+// the caller's configured compression floor, not a constant of this package: the
+// prompt must state the number the engine actually runs by.
 func systemConsolidate(floor int) string {
 	return fmt.Sprintf(`You analyze L2 chat memory topics, identify which adjacent topics belong to the same conversation thread, and reconstruct their keywords into natural text that reads like the original conversation.
 
@@ -70,35 +66,13 @@ func Consolidate(ctx context.Context, chat Chat, topics []core.TopicSlot, floor 
 	if len(topics) == 0 {
 		return &ConsolidationOutput{L2Groups: []L2Group{}}, nil
 	}
-	system := systemConsolidate(floor)
-	user := buildConsolidatePrompt(topics)
-	// Two-budget attempt: the first pass uses the configured ceiling; when
-	// the response is truncated (finish_reason=length, common with reasoning
-	// models), retry once at the endpoint's own ceiling so merged summaries are
-	// never cut mid-JSON.
-	primary := minTokens(chat.MaxOutputTokens(), ConsolidationMaxTokens)
-	response, err := chat.ChatWithRetry(ctx, system, user, primary, escalationCeiling(chat))
-	if err != nil {
-		return nil, err
-	}
-	out, perr := parseConsolidateResponse(response)
-	if perr == nil {
-		return out, nil
-	}
-	// One format-constrained retry before failing the call; ExtractKeywords
-	// applies the same self-healing pattern.
-	retry, rerr := chat.Chat(ctx, system, user+consolidateFormatRetry, primary)
-	if rerr != nil {
-		// The retry's failure is the answer, with the first reply's parse error kept
-		// as context: a cancelled or refused retry reported as an off-contract answer
-		// sends the host to debug a model that never refused it.
-		return nil, common.NewError(common.CodeOf(rerr),
-			"consolidate format retry after an off-contract reply", errors.Join(perr, rerr))
-	}
-	if out, perr = parseConsolidateResponse(retry); perr != nil {
-		return nil, perr
-	}
-	return out, nil
+	return askJSON(ctx, chat, jsonExchange{
+		what:        "consolidate",
+		system:      systemConsolidate(floor),
+		user:        buildConsolidatePrompt(topics),
+		formatRetry: consolidateFormatRetry,
+		ceiling:     ConsolidationMaxTokens,
+	}, parseConsolidateResponse)
 }
 
 // consolidateFormatRetry is appended to the user prompt for the
@@ -136,9 +110,9 @@ func buildConsolidatePrompt(topics []core.TopicSlot) string {
 }
 
 // parseConsolidateResponse parses the LLM reply; node_hashes accept JSON
-// numbers or quoted strings. A group whose members do not parse is not a group
-// the engine could apply, and the caller counts what it could not apply apart
-// from what it chose not to.
+// numbers or quoted strings. A group whose members do not parse is an error, not a
+// group quietly dropped: a shorter group list must not read as a model that merged
+// less than it did.
 func parseConsolidateResponse(response string) (*ConsolidationOutput, error) {
 	cleaned := stripCodeBlocks(response)
 	var raw struct {

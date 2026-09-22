@@ -90,7 +90,7 @@ func TestOpenAfterTrimTruncateWindow(t *testing.T) {
 }
 
 // TestOpenFallsBackToFullScanOnCorruptSnapshot verifies that a corrupted
-// snapshot blob no longer makes the file unopenable: Open falls back to a
+// snapshot blob does not make the file unopenable: Open falls back to a
 // full scan and truncates the residue.
 func TestOpenFallsBackToFullScanOnCorruptSnapshot(t *testing.T) {
 	p := tempPath(t, "corrupt_snap")

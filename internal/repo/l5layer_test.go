@@ -91,9 +91,9 @@ func TestPlanNodeAndContentCoexistUnderOneTopic(t *testing.T) {
 	}
 }
 
-// An aggregate exists exactly while a topic owns at least one node: a turn's
-// events no longer join it, and neither ordering nor the recency the retention
-// exemption reads depends on them.
+// An aggregate exists exactly while a topic owns at least one node: content
+// never joined the grouping, and neither ordering nor the recency the retention
+// exemption reads depends on it.
 func TestCollectPlanNodesGroupsTrees(t *testing.T) {
 	engine := tempEngine(t)
 	agentID := core.DefaultAgentID

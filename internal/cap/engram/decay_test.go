@@ -12,10 +12,10 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/index"
 )
 
-// An edge the decay pass cannot read is not an edge that went away: reporting it
-// as pruned lets the pass carry on and leave nodes holding a reference to an edge
-// nobody trimmed. The sibling that prunes the other half of the same link already
-// draws this line, so the two directions of one cascade now agree.
+// An edge the decay pass cannot read is not an edge that went away: reporting it as
+// pruned lets the pass carry on and leave nodes holding a reference to an edge nobody
+// trimmed. The sibling that prunes the other half of the same link draws this line
+// too.
 func TestRemoveNodeFromEdgeReportsUnreadableEdge(t *testing.T) {
 	engine, err := core.Create(filepath.Join(t.TempDir(), "decay.meh"))
 	if err != nil {
@@ -53,8 +53,8 @@ func TestRemoveNodeFromEdgeReportsUnreadableEdge(t *testing.T) {
 }
 
 // A depth-3 node survives the pass only if its topic can be read and its parent
-// is shallow enough. Answering「don't keep」for a read that merely failed deleted
-// an L1 record over one unreadable payload, so the failure now stops the pass.
+// is shallow enough. Answering「don't keep」for a read that merely failed would delete
+// an L1 record over one unreadable payload, so the failure stops the pass.
 func TestRebuildFromL2StopsOnUnreadableDeepTopic(t *testing.T) {
 	engine, err := core.Create(filepath.Join(t.TempDir(), "decay.meh"))
 	if err != nil {
@@ -262,9 +262,9 @@ func TestL1PassesRefuseANodeTheyCannotRead(t *testing.T) {
 	}
 }
 
-// Dropping a stale node takes its two-member co-occurrence edge below
-// MinEdgeNodes, so the edge goes with it — and a pass that counted only the decay
-// stage's removals reported fewer edges than it deleted.
+// Dropping a stale node takes its two-member co-occurrence edge below MinEdgeNodes, so
+// the edge goes with it: a rebuild that removed nodes removed edges too, and the pass
+// reports both.
 func TestRebuildFromL2CountsTheEdgeItTakesWithIt(t *testing.T) {
 	engine, err := core.Create(filepath.Join(t.TempDir(), "rebuild.meh"))
 	if err != nil {

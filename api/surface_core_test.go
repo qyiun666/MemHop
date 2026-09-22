@@ -1,7 +1,7 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// Search / Update surface tests: the hot-path turn contract.
+// Search / Settle surface tests: the hot-path turn contract.
 
 package api
 
@@ -56,7 +56,7 @@ func TestSurfaceTurnFlow(t *testing.T) {
 	}
 
 	// A turn named by an id the library never issued is refused with
-	// ErrInvalidQuery, and Update never sees content it did not read.
+	// ErrInvalidQuery, and Settle never sees content it did not read.
 	for i, bad := range [][2]string{
 		{"not-hex", openedTopic},
 		{sceneID, ""},

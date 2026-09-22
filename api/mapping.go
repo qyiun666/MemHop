@@ -1,9 +1,8 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// Mapping between internal/core uint64 models and the public api DTOs whose
-// IDs fields are 16-char hex strings. All mapping is one-way explicit; no
-// business logic lives here.
+// Mapping from the internal/core uint64 models to the public DTOs. One-way, no
+// business logic; every id a host can see is rendered here.
 
 package api
 
@@ -13,18 +12,20 @@ import (
 
 func formatID(id uint64) string { return internal.FormatID(id) }
 
-func formatIDs(ids []uint64) []string {
-	out := make([]string, len(ids))
-	for i, id := range ids {
-		out[i] = formatID(id)
+// mapSlice renders a list of internal records into the element DTO of each. The
+// answer is always non-nil: a host decoding a collection never sees null.
+func mapSlice[T, U any](in []T, f func(T) U) []U {
+	out := make([]U, len(in))
+	for i := range in {
+		out[i] = f(in[i])
 	}
 	return out
 }
 
-// cloneStrings copies a list out of an internal record and keeps it non-nil: an
-// imported node may carry no keywords, and every other list this package maps already
-// answers as []. One field encoding as null while its neighbours encode as [] is two
-// shapes for one answer.
+func formatIDs(ids []uint64) []string { return mapSlice(ids, formatID) }
+
+// cloneStrings copies a keyword list out of an internal record. An imported node may
+// carry none, and that must encode as [] like every other list here, not as null.
 func cloneStrings(in []string) []string {
 	out := make([]string, len(in))
 	copy(out, in)
@@ -42,9 +43,8 @@ func formatPtr(id *uint64) *string {
 func fromProfileSlot(s internal.ProfileSlot) ProfileSlot {
 	prefs := s.Preferences
 	if prefs == nil {
-		// One shape per "no preferences": a host that wrote its profile without the
-		// map stored a JSON null, and every other empty collection this facade hands
-		// back encodes as empty rather than as null.
+		// A host that wrote its profile without the map stored a JSON null; the
+		// answer it reads back has to be the same shape as every other empty list here.
 		prefs = map[string]string{}
 	}
 	return ProfileSlot{
@@ -59,9 +59,8 @@ func fromProfileSlot(s internal.ProfileSlot) ProfileSlot {
 	}
 }
 
-// toCoreProfileSlot maps the host-writable half of the profile. Everything the
-// library owns is inherited from the stored record by the write itself, so an
-// input carries only what the host is allowed to state.
+// toCoreProfileSlot maps the host-writable half of the profile; the library-owned
+// half is inherited by the write itself.
 func toCoreProfileSlot(s *ProfileInput) internal.ProfileSlot {
 	if s == nil {
 		return internal.ProfileSlot{}
@@ -111,15 +110,11 @@ func fromTopicSlot(t internal.TopicSlot) TopicSlot {
 }
 
 func fromSearchResult(r *internal.SearchResult) *SearchResult {
-	topics := make([]TopicSlot, len(r.Topics))
-	for i, t := range r.Topics {
-		topics[i] = fromTopicSlot(t)
-	}
 	return &SearchResult{
 		Profile:      fromProfileSlot(r.Profile),
 		ProfileBrief: r.ProfileBrief,
 		Scene:        fromSceneSlot(r.Scene),
-		Topics:       topics,
+		Topics:       mapSlice(r.Topics, fromTopicSlot),
 		NewTopicID:   formatID(r.NewTopicID),
 	}
 }
@@ -157,33 +152,19 @@ func fromHypergraphEdge(e internal.HypergraphEdge) HypergraphEdge {
 	}
 }
 
-// mapL3Members renders a graph's node and edge sets into their public DTOs.
-// A whole graph and a queried subgraph carry the same two member sets, so they
-// share this and differ only in what else they return.
-func mapL3Members(nodes []internal.HypergraphNode, edges []internal.HypergraphEdge) ([]HypergraphNode, []HypergraphEdge) {
-	outNodes := make([]HypergraphNode, len(nodes))
-	for i, n := range nodes {
-		outNodes[i] = fromHypergraphNode(n)
-	}
-	outEdges := make([]HypergraphEdge, len(edges))
-	for i, e := range edges {
-		outEdges[i] = fromHypergraphEdge(e)
-	}
-	return outNodes, outEdges
-}
-
 func fromL3Graph(g *internal.L3Graph) *L3Graph {
-	nodes, edges := mapL3Members(g.Nodes, g.Edges)
 	return &L3Graph{
 		Slot:  fromHypergraphSlot(g.Slot),
-		Nodes: nodes,
-		Edges: edges,
+		Nodes: mapSlice(g.Nodes, fromHypergraphNode),
+		Edges: mapSlice(g.Edges, fromHypergraphEdge),
 	}
 }
 
 func fromL3Subgraph(g *internal.L3Subgraph) *L3Subgraph {
-	nodes, edges := mapL3Members(g.Nodes, g.Edges)
-	return &L3Subgraph{Nodes: nodes, Edges: edges}
+	return &L3Subgraph{
+		Nodes: mapSlice(g.Nodes, fromHypergraphNode),
+		Edges: mapSlice(g.Edges, fromHypergraphEdge),
+	}
 }
 
 func fromArchiveSlot(s internal.ArchiveSlot) ArchiveSlot {
@@ -208,10 +189,8 @@ func formatOptionalID(id uint64) string {
 	return formatID(id)
 }
 
-// toCoreAppendSlot maps the fields a host owns onto a content slot for the append
-// path. The owning topic comes from the argument the call is keyed by, and the
-// record id follows from (topic, Seq), so neither is part of what a caller hands in
-// — ID and TopicID are read from the slot and dropped.
+// toCoreAppendSlot drops ID and TopicID: the owning topic comes from the argument
+// the call is keyed by, and the record id follows from (topic, Seq).
 func toCoreAppendSlot(s ArchiveSlot) internal.ArchiveSlot {
 	return internal.ArchiveSlot{
 		Kind:        s.Kind,
@@ -226,24 +205,20 @@ func toCoreAppendSlot(s ArchiveSlot) internal.ArchiveSlot {
 }
 
 func fromPlanTree(t *internal.PlanTree) PlanTree {
-	roots := make([]PlanNodeView, 0, len(t.Roots))
-	for _, r := range t.Roots {
-		roots = append(roots, fromPlanNodeView(r))
+	return PlanTree{
+		Roots:      mapSlice(t.Roots, fromPlanNodeView),
+		DoneCount:  t.DoneCount,
+		TotalCount: t.TotalCount,
 	}
-	return PlanTree{Roots: roots, DoneCount: t.DoneCount, TotalCount: t.TotalCount}
 }
 
 func fromPlanNodeView(v internal.PlanNodeView) PlanNodeView {
-	out := PlanNodeView{
+	return PlanNodeView{
 		Seq: v.Seq, ParentSeq: v.ParentSeq, Title: v.Title, Status: string(v.Status),
 		Summary: v.Summary, CreatedAt: v.CreatedAt,
 		FinishedAt: v.FinishedAt, UpdatedAt: v.UpdatedAt,
-		Children: make([]PlanNodeView, 0, len(v.Children)),
+		Children: mapSlice(v.Children, fromPlanNodeView),
 	}
-	for _, c := range v.Children {
-		out.Children = append(out.Children, fromPlanNodeView(c))
-	}
-	return out
 }
 
 func toInternalPlanStep(s PlanStep) internal.PlanStep {

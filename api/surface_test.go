@@ -145,21 +145,16 @@ func TestSurfaceL0Profile(t *testing.T) {
 	}
 }
 
-// The library-owned half of the profile is read-only on the host surface, and
-// the shape is what enforces it: ProfileInput — the argument to Open, SubAgent
-// and UpdateL0 — carries only the four host-owned fields, so an emotion, an MBTI
-// type, a domain identity or a timestamp cannot be sent at all. Everything
-// writable still comes back on the read shape. That a write inherits the
-// distilled half rather than zeroing it is the engine's own contract
-// (TestUpdateL0KeepsDistilledHalf), so it is not restated here.
+// ProfileInput — the argument to Open, SubAgent and UpdateL0 — carries only the four
+// host-owned fields, so an emotion, an MBTI type, a domain identity or a timestamp
+// cannot be sent at all. That a write inherits the distilled half rather than zeroing
+// it is the engine's own contract (TestUpdateL0KeepsDistilledHalf), not restated here.
 func TestSurfaceL0DistilledHalfIsReadOnly(t *testing.T) {
 	writable := map[string]bool{"Name": true, "Role": true, "Personality": true, "Preferences": true}
 	if got := exportedFieldSet(reflect.TypeFor[ProfileInput]()); !maps.Equal(got, writable) {
 		t.Fatalf("ProfileInput carries %v, want the host-owned fields %v",
 			slices.Sorted(maps.Keys(got)), slices.Sorted(maps.Keys(writable)))
 	}
-	// Everything a host may write is also what it reads back, plus the four
-	// fields only the library writes.
 	for _, owned := range []string{"EmotionState", "MBTI", "AgentType", "UpdatedAtMs"} {
 		writable[owned] = true
 	}
@@ -235,10 +230,8 @@ func TestSurfaceOpenValidatesArguments(t *testing.T) {
 }
 
 // A list this package maps encodes as [] even when the record behind it holds none:
-// an imported node may carry no keywords, and a topic's track is empty only if a
-// writer let it be — which the mapping has no way to know. One field answering null
-// while its neighbours answer [] is two shapes for one answer, and a host decoding
-// into a slice would have to special-case it.
+// one field answering null while its neighbours answer [] is two shapes for one
+// answer, and a host decoding into a slice would have to special-case it.
 func TestMappedListsEncodeAsEmptyNotNull(t *testing.T) {
 	for _, tc := range []struct {
 		name string

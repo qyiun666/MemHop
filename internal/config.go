@@ -25,13 +25,13 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
-// openEngine resolves the three states a database path can be in. Every branch
-// has to be told apart, because creating truncates: only a path that is
+// openEngine resolves the three states a database path can be in. Every
+// branch has to be told apart, because creating truncates: only a path
 // confirmed absent may be created, so any other stat failure surfaces instead
-// of falling through to it. A path that is there but is a directory is refused
-// here rather than handed to core.Open, which would report it as a file too
-// small to hold the dual headers. allowCreate is the caller's decision — an
-// open that has nothing to seed a new file with must not leave one behind.
+// of falling through to it. A directory is refused here rather than handed to
+// core.Open, which would report it as a file too small for the dual headers.
+// allowCreate is the caller's decision — an open that has nothing to seed a
+// new file with must not leave one behind.
 func openEngine(path string, allowCreate bool) (*core.StorageEngine, error) {
 	info, err := os.Stat(path)
 	switch {
@@ -58,17 +58,12 @@ func assemble(engine *core.StorageEngine, cfg *MemHopConfig) *DB {
 	ctx, cancel := context.WithCancel(context.Background())
 	idToName, nameToID, registryErr := loadTenantRegistry(engine)
 	if registryErr != nil {
-		// One domain's key will not resolve. That costs the file nothing — every
-		// name that did resolve keeps working — and the action it does block is
-		// creating a tenant, which is refused where it is asked for.
 		slog.Warn("memhop: tenant registry carries an unreadable key; creating a sub-agent is refused until it resolves", "err", registryErr)
 	}
 	return &DB{
-		engine: engine,
-		config: cfg,
-		llm:    llm.New(cfg.LLM),
-		// baseCtx bounds every per-agent opCtx; Close cancels it so
-		// in-flight Dreams exit at the next stage boundary.
+		engine:     engine,
+		config:     cfg,
+		llm:        llm.New(cfg.LLM),
 		baseCtx:    ctx,
 		baseCancel: cancel,
 		agents:     make(map[uint64]*domain.Context),
@@ -89,19 +84,17 @@ func abandon(db *DB, cause error) error {
 	return cause
 }
 
-// OpenDB opens the database at path and settles its primary domain. The primary
-// is the implicit zero domain, so a file holds exactly one and finding it costs
-// no scan. What happens depends on the file and on that domain's profile:
+// OpenDB opens the database at path and settles its primary domain. The
+// primary is the implicit zero domain, so a file holds exactly one. What
+// happens depends on the file and on that domain's profile:
 //
 //	file there, profile there    → the file's own profile wins, the argument is ignored
 //	file there, no profile       → seed it from the argument; without one, refuse
 //	no file                      → create and seed; without a profile, refuse
 //
-// A refused open creates no file — creating one is what a profile is for. An
-// existing file is opened, and opening repairs a torn tail, before its primary
-// profile is looked for. AgentType is stamped
-// here rather than taken from the caller: the primary domain is the one a file is
-// opened on, and a profile cannot claim otherwise.
+// A refused open creates no file — creating one is what a profile is for.
+// AgentType is stamped here rather than taken from the caller: the primary
+// domain is the one a file is opened on, and a profile cannot claim otherwise.
 func OpenDB(path string, llmCfg LlmConfig, defaults MemHopDefaults, primary *core.ProfileSlot) (*DB, error) {
 	if path == "" {
 		return nil, common.NewError(common.ErrConfig, "path is required")

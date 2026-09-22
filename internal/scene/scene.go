@@ -18,10 +18,9 @@ import (
 )
 
 // ResolveForRead answers which scene a read is scoped to, creating one when the
-// query names none. It returns the id and not the record: the read that follows
-// opens the turn, and that is the step which has to read the scene back to bump
-// its counter. Errors from the record layer pass through unchanged so an unknown
-// scene stays ErrNotFound and a closing database stays ErrClosed.
+// query names none. It returns the id, not the record: opening the turn is the step
+// that reads the scene back to bump its counter. Record-layer errors pass through
+// unchanged, so an unknown scene stays ErrNotFound and a closing database ErrClosed.
 func ResolveForRead(engine *core.StorageEngine, agentID uint64, q core.SearchQuery) (uint64, error) {
 	if q.SceneID == "" {
 		return create(engine, agentID, q.L3ID)
@@ -34,11 +33,8 @@ func ResolveForRead(engine *core.StorageEngine, agentID uint64, q core.SearchQue
 	if err != nil {
 		return 0, err
 	}
-	// The anchor is a creation-time field: a scene that already exists keeps the
-	// anchor it has until UpdateScene moves it. That refusal needs no lookup —
-	// reaching for the named graph first would report an unresolvable anchor as a
-	// not-found about a record the host never asked to read, and would pay a
-	// shared-pool read inside the caller's domain lock to say nothing new.
+	// The anchor is creation-time only: a scene that already exists keeps its anchor
+	// until UpdateScene moves it, so this refusal needs no lookup of the named graph.
 	if q.L3ID != "" {
 		return 0, common.NewError(common.ErrInvalidQuery,
 			"scene "+q.SceneID+" already exists; its L3 anchor is set at creation only (use UpdateScene)")
@@ -46,12 +42,10 @@ func ResolveForRead(engine *core.StorageEngine, agentID uint64, q core.SearchQue
 	return slot.SceneID, nil
 }
 
-// create allocates a free scene id and persists the scene under a
-// library-generated name, anchored on the named L3 domain when one is given. The
-// domain is resolved before anything is written: a refusal has to leave no scene
-// behind. Nothing is read back afterwards — freshID proved the id free under the
-// caller's domain lock — and no step remains where the scene is stored while its id
-// cannot be handed to the caller.
+// create allocates a free scene id and persists the scene under a library-generated
+// name, anchored on the named L3 domain when one is given. The domain is resolved
+// before anything is written: a refusal has to leave no scene behind. Nothing is read
+// back afterwards — freshID proved the id free under the caller's domain lock.
 func create(engine *core.StorageEngine, agentID uint64, l3ID string) (uint64, error) {
 	var anchor uint64
 	if l3ID != "" {
@@ -89,10 +83,6 @@ func freshID(engine *core.StorageEngine, agentID uint64) (uint64, error) {
 		if _, err := core.ReadSceneSlot(engine, agentID, id); err != nil {
 			// Any error other than "nothing here" must not mint a scene: a closing
 			// database or an IO failure says nothing about whether the id is free.
-			// "Nothing here" is also what the typed reader answers when another kind
-			// of record holds the address — unlike the L3 ids, which a host's own text
-			// derives and which can therefore spell out a neighbour's address, this one
-			// is random, so that case is not reachable and needs no second probe.
 			if common.CodeOf(err) != common.ErrNotFound {
 				return 0, err
 			}

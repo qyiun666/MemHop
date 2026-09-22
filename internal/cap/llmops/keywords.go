@@ -1,8 +1,7 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// keywords.go: semantic keyword extraction — the write-path preprocessing
-// call point (one finished turn in, one keyword track out).
+// keywords.go: semantic keyword extraction — one text in, one keyword track out.
 
 package llmops
 
@@ -22,10 +21,9 @@ const (
 	// Retry budget: reasoning tokens count toward completion_tokens and can
 	// exhaust the 512-token first attempt, leaving content empty.
 	keywordRetryMaxTokens = 4096
-	// keywordChunkRunes is the input-length threshold (in runes) above
-	// which extraction splits the text first: prompt constraint weakens
-	// with input length, and long inputs are the main trigger of
-	// natural-language-summary replies.
+	// keywordChunkRunes is the input-length threshold (in runes) above which
+	// extraction splits the text first: the prompt constraint weakens with input
+	// length, and long inputs are the main trigger of natural-language-summary replies.
 	keywordChunkRunes = 2000
 )
 
@@ -44,8 +42,7 @@ Rules:
 10. Output ONLY valid JSON: {"keywords":[...]}, no markdown, no code fences`
 
 // keywordFormatRetry is appended to the user prompt for the format-constrained
-// retry: long inputs drift toward natural-language summaries, and restating
-// the hard JSON-only constraint measurably improves structured replies.
+// retry: long inputs drift toward natural-language summaries.
 const keywordFormatRetry = `
 
 Output ONLY valid JSON: {"keywords":["keyword1", "keyword2", ...]}.
@@ -57,11 +54,10 @@ var errKeywordFormat = common.NewError(common.ErrLLM,
 	"keyword extraction returned no parseable JSON; check the model's structured-output capability")
 
 // ExtractKeywords extracts semantic keywords whose union represents the
-// text's core meaning (unlimited count). A reply that is not valid JSON gets
-// one format-constrained retry and then surfaces as an error rather than a
-// degraded result: an empty or partial track would be stored as if it were the
-// real one, and nothing downstream can tell the two apart.
-// Long inputs are chunked first so the JSON constraint stays effective.
+// text's core meaning (unlimited count). A reply that is not valid JSON surfaces as
+// an error rather than a degraded result: an empty or partial track would be stored
+// as if it were the real one. Long inputs are chunked first so the JSON constraint
+// stays effective.
 func ExtractKeywords(ctx context.Context, chat Chat, text string) ([]string, error) {
 	trimmed := strings.TrimSpace(text)
 	if trimmed == "" {
@@ -73,20 +69,12 @@ func ExtractKeywords(ctx context.Context, chat Chat, text string) ([]string, err
 	return extractOne(ctx, chat, "Extract keywords from:\n"+trimmed)
 }
 
-// extractOne runs the full attempt ladder for one prompt: escalating token
-// budgets (a reasoning model can spend the first budget on reasoning and
-// truncate the reply), then one format-constrained retry that restates the
-// JSON-only rule. A transport failure surfaces as itself; a model that never
-// answered in JSON yields errKeywordFormat.
-//
-// Every unit of extraction goes through here — a whole text and each of its
-// chunks alike. Hardening only the short-input path left long inputs the
-// weaker one, which is backwards: the longer the text, the more readily a
-// model drifts into a natural-language summary.
+// extractOne runs the full attempt ladder for one prompt: three widening token
+// budgets (a reasoning model can spend the first on reasoning and truncate the
+// reply), then one format-constrained retry that restates the JSON-only rule. A
+// transport failure surfaces as itself; a model that never answered in JSON yields
+// errKeywordFormat. Whole texts and chunks alike both come through here.
 func extractOne(ctx context.Context, chat Chat, user string) ([]string, error) {
-	// The ladder tops out at the consolidation ceiling, and no rung may exceed
-	// what the endpoint was configured to accept: an over-large max_tokens is a
-	// refused request, not a shorter answer.
 	widest := minTokens(chat.MaxOutputTokens(), ConsolidationMaxTokens)
 	budgets := []int{
 		minTokens(chat.MaxOutputTokens(), keywordExtractionMaxTokens),
@@ -118,10 +106,9 @@ func extractOne(ctx context.Context, chat Chat, user string) ([]string, error) {
 	return nil, errKeywordFormat
 }
 
-// extractKeywordsChunked extracts per chunk through the same ladder and merges
-// the results. A chunk that fails every attempt is an error: the surviving
-// chunks would otherwise read as a complete keyword track while silently
-// missing one part of the text.
+// extractKeywordsChunked extracts per chunk through the same ladder and merges the
+// results. A chunk that fails every attempt is an error, not a skipped one: the
+// surviving chunks would otherwise read as a complete keyword track.
 func extractKeywordsChunked(ctx context.Context, chat Chat, trimmed string) ([]string, error) {
 	chunks := splitForExtraction(trimmed, keywordChunkRunes)
 	merged := make([]string, 0, len(chunks)*4)

@@ -254,10 +254,9 @@ func TestFormatRetryFailureKeepsItsOwnCode(t *testing.T) {
 }
 
 // An endpoint configured for 64 output tokens refuses a request for 8192 outright,
-// so no rung of any ladder may ask above the ceiling — the ladder that used to end
-// at the consolidation constant failed the turn it was meant to rescue. The shape
-// is part of the contract too: three widening budgets and then the format-constrained
-// retry at the widest of them, which is the rung a dropped ladder loses first.
+// so no rung of any ladder may ask above the ceiling. The shape is part of the
+// contract too: three widening budgets and then the format-constrained retry at the
+// widest of them.
 func TestKeywordLadderStaysWithinTheConfiguredCeiling(t *testing.T) {
 	for _, tc := range []struct {
 		ceiling int

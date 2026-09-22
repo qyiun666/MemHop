@@ -65,12 +65,9 @@ func TestSurfaceListL1RendersHexIDs(t *testing.T) {
 		if !isHexID(n.ID) || !isHexID(n.SceneID) {
 			t.Fatalf("node ids must cross as hex: %+v", n)
 		}
-		// EmotionSet distinguishes "never distilled" from a settled (0, 0) — the
-		// two signals are scaled readings where 0 is an extreme value, so without
-		// the marker those two states read identically. This stub's distillation
-		// names no per-node rows, so the nodes are synced but never stamped, and
-		// the facade has to say exactly that instead of leaving a host to read a
-		// blank (0, 0) as a settled extreme.
+		// EmotionSet is the only thing that tells "never distilled" from a settled
+		// (0, 0) — 0 is an extreme reading on both signals. This stub's
+		// distillation names no per-node rows, so the nodes are synced unstamped.
 		if n.EmotionSet {
 			t.Fatalf("a node the distillation never named must read as not emotion-set: %+v", n)
 		}

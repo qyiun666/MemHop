@@ -26,8 +26,8 @@ func onStep(slot ArchiveSlot, seq uint32) ArchiveSlot {
 	return slot
 }
 
-// eventsOf reads one topic's event track the only way a host can now: the same key
-// with the kind condition, in Seq order.
+// eventsOf reads one topic's event track the only way the public surface allows: the
+// same key with the Kind condition, in Seq order.
 func eventsOf(t *testing.T, db *Session, topicID string) []ArchiveSlot {
 	t.Helper()
 	kind := KindEvent
@@ -87,7 +87,6 @@ func TestSurfaceArchiveAppendAndRead(t *testing.T) {
 			t.Fatalf("append content: %v", err)
 		}
 	}
-	// Missing required fields must be rejected.
 	if _, err := db.AppendArchive(sceneID, sessionID, ArchiveSlot{Kind: KindEvent, Content: "no type"}); CodeOf(err) != ErrInvalidQuery {
 		t.Fatalf("append invalid event: want ErrInvalidQuery, got %v", err)
 	}
@@ -121,7 +120,6 @@ func TestSurfaceListScenesByProject(t *testing.T) {
 	db := openSurfaceDB(t)
 	l3A := l3Graph(t, db, "l3-proj-a")
 	l3B := l3Graph(t, db, "l3-proj-b")
-	// Two session openings, each anchored to its own L3 project domain.
 	if _, err := db.Search(SearchQuery{L3ID: l3A}); err != nil {
 		t.Fatalf("search A: %v", err)
 	}
@@ -150,8 +148,6 @@ func TestSurfaceListScenesByProject(t *testing.T) {
 	if len(scenesB) == 0 {
 		t.Fatal("ListScenes(B) should return the l3B-anchored scene")
 	}
-	// Cross-cutting: the l3A list must not contain any scene the l3B list
-	// holds, i.e. the two domain lists are disjoint (exclusion branch).
 	sceneIDsB := make(map[string]struct{}, len(scenesB))
 	for _, sc := range scenesB {
 		sceneIDsB[sc.SceneID] = struct{}{}

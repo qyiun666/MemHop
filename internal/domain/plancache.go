@@ -11,19 +11,18 @@ import (
 )
 
 // PlanCache holds each topic's plan tree in memory so a tree read costs no engine
-// scan per operation. It is built from the engine when a Context is created (and
-// rebuilt on idle reclaim) and maintained incrementally by whoever writes plan
-// records; it carries no lock of its own, so it is only ever touched while the
-// caller holds Context.Mu. A tree is keyed by the topic of the turn that opened
-// it, so a key exists exactly while at least one of its nodes does.
+// scan per operation. It is built from the engine when a Context is created and
+// maintained incrementally by whoever writes plan records; it carries no lock of its
+// own, so it is only ever touched while the caller holds Context.Mu. A tree is keyed
+// by the topic of the turn that opened it, so a key exists exactly while at least
+// one of its nodes does.
 type PlanCache struct {
 	plans map[uint64]*repo.PlanAggregate
 }
 
 func buildPlanCache(engine *core.StorageEngine, agentID uint64) *PlanCache {
-	// Rebuilt from what still decodes: an unreadable node is absent from the mirror in
-	// exactly the shape an expired one has. What that costs is a tree read and one
-	// offered ordinal, and the mirror cannot tell the two apart from here.
+	// Rebuilt from what still decodes: an unreadable node is absent in exactly the
+	// shape an expired one has, and the mirror cannot tell the two apart from here.
 	pc := &PlanCache{plans: make(map[uint64]*repo.PlanAggregate)}
 	for _, agg := range repo.GroupPlanNodes(core.CollectAllPlanNodes(engine, agentID)) {
 		a := agg
@@ -37,9 +36,8 @@ func (pc *PlanCache) Aggregate(topicID uint64) *repo.PlanAggregate {
 	return pc.plans[topicID]
 }
 
-// HasSeq reports whether one topic's live plan tree holds a node at seq — the
-// check a caller runs before binding anything to a step, since a step nobody
-// created is not conjured by something naming it.
+// HasSeq reports whether one topic's live plan tree holds a node at seq — the check a
+// caller runs before binding anything to a step.
 func (pc *PlanCache) HasSeq(topicID uint64, seq uint32) bool {
 	agg := pc.plans[topicID]
 	if agg == nil {
@@ -54,11 +52,8 @@ func (pc *PlanCache) HasSeq(topicID uint64, seq uint32) bool {
 }
 
 // Subtree returns the ordinals of one step and every step nested under it,
-// Seq-ascending and including the step itself. A tree read by ordinal has no
-// prefix to match on, so the whole branch is walked here — the closure is what
-// makes a step's own ordinals cover the work its children hold.
-// An unknown root yields just itself: a step whose record expired still names
-// its own events. Callers hold Context.Mu.
+// Seq-ascending and including the step itself. An unknown root yields just itself: a
+// step whose record expired still names its own events. Callers hold Context.Mu.
 func (pc *PlanCache) Subtree(topicID uint64, root uint32) []uint32 {
 	agg := pc.plans[topicID]
 	if agg == nil {
@@ -82,12 +77,11 @@ func (pc *PlanCache) Subtree(topicID uint64, root uint32) []uint32 {
 }
 
 // NextSeq hands out the next ordinal of one topic's tree.
-// ponytail: derived from the live nodes, so any removal frees an ordinal — the
-// sweep that drops the highest step, and the sweep that empties a tree (its key
-// goes with it, so that turn starts again at 1). An event ages on its own clock
-// and can outlive the step it names, so a host that writes into an old turn key
-// after that tree was swept can meet an ordinal an event still points at. The
-// upgrade path is a persisted per-topic high-water record. Callers hold Context.Mu.
+// ponytail: derived from the live nodes, so any removal frees an ordinal, and an
+// emptied tree's key goes with it — that turn starts again at 1. An event ages on its
+// own clock and can outlive the step it names, so writing into an old turn key after
+// that tree was swept can meet an ordinal an event still points at. The upgrade path
+// is a persisted per-topic high-water record. Callers hold Context.Mu.
 func (pc *PlanCache) NextSeq(topicID uint64) uint32 {
 	agg := pc.plans[topicID]
 	if agg == nil {

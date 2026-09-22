@@ -79,7 +79,7 @@ func TestSearchFreshScenesDoNotCollide(t *testing.T) {
 }
 
 // A non-empty SceneID must already exist: the library never creates a scene
-// the host did not open, and Update relies on that to reject stray turns.
+// the host did not open, and Settle relies on that to reject stray turns.
 func TestSearchRejectsUnknownScene(t *testing.T) {
 	srv := mockLLMServer(t, `{"keywords":["x"]}`)
 	db := newSearchTestDB(t, srv.URL)
@@ -157,7 +157,7 @@ func TestSearchIsReadOnlyAndCallsNoLLM(t *testing.T) {
 
 // Each read opens exactly one turn: the topic id it hands back comes from the
 // scene's own turn counter, so reopens advance it and never repeat it. Opening
-// a turn mints no record — the surface stays as it was until Update settles.
+// a turn mints no record — the surface stays as it was until Settle distills.
 func TestSearchOpensOneTurnPerRead(t *testing.T) {
 	srv := mockLLMServer(t, `{"keywords":["x"]}`)
 	db := newSearchTestDB(t, srv.URL)
@@ -244,11 +244,10 @@ func TestSearchRefusesAnUnknownAnchorWithoutLeavingAScene(t *testing.T) {
 }
 
 // Naming a scene that already exists together with an anchor is a mistake about
-// when anchors are set, and the refusal says so on the argument alone. Looking the
-// named graph up first made that answer depend on the graph: one deleted after this
-// scene was anchored turned "this scene is already here" into a not-found (3001)
-// about a record the host never asked to read, and it paid a read of the file-wide
-// shared pool inside the caller's domain lock to say nothing new.
+// when anchors are set, and the refusal says so on the argument alone: looking
+// the named graph up would turn "this scene is already here" into a not-found
+// (3001) about a record the host never asked to read, and would reach into the
+// file-wide shared pool inside the caller's domain lock to say nothing new.
 func TestSearchRefusesAnAnchorOnAnExistingSceneWithoutLookingItUp(t *testing.T) {
 	srv := mockLLMServer(t, `{"keywords":["unused"]}`)
 	db := newSearchTestDB(t, srv.URL)

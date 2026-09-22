@@ -58,8 +58,8 @@ func TestAppendArchiveL4SameSeqOverwritesInPlace(t *testing.T) {
 }
 
 // Kind is a condition like any other, and it has to hold on every read route —
-// including the by-ID fast path, which used to skip the filter entirely and
-// would otherwise hand an event back to a caller that asked for utterances.
+// including the by-ID fast path, which would otherwise hand an event back to a
+// caller that asked for utterances.
 func TestQueryArchivesL4HonoursKindOnEveryRoute(t *testing.T) {
 	engine := tempEngine(t)
 	idx := index.NewL4Index()

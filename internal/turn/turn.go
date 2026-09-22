@@ -13,18 +13,15 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
-// SettleTarget validates the topic a turn may settle into: the id has to be one
-// this scene opened — the turn topic minted for a turn count the scene has
-// already reached. That single rule refuses everything settling must not touch: a
-// Dream-fused group's parent (also depth 1 and in this scene, but derived from
-// timestamps rather than from the turn counter), another scene's turn, and an id
-// nobody issued.
+// SettleTarget validates the topic a turn may settle into: the id has to be a turn
+// topic this scene minted — one of the turn counts the scene has already reached.
+// That refuses a Dream-fused group's parent (also depth 1 in this scene, but derived
+// from timestamps rather than from the turn counter), another scene's turn, and an
+// id nobody issued.
 //
-// Two replays stay valid on purpose: settling the current turn again, and settling
-// a turn Dream has since sunk under a fused parent — a sunk turn is still one this
-// scene opened. Keeping it sunk is the settle write's job, not this gate's: the gate
-// judges the key, and a key it refused here would make a replay of an already
-// consolidated turn an error instead of a rewrite.
+// Two replays stay valid on purpose: settling the current turn again, and settling a
+// turn Dream has since sunk under a fused parent — a sunk turn is still one this
+// scene opened. Un-sinking it is the settle write's job, not this gate's.
 func SettleTarget(sceneID, topicID, turnSeq uint64) error {
 	for seq := uint64(1); seq <= turnSeq; seq++ {
 		if core.ComputeTurnTopicID(sceneID, seq) == topicID {

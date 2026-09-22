@@ -364,8 +364,8 @@ func TestInterfaceMergeScenes(t *testing.T) {
 		t.Fatalf("a refused merge changed the scene count %d -> %d", before, after)
 	}
 	// The rejected call must not have touched the primary either: the batch
-	// delete keys on the named ids, so a stale secondary used to be able to
-	// take the surviving scene's own record with it.
+	// delete keys on the named ids, so a stale secondary cannot take the
+	// surviving scene's own record with it.
 	if survived, err := db.Search(memhop.SearchQuery{SceneID: primary}); err != nil || len(survived.Topics) != 2 {
 		t.Fatalf("primary damaged by the refused merge: %d topics, err %v", len(survived.Topics), err)
 	}

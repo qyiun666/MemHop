@@ -15,9 +15,9 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
-// DeleteSceneNodeL1 removes one scene's L1 node record by scene ID (the
-// node ID is derivable without an index); missing nodes are a no-op. It drops
-// the node record only — incident hyperedges are another pass's to clean.
+// DeleteSceneNodeL1 removes one scene's L1 node record by scene ID; missing
+// nodes are a no-op. It drops the node record only — incident hyperedges are
+// another pass's to clean.
 func DeleteSceneNodeL1(engine *core.StorageEngine, agentID uint64, sceneID uint64) error {
 	if _, err := engine.DeleteRecordBatch(agentID, []uint64{core.SceneNodeID(sceneID)}); err != nil {
 		return common.NewError(common.ErrIO, "delete l1 scene node", err)
@@ -26,18 +26,15 @@ func DeleteSceneNodeL1(engine *core.StorageEngine, agentID uint64, sceneID uint6
 }
 
 // SyncL1NodesFromL2 rebuilds one L1 node per scene from the current
-// depth<=2 topics and returns the ids of the nodes it wrote. The node ID
-// (hash("scene-node:"+sceneID)) is stable across runs: existing nodes keep
-// Importance/Valence/Arousal — this pass never decays them — while a scene whose
-// topic set changed has its UpdatedAt moved to now, so a scene still being talked
-// about restarts the clock its decay runs on. The returned set is the only new
-// evidence the co-occurrence pass may strengthen an existing edge from: it names the
-// scenes whose topic list came out different (a turn lost counts as much as one
-// gained), and a scene whose list is unchanged carries nothing a live edge was not
-// already weighted by, even when re-distilling the same turns words its keywords
-// differently.
-// A topic or node that will not read back stops the pass with that cause, since
-// both would otherwise be written as a record that lost fields.
+// depth<=2 topics and returns the ids of the nodes it wrote. The node id is
+// stable across runs: existing nodes keep Importance/Valence/Arousal — this
+// pass never decays them — while a scene whose topic set changed has its
+// UpdatedAt moved to now, restarting the clock its decay runs on. The returned
+// set names the scenes whose topic list came out different (a turn lost counts
+// as much as one gained): the only new evidence the co-occurrence pass may
+// strengthen an existing edge from. A topic or node that will not read back
+// stops the pass with that cause, since both would otherwise be written as a
+// record that lost fields.
 func SyncL1NodesFromL2(engine *core.StorageEngine, agentID uint64) (map[uint64]struct{}, error) {
 	byScene, err := collectTopicIDsByScene(engine, agentID)
 	if err != nil {
@@ -87,10 +84,9 @@ func syncOneSceneNode(engine *core.StorageEngine, agentID uint64, sceneID uint64
 	node, err := core.ReadSceneNode(engine, agentID, nodeID)
 	if err != nil {
 		if common.CodeOf(err) != common.ErrNotFound {
-			// A node that is there but will not read back is not a node that is
-			// missing: a fresh one would overwrite it with no emotion, no
-			// importance history and no EdgeIDs, and the hyperedges naming it
-			// would be left pointing at a node that denies them.
+			// A node that is there but will not read back is not a missing node:
+			// a fresh one would overwrite it with no history, and the hyperedges
+			// naming it would point at a node that denies them.
 			return nodeID, false, err
 		}
 		node = nil
@@ -109,8 +105,8 @@ func syncOneSceneNode(engine *core.StorageEngine, agentID uint64, sceneID uint64
 	return nodeID, true, nil
 }
 
-// sortedIDs renders an idHash set as a sorted slice so node TopicIDs are
-// deterministic and comparable via slices.Equal.
+// sortedIDs renders an idHash set as a sorted slice: node TopicIDs must be
+// deterministic to be comparable.
 func sortedIDs(set map[uint64]struct{}) []uint64 {
 	ids := make([]uint64, 0, len(set))
 	for id := range set {
@@ -120,15 +116,13 @@ func sortedIDs(set map[uint64]struct{}) []uint64 {
 	return ids
 }
 
-// BackfillL1Emotions stamps the emotion signals a distillation computed onto the
-// nodes no pass has stamped yet and leaves a stamped node alone, so a later pass
-// never overwrites what an earlier one settled. The test is the node's own marker
-// and not its values: both ends of the scale are readings a node can legitimately
-// carry, so one distilled to (0,0) — very negative and calm — is indistinguishable
-// from an unstamped one by value alone, and stamping it again both replaces a
-// settled reading and restarts the clock it decays on. A node it cannot read aborts
-// the pass with that cause: an absent node and an unreadable one both stop the
-// backfill, but they are not the same fact to report.
+// BackfillL1Emotions stamps the emotion signals a distillation computed onto
+// the nodes no pass has stamped yet and leaves a stamped node alone. The test
+// is the node's EmotionSet marker, not its values: both ends of the scale are
+// legal readings, so one distilled to (0,0) is indistinguishable from an
+// unstamped one by value alone, and re-stamping would replace a settled reading
+// and restart the clock it decays on. An unreadable node aborts the pass with
+// that cause.
 func BackfillL1Emotions(engine *core.StorageEngine, agentID uint64, perNode map[uint64]core.NodeEmotion) error {
 	for id, em := range perNode {
 		node, err := core.ReadSceneNode(engine, agentID, id)

@@ -11,11 +11,9 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
-// The view carries the topic's own fields out and pairs every utterance it is
-// handed with the slot it came from: a reader tells a reclaimed line from one never
-// spoken by the Seq riding along, so dropping it here would lose the distinction at
-// the last step. The keyword track is cloned because the caller gets a view it may
-// edit, not a window into the record.
+// Each utterance keeps the Seq it came from — the only thing that tells a reclaimed
+// line from one never spoken — and the keyword track is a copy, not a window into the
+// record.
 func TestContextTopicRendersTheTopicAndTheUtterancesGiven(t *testing.T) {
 	const (
 		topicID uint64 = 0xfeed

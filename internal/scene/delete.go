@@ -11,18 +11,16 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
-// DeleteCascade removes the given L2 records — scene slots and/or topics — with
-// the L4 content and L5 plan trees they own and their cache entries. The id sets
-// come from a strict enumeration the caller has already run, so the only
-// whole-bucket scan left here is the plan-node one, and it runs before the first
-// tombstone. What is left after that can still refuse on a closed engine, and the
-// order is what makes such a refusal survivable: the deepest records go first, the
-// scene and topic tombstones last. Past that last write the caller's own entry
-// stops finding the scene it asked to delete, so a pass interrupted there would
-// leave a scene no path can delete again while its cache still lists the topics
-// under it. Of the mirrors, only L2Meta and the plan tree wait for the last
-// tombstone; the content mirror goes with the content it mirrors, inside
-// DeleteTopicArchives.
+// DeleteCascade removes the given L2 records — scene slots and/or topics — with the
+// L4 content and L5 plan trees they own and their cache entries. The id sets come
+// from a strict enumeration the caller has already run, so the only whole-bucket scan
+// left here is the plan-node one, and it runs before the first tombstone.
+//
+// Deepest records first, scene and topic tombstones last: past the last write the
+// caller's own entry stops finding the scene it asked to delete, so an interrupted
+// pass must not have consumed that tombstone yet. Of the mirrors, only L2Meta and the
+// plan tree wait for the last write; the content mirror goes with the content it
+// mirrors, inside DeleteTopicArchives.
 // Callers hold ac.Mu.
 func DeleteCascade(ac *domain.Context, agentID uint64, scenes, topics []uint64) error {
 	planNodes, err := repo.PlanNodeIDsByTopicIDs(ac.Engine, agentID, topics)
@@ -45,14 +43,12 @@ func DeleteCascade(ac *domain.Context, agentID uint64, scenes, topics []uint64) 
 	return nil
 }
 
-// DetachGraph clears the L3 anchor of every scene that named graphID, scanning
-// the domain because anchors live only on scenes — a graph slot keeps no reverse
-// list. The scan is the one that decides which scenes get rewritten, so a scene
-// that will not read back stops the pass rather than keeping an anchor nobody will
-// ever clear again. A scene whose rewrite fails does not stop it: the caller has
-// already deleted the graph and has no retry that reaches this pass, so stopping
-// would strand every later scene on an anchor to a graph that is gone. Each failure
-// is collected and reported together instead. Callers hold the domain lock.
+// DetachGraph clears the L3 anchor of every scene that named graphID, scanning the
+// domain because anchors live only on scenes — a graph slot keeps no reverse list.
+// The scan is strict: a scene that will not read back stops the pass rather than keep
+// an anchor nobody will clear again. A rewrite that fails does not: the graph is
+// already deleted and no retry reaches this pass, so the failures are collected and
+// reported together. Callers hold the domain lock.
 func DetachGraph(engine *core.StorageEngine, agentID uint64, graphID uint64) error {
 	scenes, err := repo.CollectAllScenesL2(engine, agentID)
 	if err != nil {

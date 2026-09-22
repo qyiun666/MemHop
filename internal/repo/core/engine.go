@@ -11,8 +11,12 @@ package core
 
 import (
 	"iter"
+	"maps"
 	"os"
+	"slices"
 	"sync"
+
+	"github.com/qyiun666/MemHop/internal/common"
 )
 
 type RecordEntry struct {
@@ -21,6 +25,10 @@ type RecordEntry struct {
 	IDHash     uint64
 	Data       []byte
 }
+
+// errEngineClosed is the single answer every engine operation gives once
+// Close has run; the code is what callers branch on.
+var errEngineClosed = common.NewError(common.ErrClosed, "engine is closed")
 
 // StorageEngine is a V2 append-only storage engine with A/B dual headers.
 // Records live in per-agent domains: the record index and the type
@@ -67,38 +75,30 @@ func (e *StorageEngine) Stats() (sizeBytes int64, records int) {
 // domain over a snapshot; the yield runs lock-free. A closed engine yields
 // nothing.
 func (e *StorageEngine) IndexByType(agentID uint64, rt uint8) iter.Seq[uint64] {
-	return func(yield func(uint64) bool) {
-		e.mu.RLock()
-		if e.closed {
-			e.mu.RUnlock()
-			return
-		}
-		ids := make([]uint64, 0, len(e.byAgentType[agentID][rt]))
-		for id := range e.byAgentType[agentID][rt] {
-			ids = append(ids, id)
-		}
-		e.mu.RUnlock()
-		for _, id := range ids {
-			if !yield(id) {
-				return
-			}
-		}
-	}
+	return e.iterSnapshot(func() []uint64 {
+		return slices.Collect(maps.Keys(e.byAgentType[agentID][rt]))
+	})
 }
 
 // IterAgents iterates every agentID that currently holds at least one
 // live record, over a snapshot copy.
 func (e *StorageEngine) IterAgents() iter.Seq[uint64] {
+	return e.iterSnapshot(func() []uint64 {
+		return slices.Collect(maps.Keys(e.index))
+	})
+}
+
+// iterSnapshot builds a key snapshot under the read lock, releases it, then
+// yields the ids; a closed engine yields nothing. It takes e.mu itself, unlike
+// the *Locked helpers, which is why iteration cannot re-enter the lock.
+func (e *StorageEngine) iterSnapshot(snapshot func() []uint64) iter.Seq[uint64] {
 	return func(yield func(uint64) bool) {
 		e.mu.RLock()
 		if e.closed {
 			e.mu.RUnlock()
 			return
 		}
-		ids := make([]uint64, 0, len(e.index))
-		for agentID := range e.index {
-			ids = append(ids, agentID)
-		}
+		ids := snapshot()
 		e.mu.RUnlock()
 		for _, id := range ids {
 			if !yield(id) {

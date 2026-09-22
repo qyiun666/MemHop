@@ -904,7 +904,7 @@ func TestPlanNodeUpdateFinishedAt(t *testing.T) {
 }
 
 // One turn runs on one id: the topic Search opened is where the host's events and
-// dialogue land, what Update distills, and what an L4 read under a Kind condition
+// dialogue land, what Settle distills, and what an L4 read under a Kind condition
 // returns — no host-minted turn key and no timestamp derivation anywhere in
 // between.
 func TestTurnRunsOnOneTopicID(t *testing.T) {

@@ -101,7 +101,7 @@ func TestCallAbandonedDuringTheBackoffCarriesTheCancellationCode(t *testing.T) {
 }
 
 // A gateway that refuses with a whole HTML page is not a reason to paste that page
-// into an error the tool client sees and the log line carries. The head is what has
+// into an error the caller sees and the log line carries. The head is what has
 // the diagnosis in it, and a cut that lands inside a multi-byte character would
 // otherwise turn a Chinese gateway message into replacement noise.
 func TestUpstreamErrorBodyIsEchoedBounded(t *testing.T) {

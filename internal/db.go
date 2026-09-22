@@ -42,12 +42,11 @@ type DB struct {
 	nameToID map[string]uint64 // tenant registry: name -> agentID
 	idToName map[uint64]string // tenant registry: agentID -> name
 
-	// llmByAgent is one domain's own endpoint, and providers dedupes
-	// transports by config value so a hundred sub-agents sharing an endpoint
-	// share one http.Client. Both deliberately outlive the domain contexts:
-	// the idle sweep drops a context and contextFor rebuilds it, so an override
-	// stored on the context would quietly fall back to the library-wide
-	// endpoint once a domain went idle long enough.
+	// llmByAgent holds one domain's own endpoint override; providers dedupes
+	// transports by config value so domains sharing an endpoint share one
+	// http.Client. Both outlive the domain contexts deliberately: the idle
+	// sweep drops a context and contextFor rebuilds it, so an override stored
+	// on the context would quietly fall back to the library-wide endpoint.
 	llmByAgent map[uint64]*llm.Provider
 	providers  map[LlmConfig]*llm.Provider
 
@@ -58,11 +57,10 @@ type DB struct {
 
 func (db *DB) IsClosed() bool { return db.closed.Load() }
 
-// contextFor returns the agent's context, creating it lazily on first
-// access, and opportunistically sweeps idle domains. Non-default IDs must
-// be registered tenants, so an id nobody ever issued cannot open a domain of
-// its own. The reserved shared-pool domain is exempt from the registry
-// check: it has no tenant record and is created on first L3 access.
+// contextFor returns the agent's context, creating it lazily on first access,
+// and opportunistically sweeps idle domains. Non-default IDs must be
+// registered tenants. The reserved shared-pool domain is exempt from the
+// registry check: it has no tenant record and is created on first L3 access.
 func (db *DB) contextFor(agentID uint64) (*domain.Context, error) {
 	if db.closed.Load() {
 		return nil, common.NewError(common.ErrClosed, "database is closed")
@@ -80,8 +78,6 @@ func (db *DB) contextFor(agentID uint64) (*domain.Context, error) {
 	db.sweepIdleLocked()
 	ac := db.agents[agentID]
 	if ac == nil {
-		// A rebuild after the idle sweep lands here too, which is why the
-		// endpoint override lives in its own table rather than on the context.
 		chat := db.llm
 		if own, ok := db.llmByAgent[agentID]; ok {
 			chat = own
@@ -94,9 +90,7 @@ func (db *DB) contextFor(agentID uint64) (*domain.Context, error) {
 }
 
 // providerForLocked returns the transport for one endpoint, building it on
-// first use. Sub-agents are created per tenant and a process can hold many of
-// them against the same endpoint, so the config value is the dedupe key: one
-// http.Client per endpoint rather than one per domain. Caller holds agentsMu.
+// first use; the config value is the dedupe key. Caller holds agentsMu.
 func (db *DB) providerForLocked(cfg LlmConfig) *llm.Provider {
 	if p, ok := db.providers[cfg]; ok {
 		return p
@@ -106,11 +100,10 @@ func (db *DB) providerForLocked(cfg LlmConfig) *llm.Provider {
 	return p
 }
 
-// setDomainLLM records one domain's own endpoint and hands back the transport it
-// names. The table is what a domain rebuilt after the idle sweep reads; a domain
-// that is still live has to be re-pointed by its caller under the domain lock,
-// which is what a reconnecting host wants: the endpoint it names now is the one
-// its turns use from here on.
+// setDomainLLM records one domain's own endpoint and hands back the transport
+// it names. The table is only read when a context is built, so a domain whose
+// context is still live has to be re-pointed by its caller under the domain
+// lock.
 func (db *DB) setDomainLLM(agentID uint64, cfg LlmConfig) *llm.Provider {
 	db.agentsMu.Lock()
 	defer db.agentsMu.Unlock()
@@ -119,24 +112,18 @@ func (db *DB) setDomainLLM(agentID uint64, cfg LlmConfig) *llm.Provider {
 	return provider
 }
 
-// lockAgent takes the domain lock and re-checks under it that the database is
-// still open and that this context is still the domain's: a caller that fetched
-// its context before Close ran can still be waiting here when the barrier passes,
-// and one that waited longer than the idle TTL can find the domain reclaimed.
-// Every business entry point must go through this helper.
+// lockAgent takes the domain lock, rejects a closed database under it
+// (lockOpen), and re-checks that this context is still the domain's: a caller
+// that waited longer than the idle TTL before getting the lock can find the
+// domain reclaimed. Every business entry point must go through this helper.
 func (db *DB) lockAgent(agentID uint64) (*domain.Context, error) {
 	for {
 		ac, err := db.contextFor(agentID)
 		if err != nil {
 			return nil, err
 		}
-		ac.Mu.Lock()
-		if db.closed.Load() {
-			// A caller that fetched its context before Close ran can still be
-			// waiting here when the barrier passes and the engine shuts down:
-			// reject instead of reporting success on a closed database.
-			ac.Mu.Unlock()
-			return nil, common.NewError(common.ErrClosed, "database is closed")
+		if err := db.lockOpen(ac); err != nil {
+			return nil, err
 		}
 		if ac.Reclaimed.Load() {
 			// Reclaimed under this lock, so running here would be an operation on a
@@ -149,12 +136,24 @@ func (db *DB) lockAgent(agentID uint64) (*domain.Context, error) {
 	}
 }
 
-// lockSession is the shared prologue of the turn-keyed operations: take the domain
-// lock, then parse the turn's topic id. On a parse failure the lock is released
-// before returning, so callers add `defer ac.Mu.Unlock()` only after the error
-// check. It returns the locked context and the parsed key. The parse is the one
-// every turn-keyed entry uses (content.ParseTopicID), so a reserved all-zero key is
-// refused the same way wherever a host can hand one in.
+// lockOpen takes the domain lock and, under it, rejects a closed database: a
+// caller that fetched its context before Close ran can still be waiting here
+// when the barrier passes, and reporting success then would operate on a shut
+// engine. On error no lock is held.
+func (db *DB) lockOpen(ac *domain.Context) error {
+	ac.Mu.Lock()
+	if db.closed.Load() {
+		ac.Mu.Unlock()
+		return common.NewError(common.ErrClosed, "database is closed")
+	}
+	return nil
+}
+
+// lockSession is the shared prologue of the turn-keyed operations: take the
+// domain lock, then parse the turn's topic id with content.ParseTopicID. On a
+// parse failure the lock is released before returning, so callers add
+// `defer ac.Mu.Unlock()` only after the error check. A reserved all-zero key
+// is refused the same way wherever a host can hand one in.
 func (db *DB) lockSession(agentID uint64, sessionID string) (*domain.Context, uint64, error) {
 	ac, err := db.lockAgent(agentID)
 	if err != nil {
@@ -169,14 +168,15 @@ func (db *DB) lockSession(agentID uint64, sessionID string) (*domain.Context, ui
 }
 
 // lockSharedPool is the prologue of every L3 operation: the caller's own
-// domain must still be alive (a stale handle to a deleted agent must not
-// keep using the shared pool), then the shared pool domain is locked. The
-// L3 records live in the file-wide shared domain, so shared-pool
-// operations from different agents serialize on its lock. The shared domain
-// is never deleted, so no tombstone re-check is needed. The caller check is
-// point-in-time: a caller deleted mid-operation lets the call run to
-// completion, which is harmless — it touches only the shared pool, and
-// DeleteL3's anchor detach skips domains it can no longer lock.
+// domain must still be alive (a stale handle to a deleted agent must not keep
+// using the shared pool), then the shared pool domain is locked. The L3
+// records live in the file-wide shared domain, so shared-pool operations from
+// different agents serialize on its lock. The shared domain is never deleted
+// and exempt from the idle sweep, so the reclaim re-check lockAgent does
+// cannot trigger here. The caller check is point-in-time: a caller deleted
+// mid-operation lets the call run to completion, which is harmless — it
+// touches only the shared pool, and DeleteL3's anchor detach skips domains it
+// can no longer lock.
 func (db *DB) lockSharedPool(callerID uint64) (*domain.Context, error) {
 	if err := db.CheckSession(callerID); err != nil {
 		return nil, err
@@ -185,10 +185,8 @@ func (db *DB) lockSharedPool(callerID uint64) (*domain.Context, error) {
 	if err != nil {
 		return nil, err
 	}
-	ac.Mu.Lock()
-	if db.closed.Load() {
-		ac.Mu.Unlock()
-		return nil, common.NewError(common.ErrClosed, "database is closed")
+	if err := db.lockOpen(ac); err != nil {
+		return nil, err
 	}
 	return ac, nil
 }
@@ -196,8 +194,8 @@ func (db *DB) lockSharedPool(callerID uint64) (*domain.Context, error) {
 // sweepIdleLocked reclaims contexts idle longer than Defaults.AgentIdleTTLMs.
 // Nothing is persisted at reclaim time: the dropped L2Meta cache rebuilds from
 // the agent's records on the next access. Domains whose lock is currently held
-// (in-flight operation or scheduled Dream) and the default domain are never
-// reclaimed. Caller must hold db.agentsMu.
+// (in-flight operation or scheduled Dream), the default domain and the shared
+// pool are never reclaimed. Caller must hold db.agentsMu.
 func (db *DB) sweepIdleLocked() {
 	ttl := db.config.Defaults.AgentIdleTTLMs
 	if ttl <= 0 {
@@ -218,11 +216,9 @@ func (db *DB) sweepIdleLocked() {
 			ac.Mu.Unlock()
 			continue
 		}
-		// Marking and removal sit inside the lock hold: a caller that stamped its
-		// activity and then queued behind an operation longer than the TTL would
-		// otherwise walk in here and run on a context this table no longer holds.
-		// lockAgent reads the mark under the same lock, so it goes and fetches the
-		// domain that is live instead.
+		// Marking and removal sit inside the lock hold, and lockAgent re-checks
+		// the mark under the same lock: a caller that queued behind an operation
+		// past the TTL fetches the live domain instead of running on this one.
 		ac.Reclaimed.Store(true)
 		ac.OpCancel()
 		delete(db.agents, id)
@@ -274,15 +270,13 @@ func (db *DB) Stats() (int64, int, error) {
 
 // CompactTo writes a defragmented copy of the database at newPath: only live
 // records, in one fresh log, with that copy's own rebuilt index. Deletes are
-// tombstones — removing a scene or a graph frees no bytes until a
-// compaction rewrites the log — so this is the space-reclamation entry the
-// lifecycle surface otherwise lacks.
+// tombstones, so this is the space-reclamation entry the lifecycle surface
+// otherwise lacks.
 //
-// It never touches the open file. newPath must not exist yet, which keeps the
-// copy from being destroyed by the rewrite and leaves the swap (close, rename,
-// reopen) to the host's own backup policy. The copy is a point-in-time snapshot:
-// records appended while it is being written are not in it, so compact when the
-// domain is quiet — typically just before Close.
+// It never touches the open file, and newPath must not exist yet — the swap
+// (close, rename, reopen) is left to the host's own backup policy. The copy
+// is a point-in-time snapshot: records appended while it is being written are
+// not in it, so compact when the domain is quiet — typically just before Close.
 func (db *DB) CompactTo(newPath string) error {
 	if db.closed.Load() {
 		return common.NewError(common.ErrClosed, "database is closed")
@@ -301,8 +295,7 @@ func (db *DB) CompactTo(newPath string) error {
 	return db.engine.Compact(newPath)
 }
 
-// sameFile compares two paths for the engine-level check that a compaction
-// never targets the file it is reading.
+// sameFile reports whether two paths name the same file.
 func sameFile(a, b string) bool {
 	abs := func(p string) string {
 		full, err := filepath.Abs(p)

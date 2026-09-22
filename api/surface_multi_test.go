@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-// settleTurn runs a whole turn the way a host now does: the two originals land in
+// settleTurn runs a whole turn the way a host does: the two originals land in
 // the slots dialogue owns, then the turn is settled into the topic Search opened,
 // whose distilled track comes back.
 func settleTurn(sess *Session, sceneID, topicID, userText, agentText string) (*TopicSlot, error) {
@@ -41,7 +41,7 @@ func TestSurfaceSessionMethods(t *testing.T) {
 		t.Fatalf("session getL0: %v", err)
 	}
 
-	// Search opens the host session; Update settles one turn into it.
+	// Search opens the host session; Settle closes one turn into it.
 	res, err := s.Search(SearchQuery{})
 	if err != nil {
 		t.Fatalf("session search: %v", err)
@@ -51,7 +51,7 @@ func TestSurfaceSessionMethods(t *testing.T) {
 	if _, err := settleTurn(s, sceneID, topicID, "session boot memory", "session reply"); err != nil {
 		t.Fatalf("session update: %v", err)
 	}
-	// Update writes no content: the turn's records are the ones the host appended,
+	// Settle writes no content: the turn's records are the ones the host appended,
 	// and a keyword search finds them under the key Search issued.
 	hits, err := s.SearchL4(L4Query{Keyword: "session boot"})
 	if err != nil || len(hits) != 1 || hits[0].TopicID != topicID {

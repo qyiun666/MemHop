@@ -14,11 +14,9 @@ import (
 const SnapshotMagic uint32 = 0x534E4150
 
 // SnapshotVersion 0x03 serializes the per-agent record index and nothing else.
-// 0x02 carried one opaque blob per agent domain beside the index, a channel
-// whose only producer (the sparse and L3 sections of 0x01) was retired; the
-// engine round-tripped it and no caller ever filled it. 0x02 and earlier are
-// rejected together with pre-0x0008 files — a rejected snapshot costs one full
-// record scan at Open, not the file (see restoreFromSnapshot).
+// Older blobs are rejected at load (see checkSnapshotEnvelope); a rejected
+// snapshot costs one full record scan at Open, not the file (see
+// restoreFromSnapshot).
 const SnapshotVersion uint8 = 0x03
 
 // BuildSnapshot serializes the per-agent record index into a single blob.

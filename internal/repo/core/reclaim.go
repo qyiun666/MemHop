@@ -94,9 +94,7 @@ func (e *StorageEngine) Compact(newPath string) error {
 		}
 	}()
 	// Compact's cost is the flush and the remap each write does, so the copy runs
-	// in batches: writing 2000 records one at a time pays 2000 flushes. The chunk
-	// bounds how many payloads are held at once, since the whole point is to rewrite
-	// a large file.
+	// in batches; the chunk bounds how many payloads are held at once.
 	const chunk = 256
 	for agentID, m := range e.index {
 		batch := make([]RecordEntry, 0, chunk)

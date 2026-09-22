@@ -145,11 +145,10 @@ func TestBuildHyperedgesReportsUnreadableEdge(t *testing.T) {
 }
 
 // The two scenes' keyword sets are the whole input to an edge's weight, so
-// recomputing them over records that have not moved returns the similarity that
-// edge was created from. Taking that as a strengthening — which is what an
-// unconditional max did — put the weight back where decay had found it, every
-// pass, forever: co-occurrence could not fade unless the scenes' vocabulary
-// changed out from under it. A rise now needs one endpoint's evidence to have
+// recomputing them over records that have not moved returns the similarity that edge
+// was created from. Taking that as a strengthening puts the weight back where decay
+// found it, every pass, forever: co-occurrence could not fade unless the scenes'
+// vocabulary changed out from under it. A rise needs one endpoint's evidence to have
 // moved, and the same pass that says so gets the rise.
 func TestBuildHyperedgesKeepsADecayedEdgeDecayed(t *testing.T) {
 	engine := tempEngine(t)

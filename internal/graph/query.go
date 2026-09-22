@@ -14,8 +14,7 @@ import (
 
 // NodeFilter is a graph-scoped node query with its conditions already parsed:
 // a nil IDs means no id filter, and Keyword is expected lower-cased. Every
-// condition that is set has to hold — Matches never picks a favourite and
-// ignores the rest.
+// condition that is set has to hold.
 type NodeFilter struct {
 	IDs      map[uint64]struct{}
 	Keyword  string
@@ -70,9 +69,9 @@ func ResolveSubgraphStart(engine *core.StorageEngine, agentID uint64, graphID, s
 	startNode, err := core.ReadHypergraphNode(engine, agentID, startHash)
 	if err != nil {
 		if common.CodeOf(err) != common.ErrNotFound {
-			// A start node that exists but will not read back is not a start node
-			// that is missing: the first tells the host to look elsewhere, the
-			// second tells it the graph is damaged here.
+			// A start node that exists but will not read back is not a start node that
+			// is missing: the first sends the host elsewhere, the second says the graph
+			// is damaged here.
 			return 0, 0, err
 		}
 		return 0, 0, common.NewError(common.ErrNotFound, "start node not found", err)
@@ -84,11 +83,10 @@ func ResolveSubgraphStart(engine *core.StorageEngine, agentID uint64, graphID, s
 	return graphHash, startHash, nil
 }
 
-// SubgraphAdjacency builds the undirected adjacency map from the graph's
-// edges (restricted to edgeKinds when non-empty) and returns the kept
-// edges alongside. An edge that will not read back stops the build: the
-// adjacency is what decides reachability, so a gap in it is not one less
-// edge but a member the walk can no longer reach.
+// SubgraphAdjacency builds the undirected adjacency map from the graph's edges
+// (restricted to edgeKinds when non-empty) and returns the kept edges alongside. An
+// edge that will not read back stops the build: the adjacency decides reachability,
+// so a gap in it is not one less edge but a member the walk can no longer reach.
 func SubgraphAdjacency(engine *core.StorageEngine, agentID uint64, graphID uint64, edgeKinds []core.GraphEdgeKind) (map[uint64]map[uint64]struct{}, []core.HypergraphEdge, error) {
 	adj := make(map[uint64]map[uint64]struct{})
 	var edges []core.HypergraphEdge

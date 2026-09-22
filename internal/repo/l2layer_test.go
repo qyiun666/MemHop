@@ -595,3 +595,55 @@ func TestMergeScenesL2RefusesUnreadableTopic(t *testing.T) {
 		t.Fatalf("a refused merge must delete no scene record: %v", rerr)
 	}
 }
+
+// listByID — the rule the by-id listings share — skips ids that name nothing
+// and reports a record that will not read back: a listing quietly missing one
+// row is indistinguishable from a row that was deleted.
+func TestListScenesL2ListingRules(t *testing.T) {
+	engine := tempEngine(t)
+	live := core.NewSceneSlot(11, "live")
+	if err := CreateSceneL2(engine, core.DefaultAgentID, &live); err != nil {
+		t.Fatal(err)
+	}
+	const corrupt = uint64(12)
+	if _, err := engine.WriteRecord(core.DefaultAgentID, core.RecL2Scene, corrupt, []byte(`{"scene_id":`)); err != nil {
+		t.Fatalf("make the record unreadable: %v", err)
+	}
+
+	got, err := ListScenesL2(engine, core.DefaultAgentID, []uint64{11, 99})
+	if err != nil {
+		t.Fatalf("an id naming no scene must be skipped, got %v", err)
+	}
+	if len(got) != 1 || got[0].SceneID != 11 {
+		t.Fatalf("listing = %+v, want the live scene only", got)
+	}
+	if _, err := ListScenesL2(engine, core.DefaultAgentID, []uint64{11, corrupt}); common.CodeOf(err) != common.ErrDeserialization {
+		t.Fatalf("an unreadable record = %v, want its own error", err)
+	}
+}
+
+// The batch calls take empty id sets straight to the engine: the no-op lives
+// there, so every repo entry point must stay a no-op too.
+func TestEmptyIDSetsAreNoOps(t *testing.T) {
+	engine := tempEngine(t)
+	if err := CompressTopicsL2(engine, core.DefaultAgentID, nil, 1); err != nil {
+		t.Fatalf("sink over no ids: %v", err)
+	}
+	if err := DeleteL2Records(engine, core.DefaultAgentID, nil); err != nil {
+		t.Fatalf("delete over no ids: %v", err)
+	}
+	if err := DeletePlanNodesByIDs(engine, core.DefaultAgentID, nil); err != nil {
+		t.Fatalf("plan delete over no ids: %v", err)
+	}
+	live := core.NewSceneSlot(21, "keep")
+	if err := CreateSceneL2(engine, core.DefaultAgentID, &live); err != nil {
+		t.Fatal(err)
+	}
+	if err := MergeScenesL2(engine, core.DefaultAgentID, 21, []uint64{22}); err != nil {
+		t.Fatalf("merge with no topics to move: %v", err)
+	}
+	got, err := core.ReadSceneSlot(engine, core.DefaultAgentID, 21)
+	if err != nil || got.SceneID != 21 {
+		t.Fatalf("the no-op merge touched the primary: %+v, %v", got, err)
+	}
+}

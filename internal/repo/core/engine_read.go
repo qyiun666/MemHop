@@ -16,7 +16,7 @@ func (e *StorageEngine) ReadRecord(agentID, idHash uint64) (uint8, []byte, error
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	if e.closed {
-		return 0, nil, common.NewError(common.ErrClosed, "engine is closed")
+		return 0, nil, errEngineClosed
 	}
 	offset, ok := e.index[agentID][idHash]
 	if !ok {

@@ -21,13 +21,11 @@ import (
 // Search reads one scene and opens the turn the host is about to run: it
 // returns the scene record, its depth-1 topics in turn order (the host's
 // context), the domain's L0 profile and the topic id this read minted for the
-// new turn — Update settles that turn into it, and everything the turn records
+// new turn — Settle distills that turn into it, and everything the turn records
 // (its L4 content, its L5 plan tree) keys on it. An empty SceneID allocates a
-// fresh scene, anchored to L3ID when given
-// and named by the library; a non-empty SceneID must already exist, so a session
-// always reads the scene it owns — and an L3ID handed in alongside one is refused
-// rather than dropped, since that anchor is a creation-time field (UpdateScene
-// moves it).
+// fresh scene, anchored to L3ID when given; a non-empty SceneID must already
+// exist, and an L3ID handed in alongside one is refused rather than dropped,
+// since that anchor is a creation-time field (UpdateScene moves it).
 func (db *DB) Search(agentID uint64, q SearchQuery) (*SearchResult, error) {
 	ac, err := db.lockAgent(agentID)
 	if err != nil {

@@ -20,9 +20,7 @@ const RecordHeaderSize = 26
 
 const FlagDeleted uint8 = 0x01
 
-// Record type constants. 0x0F carries plan nodes; a file whose 0x0F frames carry
-// an older payload is rejected at Open. 0x0E is unused — a turn's events are L4
-// content.
+// Record type constants. 0x0E is unused — a turn's events are L4 content.
 const (
 	RecL0Profile   uint8 = 0x01
 	RecL1SceneNode uint8 = 0x02
@@ -33,10 +31,9 @@ const (
 	RecL3GraphEdge uint8 = 0x07
 	RecL4Archive   uint8 = 0x08
 	RecL3GraphSlot uint8 = 0x0B
-	RecL5PlanNode  uint8 = 0x0F // one node of an L5 plan tree
-	// RecAgentRegistry marks an agent's registration record: idHash equals
-	// the agentID itself and data carries the agent name JSON. One record
-	// per agent, stored inside the agent's own domain.
+	RecL5PlanNode  uint8 = 0x0F
+	// RecAgentRegistry: one record per agent, stored inside that agent's own
+	// domain with idHash equal to the agentID; the payload is the name string.
 	RecAgentRegistry uint8 = 0x10
 )
 

@@ -26,9 +26,8 @@ type DecayParams struct {
 	MinEdgeNodes           int
 }
 
-// DecayReport counts what one decay pass removed. RemovedNodes and
-// RemovedEdges are the only two figures it reports; a node whose edges were
-// pruned but which survived is not a removal and is not counted.
+// DecayReport counts what one decay pass removed. A node whose edges were pruned
+// but which survived is not a removal and is not counted.
 type DecayReport struct {
 	RemovedNodes int
 	RemovedEdges int
@@ -36,16 +35,14 @@ type DecayReport struct {
 
 // RebuildFromL2 removes stale L1 nodes (empty TopicIDs, missing first
 // topic, or over-deep topics not meeting the keep rule) with their edge
-// references; returns the hex IDs of removed nodes and the number of edges
-// that went with them — dropping a member takes a co-occurrence edge below
-// MinEdgeNodes, so a rebuild that removed nodes removed edges too, and a pass
-// that reported only the decay stage's would undercount its own work.
+// references; returns the hex IDs of removed nodes and the number of edges that
+// went with them — dropping a member can take a co-occurrence edge below
+// MinEdgeNodes, so a rebuild removed edges as well as nodes.
 func RebuildFromL2(engine *core.StorageEngine, agentID uint64, l2Meta *index.L2MetaIndex, cfg *DecayParams) ([]string, int, error) {
 	var updated []string
 	var edgesRemoved int
-	// The set is read whole: a node this enumeration steps over is one no pass ever
-	// judges stale, so it survives every rebuild and the edges naming it keep a
-	// member nobody can read.
+	// Read whole: a node this enumeration steps over survives every rebuild, and
+	// the edges naming it keep a member nobody can read.
 	nodes, err := core.CollectAllStrict[core.SceneNode](engine, agentID, core.RecL1SceneNode)
 	if err != nil {
 		return updated, edgesRemoved, err
@@ -140,9 +137,8 @@ func DecayNetwork(engine *core.StorageEngine, agentID uint64, l2Meta *index.L2Me
 func decayNodes(engine *core.StorageEngine, agentID uint64, l2Meta *index.L2MetaIndex, cfg *DecayParams, nowMs int64, report *DecayReport) (map[uint64]bool, map[uint64]map[uint64]bool, error) {
 	removedNodeIDs := make(map[uint64]bool)
 	clearedEdges := make(map[uint64]map[uint64]bool)
-	// Decay is the only pass that ever removes a node, so one this scan steps over
-	// never fades, never reaches the removal threshold and keeps its edges pointing
-	// at a member nobody can read.
+	// Read whole, for the same reason RebuildFromL2 reads strictly: decay is the only
+	// pass that ever removes a node.
 	nodes, err := core.CollectAllStrict[core.SceneNode](engine, agentID, core.RecL1SceneNode)
 	if err != nil {
 		return removedNodeIDs, clearedEdges, err
@@ -189,9 +185,8 @@ func decayOneNode(engine *core.StorageEngine, agentID uint64, cfg *DecayParams, 
 		}
 		node.EdgeIDs = nil
 	}
-	// The clock is read and re-based in the same step, so a node's importance
-	// accrues decay per Dream interval, not from its last activity: a memory that
-	// was touched again this interval is not faded by the pass that saw it touched.
+	// The clock is read and re-based in the same step: a memory that was touched
+	// again this interval is not faded by the pass that saw it touched.
 	node.UpdatedAt = nowMs
 	if err := core.WriteSceneNode(engine, agentID, node.IDHash, node); err != nil {
 		return err
@@ -219,9 +214,8 @@ func decayRemainingEdges(engine *core.StorageEngine, agentID uint64, cfg *DecayP
 	for _, idHash := range entries {
 		edge, err := core.ReadSceneEdge(engine, agentID, idHash)
 		if err != nil {
-			// The index names this edge, so not being able to read it must not
-			// decay into "nothing to do" — that would leave a live edge at full
-			// weight while the report claims the sweep ran.
+			// The index names this edge, so an unreadable one is not "nothing to do" —
+			// that would leave a live edge at full weight in a sweep that reports running.
 			if common.CodeOf(err) == common.ErrNotFound {
 				continue
 			}
@@ -235,9 +229,8 @@ func decayRemainingEdges(engine *core.StorageEngine, agentID uint64, cfg *DecayP
 }
 
 // decayOneEdge decays the edge weight incrementally from the last decay
-// time, drops members that are no longer nodes of this domain (removed by this
-// pass or by an out-of-band delete), and deletes the edge when it falls below
-// MinEdgeNodes or the weight threshold.
+// time, drops members that are no longer nodes of this domain, and deletes the edge
+// when it falls below MinEdgeNodes or the weight threshold.
 func decayOneEdge(engine *core.StorageEngine, agentID uint64, cfg *DecayParams, edge *core.SceneEdge, idHash uint64, removedNodeIDs map[uint64]bool, nowMs int64, report *DecayReport) error {
 	baseMs := edge.LastDecayAt
 	if baseMs == 0 {
@@ -246,9 +239,8 @@ func decayOneEdge(engine *core.StorageEngine, agentID uint64, cfg *DecayParams, 
 	dtHours := common.ElapsedHours(nowMs, baseMs)
 	newWeight := edge.Weight * math.Exp(-cfg.LambdaEdge*dtHours)
 
-	// A member is gone either because this pass removed it or because something
-	// outside it did — a scene delete takes its node with it between two Dreams.
-	// Either way the edge is not a co-occurrence of nodes this domain holds.
+	// A member is gone because this pass removed it or because something outside it
+	// did — either way this is no longer a co-occurrence of nodes the domain holds.
 	edge.NodeIDs = slices.DeleteFunc(edge.NodeIDs, func(id uint64) bool {
 		return removedNodeIDs[id] || !engine.Contains(agentID, id)
 	})
@@ -277,8 +269,7 @@ func removeNodeFromEdge(engine *core.StorageEngine, agentID uint64, edgeID, node
 	edge, err := core.ReadSceneEdge(engine, agentID, edgeID)
 	if err != nil {
 		// An edge that is gone has no member list left to prune; one that cannot be
-		// read is a real failure and must stop the cascade rather than leaving the
-		// node holding a reference to an edge nobody trimmed.
+		// read is a real failure and must stop the cascade.
 		if common.CodeOf(err) == common.ErrNotFound {
 			return false, nil
 		}
@@ -306,9 +297,8 @@ func removeNodeFromEdge(engine *core.StorageEngine, agentID uint64, edgeID, node
 func removeEdgeFromNode(engine *core.StorageEngine, agentID uint64, nodeID, edgeID uint64) error {
 	node, err := core.ReadSceneNode(engine, agentID, nodeID)
 	if err != nil {
-		// A node that is gone has no edge list left to prune; one that cannot be
-		// read is a real failure and must stop the cascade rather than leaving a
-		// node pointing at a deleted edge.
+		// A node that is gone has no edge list left to prune; one that cannot be read
+		// must stop the cascade, as in removeNodeFromEdge.
 		if common.CodeOf(err) == common.ErrNotFound {
 			return nil
 		}
@@ -322,27 +312,23 @@ func removeEdgeFromNode(engine *core.StorageEngine, agentID uint64, nodeID, edge
 	return core.WriteSceneNode(engine, agentID, nodeID, node)
 }
 
-// neutralValence is the midpoint of the scale the distillation answers on: the
-// model reports valence on [0,1] with 0 = very negative and 1 = very positive, so how
-// emotional a memory reads is its distance from this point — its distance from zero
-// says how positive it is, which is a different fact and one that must not decide
-// what gets collected.
+// neutralValence is the midpoint of the scale distillation answers on: valence runs
+// [0,1] with 0 = very negative, so how emotional a memory reads is its distance from
+// this point — its distance from zero says how positive it is, a different fact.
 const neutralValence = 0.5
 
 // maxEmotionalSlowdown caps the protection: at its ceiling the most intense memory
 // still fades at a tenth of the base rate. Lambda may not reach zero — the only path
-// to the threshold that deletes a node runs through decay, so a frozen lambda makes a
-// node uncollectable for as long as the file lives.
+// to the threshold that deletes a node runs through decay.
 const maxEmotionalSlowdown = 0.9
 
-// applyEmotionalBoost returns the node's decay rate: the more emotional it is — how
-// far its valence sits from neutral, scaled by how aroused it was — the slower it
-// fades, and the same in either direction. Both inputs arrive on [0,1].
+// applyEmotionalBoost returns the node's decay rate: the further its valence sits
+// from neutral, scaled by how aroused it was, the slower it fades — the same in
+// either direction. Both inputs arrive on [0,1].
 func applyEmotionalBoost(baseLambda float64, valence, arousal float64) float64 {
 	strength := math.Abs(valence-neutralValence) * 2.0
-	// A record is whatever the file says it is: the writer clamps, but an out-of-band
-	// value must not push the factor past 1, because a negative lambda would make a
-	// node gain importance on every pass instead of losing it.
+	// The writer clamps, but a value already in the file may not push the factor past
+	// 1: a negative lambda would make a node gain importance on every pass.
 	if strength > 1.0 {
 		strength = 1.0
 	}

@@ -3,9 +3,8 @@
 
 // Package domain carries one agent domain's state: the Context container
 // (per-domain lock, the caches, a cancellable work context) plus the L2Meta and
-// plan cache maintenance every write path shares. Engine, LLM transport, knobs
-// and the three caches all hang off Context, which is what a write path reads
-// them through.
+// plan cache maintenance every write path shares. Engine, LLM transport and the
+// three caches all hang off Context.
 
 package domain
 
@@ -20,14 +19,12 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/index"
 )
 
-// Context is the per-agent state: the L2Meta topic cache, the L4 content mirror,
-// the L5 plan cache, Dream bookkeeping and its own lock. Same-agent operations
-// are serialized on Mu (inheriting the single-instance serial contract);
-// different agents run in parallel. Callers reach every field only while holding
-// Mu.
+// Context is the per-agent state: the domain lock, the L2Meta topic cache, the L4
+// content mirror, the L5 plan cache and Dream bookkeeping. Callers reach every field
+// only while holding Mu.
 type Context struct {
 	ID uint64
-	Mu sync.Mutex // domain lock: same agent serial, across agents parallel
+	Mu sync.Mutex
 
 	Engine   *core.StorageEngine
 	LLM      llmops.Chat
@@ -35,7 +32,7 @@ type Context struct {
 
 	L2Meta        *index.L2MetaIndex  // L2 topic metadata cache
 	L4            *index.L4Index      // content each topic owns: utterances AND events
-	Plans         *PlanCache          // L5 plan tree per topic (no engine scan per op)
+	Plans         *PlanCache          // L5 plan tree per topic
 	DreamInFlight map[uint64]struct{} // scenes with a scheduled background Dream
 
 	LastActiveAt atomic.Int64 // Unix ms of the last context access (idle sweep)
@@ -45,9 +42,8 @@ type Context struct {
 	// learn that this context is no longer the domain's.
 	Reclaimed atomic.Bool
 
-	// OpCtx bounds the agent's cancellable work: the long pipelines and the LLM
-	// calls made while Mu is held. Cancelling it lets in-flight work exit at the
-	// next stage boundary instead of blocking a lifecycle barrier for a full LLM
+	// OpCtx bounds the agent's cancellable work: the long pipelines and the LLM calls
+	// made while Mu is held, so a lifecycle barrier is not waited out by an LLM
 	// round-trip.
 	OpCtx    context.Context
 	OpCancel context.CancelFunc

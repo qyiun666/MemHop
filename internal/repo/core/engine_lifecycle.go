@@ -16,10 +16,9 @@ import (
 )
 
 func Create(path string) (*StorageEngine, error) {
-	// No O_TRUNC here: the file may not change until the exclusive lock says nobody
-	// else is reading it. A create refused by the lock would otherwise have already
-	// emptied a live database on its way out — the truncation below clears the record
-	// area once the lock is held, and that is the only kind of create that may.
+	// No O_TRUNC here: a create refused by the exclusive lock must not already
+	// have emptied a live database. The truncation below is the only kind of
+	// create that may, and it runs once the lock is held.
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0644)
 	if err != nil {
 		return nil, common.NewError(common.ErrIO, "create file", err)
@@ -154,11 +153,9 @@ func (e *StorageEngine) restoreFromSnapshot(active *FileHeader) (scanStart uint6
 		return DataStart, false, false
 	}
 	if err := e.loadSnapshot(); err != nil {
-		// Snapshot unreadable: a version this build does not read, a corrupt
-		// blob, an out-of-bounds pointer, or a truncation window. Fall back to
-		// a full scan instead of refusing to open — an older file costs one
-		// slow Open and re-checkpoints in the current format on the next one.
-		// Loud, so corruption never stays invisible behind a healthy Open.
+		// Snapshot unreadable (old version, corrupt blob, out-of-bounds pointer,
+		// truncation window): fall back to a full scan instead of refusing to
+		// open. Loud, so corruption never stays invisible behind a healthy Open.
 		slog.Warn("engine: snapshot unreadable, rebuilding index by full scan",
 			"err", err)
 		e.index = make(map[uint64]map[uint64]uint64)
@@ -198,7 +195,7 @@ func (e *StorageEngine) Checkpoint() error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.closed {
-		return common.NewError(common.ErrClosed, "engine is closed")
+		return errEngineClosed
 	}
 	return e.appendSnapshot(BuildSnapshot(e.index))
 }
@@ -210,7 +207,7 @@ func (e *StorageEngine) Close() error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.closed {
-		return common.NewError(common.ErrClosed, "engine is closed")
+		return errEngineClosed
 	}
 	e.closed = true
 	ckptErr := e.appendSnapshot(BuildSnapshot(e.index))
@@ -242,14 +239,12 @@ func (e *StorageEngine) shutdownHandles() error {
 }
 
 // closeNoCheckpoint unmaps and closes without a snapshot or A/B flip; the
-// on-disk state stays as the last checkpoint plus appended records. This is
-// how the recovery tests simulate a crash: the engine goes away mid-log
-// without the tidy-up a real Close performs.
+// recovery tests use it to go away mid-log where a real Close tidies up.
 func (e *StorageEngine) closeNoCheckpoint() error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.closed {
-		return common.NewError(common.ErrClosed, "engine is closed")
+		return errEngineClosed
 	}
 	e.closed = true
 	if err := UnmapFile(e.mmap); err != nil {

@@ -120,8 +120,7 @@ const (
 
 // ---- external id rendering ----
 
-// FormatID renders any record or domain ID as its external 16-char hex form.
-// Hex strings are the only id shape the facade exchanges with a host: every id
-// is issued by the library (Search mints turn ids), so a host never has to
-// build one from an integer.
+// FormatID renders any record or domain ID as its external 16-char hex form —
+// the only id shape the facade exchanges with a host, since every id is issued
+// by the library (Search mints turn ids).
 func FormatID(id uint64) string { return common.FormatHash(id) }

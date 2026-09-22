@@ -38,13 +38,10 @@ func StructureStages(ctx context.Context, ac *domain.Context, agentID uint64, re
 	start := time.Now()
 	// Stage 2: rebuild the L2Meta cache in one scan of the agent domain.
 	newL2Meta := index.BuildL2MetaFromEngine(ac.Engine, agentID)
-	// Install it here rather than after the L1 stages: the rebuild reads the
-	// records as they now stand and every L1 stage works from the copy passed
-	// below, so nothing an L1 failure leaves behind makes this cache wrong.
-	// Installing late keeps the domain serving a cache from before a compression
-	// whose records are already on disk — its topic depths and child links then
-	// read stale until the next successful pass, while every stage that just ran
-	// used the fresh one.
+	// Installed here rather than after the L1 stages: the rebuild reads the records as
+	// they now stand and every L1 stage works from this copy, so nothing an L1 failure
+	// leaves behind makes it wrong. Installed late, the domain would keep serving a
+	// cache from before a compression whose records are already on disk.
 	ac.L2Meta = newL2Meta
 	decayParams := engram.DecayParams{
 		LambdaNode:             lambdaNode,
@@ -57,12 +54,10 @@ func StructureStages(ctx context.Context, ac *domain.Context, agentID uint64, re
 	AppendStage(rep, "index_rebuild", start, nil)
 
 	if cerr := StageCancelled(ctx, "index_rebuild"); cerr != nil {
-		// Reconcile first, then cancel. A pass that sank topics wrote new depths
-		// with no incremental mirror step, so this rebuilt table is the only thing
-		// that puts the read path back in step with the records. Cancelling above the
-		// install would leave the domain still listing turns this pass already
-		// swallowed, until the cache is dropped or the file reopened. What is
-		// skipped here (L1 sync, edges, decay, distill) re-runs on the next pass.
+		// Reconcile first, then cancel: a pass that sank topics wrote new depths with
+		// no incremental mirror step, so this rebuilt table is the only thing that puts
+		// the read path back in step with the records. What is skipped here (L1 sync,
+		// edges, decay, distill) re-runs on the next pass.
 		return cerr
 	}
 
@@ -85,11 +80,10 @@ func StructureStages(ctx context.Context, ac *domain.Context, agentID uint64, re
 	return dErr
 }
 
-// l1Stages runs the L1 portion of the pipeline: scene nodes synced from the
-// current L2 structure, co-occurrence hyperedges (keyword-overlap Jaccard
-// >= l1EdgeMinSimilarity, and an existing edge only strengthens over a node this
-// sync moved; fresh edges decayed like every other edge), stale-node rebuild and
-// finally time decay.
+// l1Stages runs the L1 portion of the pipeline: scene nodes synced from the current L2
+// structure, co-occurrence hyperedges (keyword-overlap Jaccard >=
+// l1EdgeMinSimilarity; an existing edge only strengthens over a node this sync moved),
+// stale-node rebuild and finally time decay.
 func l1Stages(ctx context.Context, ac *domain.Context, agentID uint64, newL2Meta *index.L2MetaIndex, decayParams *engram.DecayParams, rep *core.DreamReport) error {
 	start := time.Now()
 	touched, err := repo.SyncL1NodesFromL2(ac.Engine, agentID)
@@ -102,31 +96,19 @@ func l1Stages(ctx context.Context, ac *domain.Context, agentID uint64, newL2Meta
 
 	start = time.Now()
 	added, err := engram.BuildHyperedges(ac.Engine, agentID, l1EdgeMinSimilarity, touched)
-	cErr := err
-	if cErr == nil {
-		cErr = StageCancelled(ctx, "l1_hyperedges")
-	}
+	cErr := stageOutcome(ctx, "l1_hyperedges", err)
 	rep.L1EdgesAdded += added
 	AppendStage(rep, "l1_hyperedges", start, cErr)
-	if err != nil {
-		return err
-	}
 	if cErr != nil {
 		return cErr
 	}
 
 	start = time.Now()
 	removedIDs, edgesRemoved, err := engram.RebuildFromL2(ac.Engine, agentID, newL2Meta, decayParams)
-	cErr = err
-	if cErr == nil {
-		cErr = StageCancelled(ctx, "l1_rebuild")
-	}
+	cErr = stageOutcome(ctx, "l1_rebuild", err)
 	rep.L1NodesRemoved += len(removedIDs)
 	rep.L1EdgesRemoved += edgesRemoved
 	AppendStage(rep, "l1_rebuild", start, cErr)
-	if err != nil {
-		return err
-	}
 	if cErr != nil {
 		return cErr
 	}
@@ -137,14 +119,8 @@ func l1Stages(ctx context.Context, ac *domain.Context, agentID uint64, newL2Meta
 		rep.L1NodesRemoved += report.RemovedNodes
 		rep.L1EdgesRemoved += report.RemovedEdges
 	}
-	cErr = err
-	if cErr == nil {
-		cErr = StageCancelled(ctx, "l1_decay")
-	}
+	cErr = stageOutcome(ctx, "l1_decay", err)
 	AppendStage(rep, "l1_decay", start, cErr)
-	if err != nil {
-		return err
-	}
 	return cErr
 }
 

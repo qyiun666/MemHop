@@ -6,13 +6,10 @@
 // the agent's own domain (idHash == agentID); Open rebuilds the name map by
 // scanning.
 //
-// The payload is that name and nothing else — a tenant key to resolve a domain
-// by, not a description of it. What kind of agent a domain holds lives on its
-// L0 profile instead (core.AgentTypePrimary / core.AgentTypeSub). Keeping
-// identity off this record is what makes the primary domain unnameable: the
-// primary carries no registry record at all, so no name can resolve to it, and
-// a caller asking for a sub agent by name can never land on the primary by
-// accident.
+// The payload is that name and nothing else — what kind of agent a domain
+// holds lives on its L0 profile instead (core.AgentTypePrimary /
+// AgentTypeSub). The primary domain carries no registry record at all, so no
+// name can resolve to it and a lookup by name can never land on the primary.
 
 package repo
 
@@ -35,11 +32,10 @@ func WriteAgentRegistry(engine *core.StorageEngine, agentID uint64, name string)
 
 // ListAgentRegistry scans every domain's registry records and returns
 // agentID -> name, plus the failure of the first record that exists but resolves
-// to no name — one that will not read back, will not decode, or carries an empty
-// key. Those two answers are not interchangeable: a domain holding an unreadable
-// key is still a domain, and the key it should have carried is exactly what will
-// not read, so it cannot be attributed to any name. A caller that only lists is
-// free to ignore the failure; a caller about to hand out a domain by name is not.
+// to no name (unreadable, undecodable, or empty). The two answers are not
+// interchangeable: a domain holding an unreadable key is still a domain. A
+// caller that only lists may ignore the failure; a caller about to hand out a
+// domain by name may not.
 func ListAgentRegistry(engine *core.StorageEngine) (map[uint64]string, error) {
 	out := make(map[uint64]string)
 	var unresolved error

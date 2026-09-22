@@ -24,13 +24,13 @@ import (
 )
 
 // ensureRegistered returns the stable agentID for name, allocating a fresh
-// crypto/rand ID (and writing its registry record) on first use. Different names
-// never share an ID; the two reserved domains are never handed out. The name
-// arrives trimmed and non-empty: that is the caller's business, because the
-// caller is where a host's string enters the library. The registry record is
-// written under agentsMu so an ID becomes visible only after it is persisted; the
-// fsync briefly blocks every domain lookup (agentsMu also guards contextFor) —
-// accepted because creating a domain is a low-frequency operation.
+// crypto/rand ID (and writing its registry record) on first use. Different
+// names never share an ID; the two reserved domains are never handed out. The
+// name arrives trimmed and non-empty: that is the caller's business, because
+// the caller is where a host's string enters the library. The registry record
+// is written under agentsMu so an ID becomes visible only after it is
+// persisted; the fsync briefly blocks every domain lookup — accepted because
+// creating a domain is a low-frequency operation.
 func (db *DB) ensureRegistered(name string) (uint64, error) {
 	if db.closed.Load() {
 		return 0, common.NewError(common.ErrClosed, "database is closed")
@@ -44,12 +44,12 @@ func (db *DB) ensureRegistered(name string) (uint64, error) {
 	if id, ok := db.nameToID[name]; ok {
 		return id, nil
 	}
-	// A name is only free while no domain is holding a key that will not resolve.
-	// Minting a second domain under a name an unreadable record already carries would
-	// hand the host an empty memory and leave the real one behind it, unreachable and
-	// undeletable. The scan happens here rather than once at Open because that is
-	// where the answer is acted on: a name may be asked for long after the file was
-	// opened, and the registry is written by this call.
+	// A name is only free while no domain is holding a key that will not
+	// resolve: minting a second domain under a name an unreadable record
+	// already carries would hand the host an empty memory with the real one
+	// unreachable behind it. The scan is here rather than once at Open because
+	// a name may be asked for long after the file was opened, and the registry
+	// is written by this call.
 	if _, unresolved := repo.ListAgentRegistry(db.engine); unresolved != nil {
 		return 0, unresolved
 	}
@@ -74,8 +74,7 @@ func (db *DB) ensureRegistered(name string) (uint64, error) {
 	}
 }
 
-// HasAgent reports whether agentID is the default domain or a registered
-// tenant; Session uses it to reject unknown IDs.
+// HasAgent reports whether agentID is the default domain or a registered tenant.
 func (db *DB) HasAgent(agentID uint64) bool {
 	if agentID == core.DefaultAgentID {
 		return true
@@ -86,9 +85,8 @@ func (db *DB) HasAgent(agentID uint64) bool {
 	return ok
 }
 
-// Primary returns the session bound to the domain the file was opened on. That
-// domain is the implicit zero one, so a file holds exactly one primary and this
-// needs no lookup to find it.
+// Primary returns the session bound to the domain the file was opened on —
+// the implicit zero one, so a file holds exactly one primary.
 func (db *DB) Primary() (*Session, error) {
 	return db.NewSession(core.DefaultAgentID)
 }
@@ -99,23 +97,16 @@ func (db *DB) Primary() (*Session, error) {
 const maxSubAgentNameBytes = 256
 
 // SubAgent returns the session of the sub-agent domain named profile.Name,
-// creating that domain the first time and handing back the same one every time
-// after. The name is a tenant key, frozen at creation: it is how the domain is
-// addressed, so editing the profile's Name afterwards does not move the domain,
-// and asking for a name nobody registered opens a second one instead of finding
-// the first.
+// creating that domain the first time and handing back the same one after. The
+// name is a tenant key, frozen at creation: editing the profile's Name
+// afterwards does not move the domain, and asking for a name nobody registered
+// opens a second one instead of finding the first. Naming the same domain again
+// replaces its LLM endpoint.
 //
-// llm is this domain's own endpoint, so a sub-agent can run on a different model
-// from the file's primary. Naming the same domain again replaces its endpoint —
-// a reconnecting host wants the one it just handed over, not the first it ever
-// did.
-//
-// The profile is written only if the domain has none yet. That makes this call
-// self-healing across a crash between the registry record and the profile: the
-// next call with the same name finishes the job instead of leaving a domain that
-// is registered but has no identity. AgentType is stamped here rather than taken
-// from the caller — a domain created this way is a sub-agent, whatever its
-// profile claims.
+// The profile is written only if the domain has none yet, which makes this
+// call self-healing across a crash between the registry record and the
+// profile. AgentType is stamped here, not taken from the caller: a domain
+// created this way is a sub-agent whatever its profile claims.
 func (db *DB) SubAgent(llmCfg LlmConfig, profile core.ProfileSlot) (*Session, error) {
 	if err := llmCfg.Validate(); err != nil {
 		return nil, err
@@ -145,10 +136,9 @@ func (db *DB) SubAgent(llmCfg LlmConfig, profile core.ProfileSlot) (*Session, er
 		return nil, err
 	}
 	defer ac.Mu.Unlock()
-	// The table only reaches a context the idle sweep has yet to build, and a
-	// reconnecting host is by definition holding a live one — so the endpoint it
-	// just named goes onto the context too. Every operation reads the transport
-	// under this lock, which is the lock this write holds.
+	// contextFor only reads the table when building a context, so a live one
+	// has to be re-pointed here — under the domain lock, which is where every
+	// operation reads the transport.
 	ac.LLM = provider
 	has, err := repo.HasProfileL0(db.engine, id)
 	if err != nil {
@@ -167,10 +157,8 @@ func (db *DB) SubAgent(llmCfg LlmConfig, profile core.ProfileSlot) (*Session, er
 	return sess, nil
 }
 
-// CheckSession is the session-eligibility policy for the multi-agent
-// facade: the database must be open and agentID must address a registered
-// tenant or the default domain. It returns the error the public Session
-// constructor surfaces, keeping the decision in the business layer.
+// CheckSession is the session-eligibility policy: the database must be open
+// and agentID must address a registered tenant or the default domain.
 func (db *DB) CheckSession(agentID uint64) error {
 	if db.closed.Load() {
 		return common.NewError(common.ErrClosed, "database is closed")

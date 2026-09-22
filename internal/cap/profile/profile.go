@@ -16,21 +16,18 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
-// briefFieldMaxRunes is this digest's own budget for one free-text field. The
-// engine clamps what it distills, but Name/Role/Personality/preferences are the
-// host's text and arrive at any length — and this string rides with every LLM
-// call, so it may not grow with the profile it came from.
+// briefFieldMaxRunes is this digest's own budget for one free-text field: Name,
+// Role, Personality and preference keys are the host's text and arrive at any
+// length, and this string rides with every LLM call.
 const briefFieldMaxRunes = 160
 
 // Brief renders a compact profile digest for prompt injection: identity,
-// personality, MBTI, top preferences and the current emotional state. Every field
-// it carries is bounded — one budget per free-text value, five preferences — because
-// a digest rides along with every call and must not grow with the profile it came
-// from. An all-empty slot renders as the empty string, and an all-zero emotional
-// state is left out with it: 0/0/0 is the extreme reading "very negative, calm,
-// submissive" on this scale, but it is also what a profile nothing was ever
-// distilled onto carries, and the digest cannot tell the two apart — so it renders
-// neither rather than putting a reading nobody measured into every call.
+// personality, MBTI, top preferences and the current emotional state. Every field it
+// carries is bounded — one budget per free-text value, five preferences — because a
+// digest rides along with every call. An all-empty slot renders as the empty string,
+// and an all-zero emotional state is left out with it: 0/0/0 is the extreme reading
+// "very negative, calm, submissive" on this scale, but it is also what a profile
+// nothing was ever distilled onto carries, and the digest cannot tell the two apart.
 func Brief(slot core.ProfileSlot) string {
 	if slot.Name == "" && slot.Role == "" && slot.Personality == "" &&
 		slot.MBTI.Type == "" && len(slot.Preferences) == 0 &&
@@ -62,9 +59,8 @@ func Brief(slot core.ProfileSlot) string {
 	return b.String()
 }
 
-// writeKV writes up to max sorted key=value pairs of m into b; map
-// iteration order is random, so keys are sorted for a stable digest. Both halves
-// of a pair are truncated to keep the digest compact even for long inputs.
+// writeKV writes up to max sorted key=value pairs of m into b: map iteration order is
+// random, so keys are sorted for a stable digest. Both halves are truncated.
 func writeKV(b *strings.Builder, m map[string]string, max int) {
 	keys := slices.Sorted(maps.Keys(m))
 	for i, k := range keys {

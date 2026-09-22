@@ -18,7 +18,7 @@ func (e *StorageEngine) DeleteRecord(agentID, idHash uint64) (bool, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.closed {
-		return false, common.NewError(common.ErrClosed, "engine is closed")
+		return false, errEngineClosed
 	}
 	deleted, err := e.deleteRecordBatchLocked(agentID, []uint64{idHash})
 	return deleted > 0, err
@@ -31,7 +31,7 @@ func (e *StorageEngine) DeleteRecordBatch(agentID uint64, idHashes []uint64) (in
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.closed {
-		return 0, common.NewError(common.ErrClosed, "engine is closed")
+		return 0, errEngineClosed
 	}
 	return e.deleteRecordBatchLocked(agentID, idHashes)
 }

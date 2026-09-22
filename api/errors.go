@@ -1,10 +1,10 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// Error contract of the public facade: the numeric error-code type, the
-// CodeOf extractor, the NewError constructor and the error-code constants, all
-// forwarded to the internal re-export seam (interval contract: 1001-1999
-// parameter / 3001-3999 resource / 5001-5999 system / 9001-9999 third-party).
+// Error contract of the public facade: the numeric error-code type, the CodeOf
+// extractor, the NewError constructor and the code constants, all forwarded to the
+// internal seam. Code intervals: 1001-1999 parameter, 3001-3999 resource,
+// 5001-5999 system, 9001-9999 third-party.
 
 package api
 

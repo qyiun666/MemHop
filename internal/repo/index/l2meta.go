@@ -26,9 +26,9 @@ type L2Meta struct {
 }
 
 // L2MetaIndex caches one row per topic. Its own lock guards the two tables —
-// nothing else. The rows a read hands out are the stored ones, not copies, so a
-// caller that keeps a row across a write needs the serialisation every user of this
-// cache already has: callers hold the domain lock.
+// nothing else. The rows a read hands out are the stored ones, not copies, so
+// a caller that keeps a row across a write needs the serialisation every user
+// of this cache already has: callers hold the domain lock.
 type L2MetaIndex struct {
 	mu      sync.RWMutex
 	entries map[uint64]*L2Meta
@@ -41,8 +41,6 @@ func newL2MetaIndex() *L2MetaIndex {
 		byScene: make(map[uint64][]uint64),
 	}
 }
-
-// BuildL2MetaFromEngine is defined in rebuild.go (shared single-pass scan).
 
 // L2MetaFromTopic is the single conversion point from a stored topic record
 // to its cached metadata.
@@ -98,10 +96,9 @@ func (idx *L2MetaIndex) TopicsByScene(sceneID uint64) []*L2Meta {
 	return out
 }
 
-// RetargetScene moves every topic of one scene to another in a single write. A
-// merge applies to the whole scene at once: doing it row by row would leave the
-// table between two states for the length of the loop and rebuild the scene list
-// once per topic.
+// RetargetScene moves every topic of one scene to another in a single write:
+// a merge applies to the whole scene at once, so doing it row by row would
+// leave the table between states for the length of the loop.
 func (idx *L2MetaIndex) RetargetScene(fromSceneID, toSceneID uint64) {
 	if fromSceneID == toSceneID {
 		return

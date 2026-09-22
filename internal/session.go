@@ -1,12 +1,12 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// Per-agent session handle: binds every operation to one agent domain and
-// renders the external hex-id surface so the api facade stays pure
-// forwarding. The public method set of api.Session is exactly this type's
-// method set; the domain lock is still taken per call by the underlying DB
-// methods. File-level lifecycle (Checkpoint/Close/IsClosed) is not repeated
-// here — it belongs to the DB handle the host opened.
+// Per-agent session handle: binds every operation to one agent domain. The
+// public method set of api.Session is exactly this type's method set; the
+// domain lock is taken per call by the underlying DB methods. File-level
+// lifecycle (Checkpoint/Close/IsClosed) belongs to the DB handle the host
+// opened, so it is not repeated here. Method contracts are documented on the
+// DB big methods this type forwards to.
 
 package internal
 
@@ -33,25 +33,16 @@ func (db *DB) NewSession(agentID uint64) (*Session, error) {
 
 // ---- scene read / turn write ----
 
-// Search reads one scene (the host's session): its record and its depth-1
-// topics. An empty SearchQuery.SceneID allocates a fresh scene. The result also
-// carries the topic id this read opened for the turn the host is about to run.
 func (s *Session) Search(q SearchQuery) (*SearchResult, error) {
 	return s.db.Search(s.agentID, q)
 }
 
-// Settle distills the content this turn appended under topicID into that
-// topic's keyword track and returns the topic as stored; sceneID names the
-// scene Search read.
 func (s *Session) Settle(sceneID, topicID string) (*TopicSlot, error) {
 	return s.db.Settle(s.agentID, sceneID, topicID)
 }
 
 // ---- Dream ----
 
-// Dream runs the consolidation pipeline over the given scene (or every scene
-// of the domain when sceneID is empty); RunDream takes the domain lock itself
-// and errors when the named scene does not exist.
 func (s *Session) Dream(ctx context.Context, sceneID string) (*DreamReport, error) {
 	var hash uint64
 	if sceneID != "" {
@@ -76,31 +67,20 @@ func (s *Session) UpdateL0(slot *ProfileSlot) error {
 
 // ---- L1 scene hypergraph ----
 
-// ListL1 returns the domain's scene nodes in a stable order. Read-only: the
-// nodes and the edges between them are Dream's, so a host can see what
-// consolidation decided but has no write here.
 func (s *Session) ListL1() ([]SceneNode, error) {
 	return s.db.ListL1(s.agentID)
 }
 
 // ---- L2 scenes/topics ----
 
-// ListScenes lists the domain's scenes; a non-empty l3ID keeps only the
-// scenes anchored to that L3 project domain.
 func (s *Session) ListScenes(l3ID string) ([]SceneSlot, error) {
 	return s.db.ListScenes(s.agentID, l3ID)
 }
 
-// UpdateScene patches a scene's host-facing metadata (title, L3 anchor);
-// nil fields stay unchanged. The written scene comes back, so a host confirms
-// an anchor without listing the domain.
 func (s *Session) UpdateScene(sceneID string, patch ScenePatch) (SceneSlot, error) {
 	return s.db.UpdateScene(s.agentID, sceneID, patch)
 }
 
-// RenameTopic gives one topic the name the host chose and returns the written
-// topic. An empty name is refused: topics are created unnamed, so "" is the
-// absence of a name rather than one.
 func (s *Session) RenameTopic(topicID, name string) (TopicSlot, error) {
 	return s.db.RenameTopic(s.agentID, topicID, name)
 }
@@ -113,16 +93,10 @@ func (s *Session) MergeScenes(primaryID string, secondaryIDs []string) error {
 	return s.db.MergeScenes(s.agentID, primaryID, secondaryIDs)
 }
 
-// DeleteTopic removes a topic and its whole subtree (children at any depth),
-// the L4 content they own, the plan trees they opened and their cache entries,
-// so the deleted topic no longer surfaces in any scene read.
 func (s *Session) DeleteTopic(topicID string) error {
 	return s.db.DeleteTopic(s.agentID, topicID)
 }
 
-// DeleteScene removes a scene: its scene record, every topic (all depths),
-// the L4 content and plan trees those topics own, and the cache entries, so the
-// scene disappears from listings and reads.
 func (s *Session) DeleteScene(sceneID string) error {
 	return s.db.DeleteScene(s.agentID, sceneID)
 }
@@ -159,41 +133,24 @@ func (s *Session) QueryL3Subgraph(graphID, startNodeID string, maxDepth int, edg
 
 // ---- L4 archive ----
 
-// SearchL4 reads content records by any combination of filters; they AND
-// together, so L4Query{TopicID: &turnID} returns exactly that turn's originals or
-// its events depending on Kind — unset Kind selects both kinds.
 func (s *Session) SearchL4(q L4Query) ([]ArchiveSlot, error) {
 	return s.db.SearchL4(s.agentID, q)
 }
 
-// AppendArchive writes one piece of content — a dialogue original or an
-// operation event — under the topic id Search issued for this turn, keyed to the
-// scene that turn belongs to. Seq 0 lets the library allocate the slot, and the
-// slot taken comes back; a non-zero NodeSeq on an event hangs it on that plan
-// step, which has to exist already. Nothing is written when this call returns an
-// error, and no step is ever created here.
 func (s *Session) AppendArchive(sceneID, topicID string, slot ArchiveSlot) (uint64, error) {
 	return s.db.AppendArchive(s.agentID, sceneID, topicID, slot)
 }
 
 // ---- L5 plan tree ----
 
-// PlanNodeAdd adds one step to a turn's plan tree and returns its ordinal.
-// parentSeq 0 puts it at the top level — which is also how a turn's tree is
-// opened, since a tree starts with no steps; any other value must name a step
-// the tree already holds. A step has no other way into the tree.
 func (s *Session) PlanNodeAdd(topicID string, parentSeq uint32, title string) (uint32, error) {
 	return s.db.PlanNodeAdd(s.agentID, topicID, parentSeq, title)
 }
 
-// PlanNodeUpdate restates one step of a turn's plan tree. The step's ordinal is
-// the library's, never the host's; a blank Title/Summary keeps what is stored.
 func (s *Session) PlanNodeUpdate(topicID string, step PlanStep) error {
 	return s.db.PlanNodeUpdate(s.agentID, topicID, step)
 }
 
-// PlanState returns the plan tree of one turn, keyed by the topic id that
-// opened it.
 func (s *Session) PlanState(topicID string) (*PlanTree, error) {
 	return s.db.PlanState(s.agentID, topicID)
 }

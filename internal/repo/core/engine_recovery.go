@@ -18,18 +18,13 @@ import (
 // (a later same-(agent,idHash) overrides; a tombstone deletes). Two failures mean
 // two different things: a frame that does not fit the file is the torn tail a
 // crash left mid-write, and the caller truncates from there; a frame whose
-// checksum disagrees is one damaged record, so the scan leaves it out and keeps
-// every record after it. Losing one record to rot and losing the whole rest of the
-// log are not the same accident, and the second one becomes permanent at the next
-// checkpoint.
+// checksum disagrees is one damaged record — the scan steps past it and keeps
+// every record after it.
 //
 // Advancing past a damaged frame cannot use that frame's length: the length bytes
-// are inside what its checksum just disbelieved, so they may point anywhere — one
-// byte off lands the scan inside the next record, whose then-garbage header usually
-// reads as "does not fit", and truncating on that signal deletes records that were
-// never damaged. So the scan searches forward for the next offset whose frame
-// actually reads clean, which costs a pass over the residue and is exactly what the
-// residue is for: nothing in it can be indexed until some offset proves itself.
+// are inside what its checksum just disbelieved, so they may point anywhere. The
+// scan instead searches forward for the next offset whose frame reads clean —
+// nothing in the residue is indexable until some offset proves itself.
 func (e *StorageEngine) scanRecords(start uint64) (end uint64, truncate bool, err error) {
 	offset := start
 	skipped, firstSkipped := 0, uint64(0)
@@ -83,10 +78,9 @@ func (e *StorageEngine) scanRecords(start uint64) (end uint64, truncate bool, er
 }
 
 // cursorInSnapshotArea reports whether offset lands in the snapshot area the
-// active header names (0 when the file carries none). The scan asks this before it
-// searches for the next record, because a committed snapshot tail is residue to cut
-// and not rot to walk past, and byte-scanning an index blob the size of the log
-// would charge every Open for a case the header already answers.
+// active header names (0 when the file carries none). A committed snapshot tail
+// is residue to cut, not rot to walk past; the header answers this without
+// byte-scanning a blob the size of the log.
 func (e *StorageEngine) cursorInSnapshotArea(offset uint64) bool {
 	snapshotOffset := e.activeHeaderRef().SnapshotOffset
 	return snapshotOffset != 0 && offset >= snapshotOffset
@@ -120,10 +114,8 @@ func (e *StorageEngine) dropFromIndexLocked(agentID, idHash uint64) {
 // recoverRecordAreaEnd returns the end of the record area for files with a
 // valid tail snapshot. New headers carry RecordEnd directly; legacy files
 // (RecordEnd == 0) are reconstructed by walking record frames and skipping
-// snapshot blobs until the end of the file. This matters when several
-// snapshots are chained at the tail: trimming at the latest snapshot offset
-// would leave older snapshots behind and recreate the append/crash data-loss
-// window.
+// snapshot blobs. With several snapshots chained at the tail, trimming at the
+// latest snapshot offset would leave older snapshots behind.
 func (e *StorageEngine) recoverRecordAreaEnd() uint64 {
 	active := e.activeHeaderRef()
 	if active.RecordEnd >= DataStart &&

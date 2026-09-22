@@ -29,10 +29,9 @@ type ProfileSlot struct {
 }
 
 // Which kind of agent a domain holds. The primary is the implicit zero domain
-// the file is opened on, so a file has exactly one of them and its identity
-// needs no scan to find; every registered domain is a sub agent. Zero being the
-// primary is what lets a freshly created domain start out correctly stamped
-// before its creator says otherwise.
+// the file is opened on — so zero being the primary is what lets a freshly
+// created domain start correctly stamped, and a file needs no scan to find its
+// exactly one primary. Every registered domain is a sub agent.
 const (
 	AgentTypePrimary uint8 = 0
 	AgentTypeSub     uint8 = 1
@@ -45,11 +44,9 @@ type SceneNode struct {
 	TopicIDs   []uint64 `json:"topic_ids"`
 	Importance float64  `json:"importance"`
 	// Valence/Arousal are the emotion signals a distillation computed for this
-	// scene, each on [0,1]: valence 0 = very negative, 0.5 = neutral,
-	// 1 = very positive; arousal 0 = calm, 1 = highly excited. Both ends are
-	// readings a node can legitimately carry, so 0 here is not "no emotion" and
-	// the values cannot say whether any pass ever answered: EmotionSet is that
-	// signal, and a node without it has never been stamped.
+	// scene on the EmotionScore scale. Both ends are readings a node can
+	// legitimately carry, so 0 is not "no emotion" and the values cannot say
+	// whether any pass ever answered: EmotionSet is that signal.
 	Valence    float64  `json:"valence"`
 	Arousal    float64  `json:"arousal"`
 	EmotionSet bool     `json:"emotion_set,omitempty"`
@@ -71,8 +68,7 @@ type SceneEdge struct {
 
 // SceneNodeID derives the stable L1 node ID of a scene:
 // hash("scene-node:"+hex(sceneID)). The namespace carries no layer number so a
-// renumbering never re-keys it. The ID follows from the scene id alone, so
-// removing a node needs no index lookup first.
+// renumbering never re-keys it; the id follows from the scene id alone.
 func SceneNodeID(sceneID uint64) uint64 {
 	return common.HashID("scene-node:" + common.FormatHash(sceneID))
 }
@@ -86,7 +82,7 @@ type SceneSlot struct {
 	// turn's topic id, so turn ids never depend on message timestamps.
 	// Absent = 0.
 	TurnSeq uint64 `json:"turn_seq,omitempty"`
-	L3ID    uint64 `json:"l3_id"` // 场景固定挂靠的目录/项目域 L3 图（N:1）
+	L3ID    uint64 `json:"l3_id"` // project-domain L3 graph this scene is anchored to (N:1)
 }
 
 // NewSceneSlot builds a scene record for a caller-supplied scene id and name.
@@ -111,11 +107,9 @@ type TopicSlot struct {
 	ParentID *uint64 `json:"parent_id,omitempty"`
 	Depth    uint8   `json:"depth"`
 
-	// Name is a caller-supplied label for this topic. Nothing here derives into
-	// it, so consolidating or rewriting the record goes around the name and never
-	// over it. Empty is a state a reader can tell apart from a name — it says
-	// nobody has named this topic yet — and omitempty keeps that state off the
-	// disk entirely.
+	// Name is a caller-supplied label nothing here derives into, so rewriting
+	// the record goes around it. Empty says nobody has named this topic yet —
+	// a state omitempty keeps off the disk entirely.
 	Name string `json:"name,omitempty"`
 
 	FusedKeywords []string `json:"fused_keywords"`
@@ -133,10 +127,11 @@ func CompareTopicOrder(a, b TopicSlot) int {
 	return cmp.Compare(a.ID, b.ID)
 }
 
-// ComputeTopicID derives a topic ID from sceneID and both timestamps.
-// Dream-created fused topics use this form for deterministic replay.
+// ComputeTopicID derives a topic ID from sceneID and both timestamps
+// (scene:userTS:agentTS hashed). Dream-created fused topics use this form for
+// deterministic replay.
 func ComputeTopicID(sceneID uint64, userTS, agentTS int64) uint64 {
-	return common.HashID(ComputeTopicKey(sceneID, userTS, agentTS))
+	return common.HashID(fmt.Sprintf("%d:%d:%d", sceneID, userTS, agentTS))
 }
 
 // ComputeTurnTopicID derives a turn topic's ID from the scene's turn counter
@@ -146,11 +141,6 @@ func ComputeTopicID(sceneID uint64, userTS, agentTS int64) uint64 {
 // (minTS, maxTS) pair.
 func ComputeTurnTopicID(sceneID, seq uint64) uint64 {
 	return common.HashID(fmt.Sprintf("turn:%d:%d", sceneID, seq))
-}
-
-// ComputeTopicKey is the shared timestamp key form of a topic ID.
-func ComputeTopicKey(sceneID uint64, userTS, agentTS int64) string {
-	return fmt.Sprintf("%d:%d:%d", sceneID, userTS, agentTS)
 }
 
 // HypergraphSlot holds L3 hypergraph container metadata.

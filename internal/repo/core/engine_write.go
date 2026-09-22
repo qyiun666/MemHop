@@ -17,7 +17,7 @@ func (e *StorageEngine) WriteRecord(agentID uint64, recordType uint8, idHash uin
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.closed {
-		return 0, common.NewError(common.ErrClosed, "engine is closed")
+		return 0, errEngineClosed
 	}
 	offsets, err := e.writeRecordBatch([]RecordEntry{{AgentID: agentID, RecordType: recordType, IDHash: idHash, Data: data}})
 	if err != nil {
@@ -31,7 +31,7 @@ func (e *StorageEngine) WriteRecordBatch(records []RecordEntry) ([]uint64, error
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.closed {
-		return nil, common.NewError(common.ErrClosed, "engine is closed")
+		return nil, errEngineClosed
 	}
 	return e.writeRecordBatch(records)
 }
@@ -91,12 +91,9 @@ func (e *StorageEngine) appendFrames(records []RecordEntry) ([]uint64, error) {
 	return offsets, nil
 }
 
-// undoAppend cuts the file back to the offset a failed append batch began at.
-// Left in place, a frame the disk took only part of sits between valid records,
-// past the reach of the tail recovery Open runs, and its declared length points
-// into the record written after it. The caller is told the batch stored nothing,
-// so nothing may be left; when the cut itself fails both causes are worth
-// reporting, because that one means the log holds a partial frame.
+// undoAppend cuts the file back to the offset a failed append batch began at:
+// a partial frame left between valid records sits past the reach of Open's tail
+// recovery. Both causes are joined — a failed cut means the log holds that frame.
 func (e *StorageEngine) undoAppend(start int64, cause error) error {
 	// ponytail: a truncateTail that itself fails leaves the mapping dropped. That is
 	// the recovery primitive's known ceiling, shared with the trim step every batch
