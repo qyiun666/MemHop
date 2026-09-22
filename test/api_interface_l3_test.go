@@ -48,7 +48,7 @@ func TestInterfaceL3(t *testing.T) {
 	if len(graphs) != 1 || graphs[0].Name != "go" {
 		t.Fatalf("ListL3 = %+v, want the one graph under the domain it was imported into", graphs)
 	}
-	graphID := graphs[0].IDHash
+	graphID := graphs[0].ID
 
 	g, err := db.GetL3(graphID)
 	if err != nil {
@@ -68,7 +68,7 @@ func TestInterfaceL3(t *testing.T) {
 	}
 	assertImportedNode(t, nodes[0], graphID, res.CreatedIDs[0])
 
-	subgraph, err := db.QueryL3Subgraph(graphID, nodes[0].IDHash, 2, nil)
+	subgraph, err := db.QueryL3Subgraph(graphID, nodes[0].ID, 2, nil)
 	if err != nil {
 		t.Fatalf("QueryL3Subgraph: %v", err)
 	}
@@ -79,11 +79,11 @@ func TestInterfaceL3(t *testing.T) {
 
 	// L2↔L3 lives on the scene: opening a session with an L3 id anchors it,
 	// and the domain listing finds that session back.
-	anchored, err := db.Search(memhop.SearchQuery{L3ID: graphs[0].IDHash})
+	anchored, err := db.Search(memhop.SearchQuery{L3ID: graphs[0].ID})
 	if err != nil {
 		t.Fatalf("Search with l3 id: %v", err)
 	}
-	domainScenes, err := db.ListScenes(graphs[0].IDHash)
+	domainScenes, err := db.ListScenes(graphs[0].ID)
 	if err != nil {
 		t.Fatalf("ListScenesByL3: %v", err)
 	}
@@ -112,7 +112,7 @@ func TestInterfaceL3(t *testing.T) {
 // whose title, body or keyword track was rewritten on the way out.
 func assertImportedNode(t *testing.T, n memhop.HypergraphNode, graphID, idHash string) {
 	t.Helper()
-	if n.IDHash != idHash || n.GraphID != graphID {
+	if n.ID != idHash || n.GraphID != graphID {
 		t.Fatalf("node ids = %+v, want %s in graph %s", n, idHash, graphID)
 	}
 	if n.Title != "Go 内存模型" || n.NodeType != "concept" ||

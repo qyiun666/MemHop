@@ -4,7 +4,8 @@
 
 - `SceneSet`：一次流水线的目标场景集——指定一个（存在性是答案的一部分），或全域。
 - 两个保留窗阶段：`PruneContentStage`（报 `l4_prune`）与 `PrunePlanStage`（报
-  `l5_prune`），共用 `ContentRetention` 这一个 7 天窗口，但各读自己的时间戳。
+  `l5_prune`），共用 `retentionWindow` 解析出的同一个窗口——域配了正值的
+  `ContentRetentionMs` 用它，否则是 `ContentRetention`（7 天）；两个阶段各读自己的时间戳。
 - `CompressScenes`：每场景一 goroutine、同时在飞的不超过 `compressFanout` 个，取回融合组并逐组应用；问模型时把 `Defaults.DreamCompressMinTopics` 一并交出去——prompt 里那个目标条数就是本包用来决定「要不要压缩」的同一个数。扇出有上界是因为每个场景都要在域锁里付一次 LLM 往返，而全域那一趟的场景数就是并发请求数：不加上界，一次巩固自己就能撞端点限流，再把每个场景都记成失败。一组的摘要是父话题
   名下 `Seq=SeqUser`、`Kind=KindUtterance`、`Role=RoleDream` 的一条 L4 内容，
   `RoleDream` 只由本包戳写；**它的 `CreatedAt` 是本次巩固的时刻，不是组内最后一轮的**——保留窗按

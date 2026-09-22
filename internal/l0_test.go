@@ -20,7 +20,7 @@ func TestUpdateL0KeepsDistilledHalf(t *testing.T) {
 		Role:         "assistant",
 		Personality:  "curious",
 		EmotionState: core.EmotionScore{Valence: 0.4, Arousal: 0.2, Dominance: 0.6},
-		MBTI:         core.MBTIScore{IE: 0.3, NS: 0.5, TF: 0.1, JP: 0.7, Type: "INTP"},
+		MBTI:         core.MBTIScore{IE: 0.3, NS: 0.5, TF: 0.1, JP: 0.7, Type: "ESFP"},
 	}
 	if err := db.UpdateL0(core.DefaultAgentID, seed); err != nil {
 		t.Fatalf("seed profile: %v", err)
@@ -47,7 +47,7 @@ func TestUpdateL0KeepsDistilledHalf(t *testing.T) {
 	if got.Name != "renamed" || got.Preferences["tone"] != "terse" {
 		t.Fatalf("host fields not written: %+v", got)
 	}
-	if got.EmotionState.Valence != 0.4 || got.MBTI.Type != "INTP" {
+	if got.EmotionState.Valence != 0.4 || got.MBTI.Type != "ESFP" {
 		t.Fatalf("distilled half wiped by a host edit: %+v", got)
 	}
 	if got.UpdatedAtMs == 7 || got.UpdatedAtMs < first.UpdatedAtMs {

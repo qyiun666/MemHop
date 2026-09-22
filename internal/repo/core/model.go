@@ -15,9 +15,9 @@ import (
 // is not uniform: EmotionState/MBTI are distilled signals, AgentType is stamped
 // once when the domain is created, and UpdatedAtMs is written by the library — a
 // write that leaves any of them unset keeps the stored value rather than taking
-// the caller's zero.
+// the caller's zero. The record's id is always hash("profile"), so the payload
+// carries no copy of it.
 type ProfileSlot struct {
-	IDHash       uint64            `json:"id_hash"`
 	Name         string            `json:"name"`
 	Role         string            `json:"role"`
 	Personality  string            `json:"personality"`
@@ -43,7 +43,7 @@ type SceneNode struct {
 	IDHash     uint64   `json:"id_hash"`
 	SceneID    uint64   `json:"scene_id"`
 	TopicIDs   []uint64 `json:"topic_ids"`
-	Importance float32  `json:"importance"`
+	Importance float64  `json:"importance"`
 	// Valence/Arousal are the emotion signals a distillation computed for this
 	// scene, each on [0,1]: valence 0 = very negative, 0.5 = neutral,
 	// 1 = very positive; arousal 0 = calm, 1 = highly excited. Both ends are
@@ -63,7 +63,7 @@ type SceneNode struct {
 type SceneEdge struct {
 	IDHash    uint64   `json:"id_hash"`
 	NodeIDs   []uint64 `json:"node_ids"`
-	Weight    float32  `json:"weight"`
+	Weight    float64  `json:"weight"`
 	CreatedAt int64    `json:"created_at"`
 	// LastDecayAt: last decay time (ms); 0 = never decayed, first decay starts from CreatedAt.
 	LastDecayAt int64 `json:"last_decay_at"`

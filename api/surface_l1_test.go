@@ -43,10 +43,10 @@ func TestSurfaceListL1RendersHexIDs(t *testing.T) {
 	}
 	// Nodes are synced from a scene's topics, so a scene that never settled a
 	// turn has nothing to build one out of.
-	if err := settleTurn(db, first.Scene.SceneID, first.NewTopicID, "第一个会话聊了什么", "记下了"); err != nil {
+	if _, err := settleTurn(db, first.Scene.SceneID, first.NewTopicID, "第一个会话聊了什么", "记下了"); err != nil {
 		t.Fatalf("settle scene one: %v", err)
 	}
-	if err := settleTurn(db, second.Scene.SceneID, second.NewTopicID, "第二个会话聊了什么", "也记下了"); err != nil {
+	if _, err := settleTurn(db, second.Scene.SceneID, second.NewTopicID, "第二个会话聊了什么", "也记下了"); err != nil {
 		t.Fatalf("settle scene two: %v", err)
 	}
 	if _, err := db.Dream(context.Background(), ""); err != nil {
@@ -62,11 +62,20 @@ func TestSurfaceListL1RendersHexIDs(t *testing.T) {
 	}
 	scenes := map[string]bool{first.Scene.SceneID: true, second.Scene.SceneID: true}
 	for _, n := range nodes {
-		if !isHexID(n.IDHash) || !isHexID(n.SceneID) {
+		if !isHexID(n.ID) || !isHexID(n.SceneID) {
 			t.Fatalf("node ids must cross as hex: %+v", n)
 		}
+		// EmotionSet distinguishes "never distilled" from a settled (0, 0) — the
+		// two signals are scaled readings where 0 is an extreme value, so without
+		// the marker those two states read identically. This stub's distillation
+		// names no per-node rows, so the nodes are synced but never stamped, and
+		// the facade has to say exactly that instead of leaving a host to read a
+		// blank (0, 0) as a settled extreme.
+		if n.EmotionSet {
+			t.Fatalf("a node the distillation never named must read as not emotion-set: %+v", n)
+		}
 		if !scenes[n.SceneID] {
-			t.Fatalf("node %s names a scene this domain never opened: %s", n.IDHash, n.SceneID)
+			t.Fatalf("node %s names a scene this domain never opened: %s", n.ID, n.SceneID)
 		}
 		for _, topic := range n.TopicIDs {
 			if !isHexID(topic) {

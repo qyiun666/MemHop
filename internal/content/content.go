@@ -126,9 +126,10 @@ func checkTimestamp(v int64) error {
 }
 
 // Append is this package's only write path, and the one every host-side record of
-// a turn goes through: it lands one entry on the topic's content track. The slot it
-// took is not handed back — it is readable on that topic's own track, and the write
-// surface promises no handle.
+// a turn goes through: it lands one entry on the topic's content track and hands
+// back the slot it took. There is no id beyond (topic, Seq) — the record's
+// address is its position — and the host needs the position when it allocates:
+// replaying the same turn means writing the same slots again.
 //
 // Field ownership is the contract. Of the record a caller passes, the ones the
 // utterance kind owns are adopted verbatim (Role, ContentType, EventType,
@@ -144,9 +145,9 @@ func checkTimestamp(v int64) error {
 // is an overwrite, not an error — that is what lets a replayed turn converge
 // instead of accumulating versions, and it reaches across Kind: naming a slot an
 // event holds replaces the event.
-func Append(ac *domain.Context, agentID, topicID uint64, in core.ArchiveSlot) error {
+func Append(ac *domain.Context, agentID, topicID uint64, in core.ArchiveSlot) (uint64, error) {
 	if err := ValidateAppend(in); err != nil {
-		return err
+		return 0, err
 	}
 	seq := in.Seq
 	if seq == 0 {
@@ -157,14 +158,17 @@ func Append(ac *domain.Context, agentID, topicID uint64, in core.ArchiveSlot) er
 		// address before taking it. A named Seq is unchecked on purpose: overwriting a
 		// slot the caller points at is this write path's replay contract.
 		if _, err := core.ReadArchiveSlot(ac.Engine, agentID, core.HashContent(topicID, seq)); err != nil && common.CodeOf(err) != common.ErrNotFound {
-			return common.NewError(common.CodeOf(err), "read the slot the content mirror offered", err)
+			return 0, common.NewError(common.CodeOf(err), "read the slot the content mirror offered", err)
 		}
 	}
 	in.TopicID, in.Seq = topicID, seq
 	if in.Kind == core.KindEvent {
 		in.Role, in.ContentType = 0, core.ContentText
 	}
-	return repo.AppendArchiveL4(ac.Engine, agentID, ac.L4, &in)
+	if err := repo.AppendArchiveL4(ac.Engine, agentID, ac.L4, &in); err != nil {
+		return 0, err
+	}
+	return seq, nil
 }
 
 // Read loads one topic's content of one kind, Seq ascending, through the domain's

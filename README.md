@@ -40,11 +40,11 @@ Built as the brain memory of [MeowAgent](https://github.com/meowagent/meowagent)
 - **V2 Storage** — `.meh` format (`FormatVersion=0x0012`) with A/B dual headers, per-record CRC32 + torn-write truncation recovery, mmap zero-copy, snapshot/checkpoint. Record frames carry an 8-byte `agent_id` (26-byte header) and the engine indexes every record by `(agent, idHash)` domain. The L3 knowledge graph lives in the file-wide reserved shared domain, which holds nothing else. **Only `0x0012` opens** — files at `0x0011` or older are rejected, with no migration path: an older file's profiles carry no `agent_type`, so every domain in it decodes as the primary agent — not one wrong value somewhere but the same wrong value in every domain at once, against a rule that a file has exactly one
 - **Multi-Agent Domains** — `Open(path, llm, defaults, profile)` → a DB handle whose domains are reached as handles, never as ids: `Primary()` for the domain the file was opened on, `SubAgent(llm, profile)` for one created under it and addressed by its name. Many agents share one `.meh` file with fully isolated per-agent domains (caches, Dream pipelines, domain locks); same-agent operations serialize, different agents run in parallel; idle domains reclaim memory on access cadence (`Defaults.AgentIdleTTLMs`) while their records stay on disk. One exception (below): the L3 knowledge graph is file-wide shared
 - **L1 Scene Hypergraph** — Dream creates co-occurrence hyperedges between scenes whose keyword sets overlap (Jaccard ≥ 0.15, a floor the engine fixes rather than a knob) and decays/prunes them over time; an edge is weighted by the similarity it was born from and fades from there — it strengthens only when an endpoint's turn list came out different — a turn lost counting as much as one gained — so re-measuring a pair whose lists are unchanged, even after the same turns are re-distilled into different keywords, never undoes the fade. L1 is maintained by Dream for explicit graph queries and future association — reads never score or spread activation
-- **Dream Pipeline** — consolidation over L0–L2 plus retention on both content and plan: L2 compress → index rebuild → L1 nodes/hyperedges rebuild → L1 decay → L0 distill (emotion/MBTI), with `l4_prune` (drops a topic's content older than 7 days) and `l5_prune` (drops plan nodes older than 7 days, exempting a tree still in flight) on every pass; returns a per-stage `DreamReport`
+- **Dream Pipeline** — consolidation over L0–L2 plus retention on both content and plan: L2 compress → index rebuild → L1 nodes/hyperedges rebuild → L1 decay → L0 distill (emotion/MBTI), with `l4_prune` (drops a topic's content past the retention window — seven days by default, `Defaults.ContentRetentionMs`) and `l5_prune` (drops plan nodes past it, exempting a tree still in flight) on every pass; returns a per-stage `DreamReport`
 - **L3 Knowledge Graph** — multiple independent hypergraphs with node import carrying positional source refs and relation edges (an edge is its members plus its kind, so one node pair can hold several relations), graph deletion, keyword/type/id lookup that ANDs together, and BFS subgraph queries. The graph pool is **file-wide**: every agent domain of the file shares one L3 pool (project knowledge is imported once, visible to all), and the pool's lifetime is the file's, not any one domain's
 - **Single Instance by Design** — one `.meh` file has exactly one owner: a cross-platform exclusive lock (linux/darwin/windows) makes a second open fail fast, and the embedded path runs with no server process and no background daemon
 - **Minimal & Embeddable** — 4 direct Go deps (xxhash, go-openai, go-sdk, golang.org/x/sys) — **the engine contacts no embedding / vector service at all**, and there is no dimension to declare in the config; `sync.RWMutex` + `atomic.Pointer`, zero infrastructure
-- **MCP Server** — `cmd/memhop-mcp` exposes 20 of the 26 public session methods as 24 MCP tools over multi-tenant HTTP (SSE + streamable-http, official `modelcontextprotocol/go-sdk`): one process serves many hosts through one shared `.meh` file, each tenant isolated by URL path `/mcp/<tenant-id>` into its own sub-agent domain (addressed by the tenant name, so a reconnect lands back on the same domain; `os.Root`-anchored db-dir; the L3 knowledge graph is the one pool all tenants share). Go-only by design: the L5 plan write/read surface (`PlanCreate`/`PlanNodeAdd`/`PlanNodeUpdate`/`PlanState`), memory correction (`DeleteTopic`/`DeleteScene`) and file maintenance (`CompactTo`, whose argument is an output path) — those need a host that owns session state or chooses where a file is written
+- **MCP Server** — `cmd/memhop-mcp` exposes 19 of the 25 public session methods as 25 MCP tools over multi-tenant HTTP (SSE + streamable-http, official `modelcontextprotocol/go-sdk`): one process serves many hosts through one shared `.meh` file, each tenant isolated by URL path `/mcp/<tenant-id>` into its own sub-agent domain (addressed by the tenant name, so a reconnect lands back on the same domain; `os.Root`-anchored db-dir; the L3 knowledge graph is the one pool all tenants share). Go-only by design: the L5 plan write/read surface (`PlanNodeAdd`/`PlanNodeUpdate`/`PlanState`) and memory correction (`DeleteTopic`/`DeleteScene`) — those need a host that owns session state. File maintenance goes the other way: `CompactTo` stays Go-only (its argument is an output path), while the MCP side offers `memhop_compact`, whose scratch path is locked inside db-dir
 
 ## Quick Start
 
@@ -101,24 +101,26 @@ for _, topic := range res.Topics { // this session's depth-1 set = the context
     _ = topic.FusedKeywords
 }
 
-// While the turn runs, the host records it under the topic id Search opened.
-// Dialogue and events are the same kind of record: they differ only by Kind.
+// While the turn runs, the host records it under the topic id Search opened,
+// keyed to the scene that turn belongs to — the pair is checked before
+// anything is stored. Dialogue and events are the same kind of record: they
+// differ only by Kind. Each call returns the slot its record took.
 topicID := res.NewTopicID
-_ = sess.AppendArchive(topicID, memhop.ArchiveSlot{
+_, _ = sess.AppendArchive(sceneID, topicID, memhop.ArchiveSlot{
     Kind:      memhop.KindUtterance,
     Seq:       1, // slots 1 and 2 are the dialogue's
     Role:      memhop.RoleUser,
     Content:   "What did we discuss yesterday?",
     CreatedAt: time.Now().UnixMilli(),
 })
-_ = sess.AppendArchive(topicID, memhop.ArchiveSlot{
+_, _ = sess.AppendArchive(sceneID, topicID, memhop.ArchiveSlot{
     Kind:      memhop.KindUtterance,
     Seq:       2,
     Role:      memhop.RoleAgent,
     Content:   "Agent: ...",
     CreatedAt: time.Now().UnixMilli(),
 })
-_ = sess.AppendArchive(topicID, memhop.ArchiveSlot{
+_, _ = sess.AppendArchive(sceneID, topicID, memhop.ArchiveSlot{
     Kind:       memhop.KindEvent,
     EventType:  "tool_call",
     Content:    `{"tool":"grep"}`,
@@ -126,21 +128,22 @@ _ = sess.AppendArchive(topicID, memhop.ArchiveSlot{
 })
 
 // End of turn: one distillation over what the turn appended produces its
-// keywords. Replaying an append rewrites the slot it names instead of
-// duplicating, so a timed-out turn is safe to redo.
-err := sess.Update(sceneID, topicID)
+// keyword track, returned with the settled topic. Replaying an append rewrites
+// the slot it names instead of duplicating, so a timed-out turn is safe to redo.
+topic, err := sess.Settle(sceneID, topicID)
 if err != nil {
     log.Fatal(err)
 }
+_ = topic.FusedKeywords
 
 // Dream consolidation (L0-L2); an empty sceneID sweeps every scene of the
-// domain. Update already schedules it in the background once a scene's
+// domain. Settle already schedules it in the background once a scene's
 // topic count passes the threshold, so hosts rarely call it.
 report, err := sess.Dream(context.Background(), "")
 ```
 
 
-> **Concurrency contract.** Same-agent operations (Search / Update / Dream / write APIs) are serialized by the library's per-agent domain lock; different agents run in parallel on a `*DB`, so the host needs no external queue. `*memhop.Session` carries no cross-domain state beyond its bound domain. The file's exclusive lock still allows only one process per `.meh` file; `DB` exposes no locking API: the domain lock is the library's, and a host critical section needs its own.
+> **Concurrency contract.** Same-agent operations (Search / Settle / Dream / write APIs) are serialized by the library's per-agent domain lock; different agents run in parallel on a `*DB`, so the host needs no external queue. `*memhop.Session` carries no cross-domain state beyond its bound domain. The file's exclusive lock still allows only one process per `.meh` file; `DB` exposes no locking API: the domain lock is the library's, and a host critical section needs its own.
 
 Prerequisites: Go 1.27+ and an OpenAI-compatible LLM endpoint (configured through `api.LlmConfig`, which `api.Open` takes) — no embedding / vector service needed
 
@@ -148,15 +151,15 @@ Prerequisites: Go 1.27+ and an OpenAI-compatible LLM endpoint (configured throug
 
 | Group | Methods |
 |-------|---------|
-| Core loop | `Search(q) → topicID` · `PlanCreate(topicID, title) → seq` / `PlanNodeAdd(topicID, parentSeq, title) → seq` / `PlanNodeUpdate(topicID, PlanStep{Seq, Status, …})` (the plan comes first, one step at a time) · `AppendArchive(topicID, ArchiveSlot{...})` · `Update(sceneID, topicID)` · `Dream(ctx, sceneID)` |
+| Core loop | `Search(q) → topicID` · `PlanNodeAdd(topicID, parentSeq, title) → seq` (parentSeq 0 opens the turn's tree) / `PlanNodeUpdate(topicID, PlanStep{Seq, Status, …})` (the plan comes first, one step at a time) · `AppendArchive(sceneID, topicID, ArchiveSlot{...}) → seq` · `Settle(sceneID, topicID) → topic` · `Dream(ctx, sceneID)` |
 | L0 Profile | `GetL0` · `UpdateL0` |
-| L1 Engram (read-only) | `ListL1() → []SceneNodeView` — every scene node of the domain in a stable order, ids as hex. Dream builds the nodes and the co-occurrence edges between them and is the only writer, so there is no L1 write call. `Importance` / `Valence` / `Arousal` are what consolidation computed; `EdgeIDs` has no read of its own — two nodes sharing one are a pair Dream judged related |
+| L1 Engram (read-only) | `ListL1() → []SceneNodeView` — every scene node of the domain in a stable order, ids as hex. Dream builds the nodes and the co-occurrence edges between them and is the only writer, so there is no L1 write call. `Importance` / `Valence` / `Arousal` are what consolidation computed, and `EmotionSet` says whether any pass ever stamped the two signals (0 is a legal reading, so the values alone cannot); `EdgeIDs` has no read of its own — two nodes sharing one are a pair Dream judged related |
 | L2 Context | `ListScenes([l3ID])` · `UpdateScene(id, {Name, L3ID, Force})` · `RenameTopic(topicID, name)` · `SceneContext` · `MergeScenes` · `DeleteTopic` · `DeleteScene` |
 | L3 Knowledge | `GetL3` · `ListL3` · `ImportL3` (reports every graph the batch resolved a domain into, including one it added nothing new to) · `UpdateL3` · `DeleteL3` · `QueryL3Nodes` · `QueryL3Subgraph` (its `edgeKinds` narrows the walk; an undefined kind is refused, not answered with an empty subgraph) |
-| L4 Archive | `AppendArchive(topicID, ArchiveSlot{Kind, Seq, Role, ContentType, EventType, NodeSeq, Content, CreatedAt})` is the only way content enters a topic (`Seq: 0` allocates; naming a held slot rewrites it), and an event's `NodeSeq` has to name a step this turn created (`0` binds it to nothing). `SearchL4(q)` is the one read over both kinds: keyword (case-insensitive), time range, ids, topic, `Kind` (utterance / event), `NodeSeq` (one plan step **and every step under it**, which means nothing outside its turn; `0` leaves the condition unset) and content type are conditions, not modes — an unset `Kind` selects both; `Limit` keeps the tail of the read's order (slot order inside one topic, record-time order across topics) |
-| Turn events (L4, kind `event`) | A turn's events are L4 content of kind `event` under the topic id Search issued for it (7-day auto-retention, no delete API); read them with `SearchL4(L4Query{TopicID, Kind: &KindEvent})`, append them with `AppendArchive`. A topic's first event is Seq 3, because slots 1 and 2 belong to its dialogue |
-| L5 Plan tree | `PlanCreate(topicID, title) → seq` · `PlanNodeAdd(topicID, parentSeq, title) → seq` · `PlanNodeUpdate(topicID, PlanStep{Seq, Status, Title, Summary})` · `PlanState(topicID)` — the tree is what L5 itself records: one node per record, addressed by the turn's topic id **plus a step ordinal the library hands out** (`1, 2, 3 …` inside that turn — unique among the steps **live at once**, not permanently: a retention sweep frees the ordinals it removed and an event can outlive the step it names, so a host returning to a swept turn treats an ordinal it held before as a new step's address), so `PlanState(topic)` and `SearchL4{TopicID, Kind}` name one key and two stores, and `SearchL4{TopicID, NodeSeq}` reads back the work of one step and every step under it. A node exists only because something created it: a `parentSeq` naming a step the tree does not hold is refused rather than answered by growing one, and `PlanNodeUpdate` restates a step that is already there — `Status` every time (`in_progress` / `done` / `failed`, there is no "leave it" spelling), `Title`/`Summary` kept when left blank. A created step starts `in_progress`, so the model has no "planned but not started" state. A plan write stores no content: a step's events are L4 records the host appends itself (Go API only, not in the MCP tool set) |
-| DB handle | `Open(path, llm, defaults, profile)` · `Primary()` · `SubAgent(llm, profile)` · `Checkpoint` · `CompactTo(newPath)` (defragmented copy; Go only) · `Close` · `IsClosed` |
+| L4 Archive | `AppendArchive(sceneID, topicID, ArchiveSlot{Kind, Seq, Role, ContentType, EventType, NodeSeq, Content, CreatedAt}) → seq` is the only way content enters a topic: the pair is checked together (the topic must be a turn that scene opened, a mistyped or invented key is refused), `Seq: 0` allocates and the slot taken comes back, and naming a held slot rewrites it. An event's `NodeSeq` has to name a step this turn created (`0` binds it to nothing). `SearchL4(q)` is the one read over both kinds: keyword (case-insensitive), time range, ids, topic, `Kind` (utterance / event), `NodeSeq` (one plan step **and every step under it**, which means nothing outside its turn; `0` leaves the condition unset) and content type are conditions, not modes — an unset `Kind` selects both; `Limit` keeps the tail of the read's order (slot order inside one topic, record-time order across topics) |
+| Turn events (L4, kind `event`) | A turn's events are L4 content of kind `event` under the topic id Search issued for it (swept past the retention window — seven days by default, configurable; no delete API); read them with `SearchL4(L4Query{TopicID, Kind: &KindEvent})`, append them with `AppendArchive`. A topic's first event is Seq 3, because slots 1 and 2 belong to its dialogue |
+| L5 Plan tree | `PlanNodeAdd(topicID, parentSeq, title) → seq` · `PlanNodeUpdate(topicID, PlanStep{Seq, Status, Title, Summary})` · `PlanState(topicID)` — the tree is what L5 itself records: one node per record, addressed by the turn's topic id **plus a step ordinal the library hands out** (`1, 2, 3 …` inside that turn — unique among the steps **live at once**, not permanently: a retention sweep frees the ordinals it removed and an event can outlive the step it names, so a host returning to a swept turn treats an ordinal it held before as a new step's address), so `PlanState(topic)` and `SearchL4{TopicID, Kind}` name one key and two stores, and `SearchL4{TopicID, NodeSeq}` reads back the work of one step and every step under it. A node exists only because something created it: a `parentSeq` of 0 opens the turn's tree, one naming a step the tree does not hold is refused rather than answered by growing one, and `PlanNodeUpdate` restates a step that is already there — `Status` every time (`in_progress` / `done` / `failed`, there is no "leave it" spelling), `Title`/`Summary` kept when left blank. A created step starts `in_progress`, so the model has no "planned but not started" state. A plan write stores no content: a step's events are L4 records the host appends itself (Go API only, not in the MCP tool set) |
+| DB handle | `Open(path, llm, defaults, profile)` · `Primary()` · `SubAgent(llm, profile)` · `Checkpoint` · `CompactTo(newPath)` (defragmented copy; Go only) · `Stats` (file bytes and live record count — the numbers a compaction decision is made from) · `Close` · `IsClosed` |
 
 ## Architecture
 
@@ -164,7 +167,7 @@ Prerequisites: Go 1.27+ and an OpenAI-compatible LLM endpoint (configured throug
 Layer   Name             Human Parallel          Mechanism
 ─────   ──────────────   ───────────────────     ─────────────────────────────────────────────
  L5     Plan             Task tree               One node per step, keyed by the turn that opened it; expired trees are swept by Dream
- L4     Archive            Turn content            A turn's dialogue originals and operation events (Kind), addressed by (topic, Seq); 7-day window — the keyword track is what outlives it
+ L4     Archive            Turn content            A turn's dialogue originals and operation events (Kind), addressed by (topic, Seq); retention window (seven days by default) — the keyword track is what outlives it
  L3     Knowledge        Semantic memory         Multi-source hypergraph knowledge base
  L2     Context          Working memory          Topics on a scene's surface, plus turns Dream folded under a fused group (one sink per topic)
  L1     Engram           Scene hypergraph        Scene nodes + keyword-overlap hyperedges; maintained by Dream for explicit graph queries
@@ -180,7 +183,7 @@ The Dream cycle is an automatic consolidation pass inspired by how sleep process
 3. **L1 decay** — scene importance and edge weights decay over time, weak nodes are pruned
 4. **L0 distill** — emotion/MBTI and a personality summary are distilled from the ranked L1 samples and merged into the stored profile: `Name`, `Role` and `Preferences` are left alone, and `Personality` is the one host-written field Dream also refines, so a host write that omits it clears the refined value until the next pass. The per-node emotions that same reply carries are backfilled onto the L1 nodes that have never been stamped — a node already carrying a reading keeps it, including a legal all-zero one; the stage is skipped when there are no samples to read
 
-Trigger: once a scene's depth-1 topic count passes `Defaults.SceneDreamTopicThreshold` (default 24), `Update` schedules that scene's Dream in the background; hosts may also call it. `Dream(ctx, sceneID) (*DreamReport, error)` holds the domain lock for the whole cycle, sweeps every scene of the domain when `sceneID` is empty (scenes below `DreamCompressMinTopics` are skipped) and honours `ctx` cancellation between stages.
+Trigger: once a scene's depth-1 topic count passes `Defaults.SceneDreamTopicThreshold` (default 24), `Settle` schedules that scene's Dream in the background; hosts may also call it. `Dream(ctx, sceneID) (*DreamReport, error)` holds the domain lock for the whole cycle, sweeps every scene of the domain when `sceneID` is empty (scenes below `DreamCompressMinTopics` are skipped) and honours `ctx` cancellation between stages.
 
 ### Read & write path
 
@@ -189,10 +192,10 @@ Trigger: once a scene's depth-1 topic count passes `Defaults.SceneDreamTopicThre
 | Path | What it does | Cost |
 |------|--------------|------|
 | `Search(SearchQuery{SceneID, L3ID})` | empty `SceneID` → create a scene (named by the library) and return its id; otherwise → the scene's depth-1 topics (user-timestamp order) plus the L0 profile — and `NewTopicID`, the topic this read opens for the coming turn | in-memory read (L2Meta), zero LLM / embedding / scoring; the only write is the scene record (its turn counter) |
-| `AppendArchive(topicID, ArchiveSlot{Kind, ...})` | the turn's only content write: an utterance declares who spoke and what the content is; an event names itself and may hang on a plan step. `Seq: 0` allocates above the two dialogue slots | zero LLM; a refused record stores nothing, and an event naming a step the tree does not hold is refused rather than answered by creating one; budgets are 4 KiB per event record, name included, and 64 KiB per utterance, refused rather than truncated |
-| `Update(sceneID, topicID)` | distills the utterances that topic holds into its keyword track; it writes no content of its own | exactly one LLM call per turn, and it runs before the topic is written, so a failure leaves no topic. A turn whose content the 7-day window already reclaimed is refused with `ErrInvalidQuery` without reaching the LLM |
+| `AppendArchive(sceneID, topicID, ArchiveSlot{Kind, ...}) → seq` | the turn's only content write, keyed to the scene the turn belongs to — the pair is checked before anything is stored, so a mistyped or invented topic id is refused instead of landing content under a key no read ever lists. An utterance declares who spoke and what the content is; an event names itself and may hang on a plan step. `Seq: 0` allocates above the two dialogue slots, and the slot taken comes back | zero LLM; a refused record stores nothing, and an event naming a step the tree does not hold is refused rather than answered by creating one; budgets are 4 KiB per event record, name included, and 64 KiB per utterance, refused rather than truncated |
+| `Settle(sceneID, topicID) → topic` | distills the utterances that topic holds into its keyword track and returns the topic as stored, the track among its fields; it writes no content of its own | exactly one LLM call per turn, and it runs before the topic is written, so a failure leaves no topic. A turn whose content the retention window already reclaimed is refused with `ErrInvalidQuery` without reaching the LLM |
 
-What a host injects as context is the keyword set of that scene's depth-1 topics; to read a turn's original text, address L4 by that turn's topic id — `SearchL4(L4Query{TopicID, Kind: &KindUtterance})` — or use `SceneContext`, which already carries the messages. Content is bounded: past the 7-day window a topic keeps its keyword track and its `Messages` come back empty or with a gap in `Seq`, which is a legal end state rather than a failed read. The injected size is kept in check by Dream converging each scene towards `DreamCompressMinTopics` (default 20) — a target the consolidation pass aims at, not a bound a scene is held to, so leaving automatic consolidation on is what keeps the context from growing without limit.
+What a host injects as context is the keyword set of that scene's depth-1 topics; to read a turn's original text, address L4 by that turn's topic id — `SearchL4(L4Query{TopicID, Kind: &KindUtterance})` — or use `SceneContext`, which already carries the messages. Content is bounded: past the retention window (seven days by default) a topic keeps its keyword track and its `Messages` come back empty or with a gap in `Seq`, which is a legal end state rather than a failed read. The injected size is kept in check by Dream converging each scene towards `DreamCompressMinTopics` (default 20) — a target the consolidation pass aims at, not a bound a scene is held to, so leaving automatic consolidation on is what keeps the context from growing without limit.
 
 Removed along with retrieval: three-channel RRF scoring, L1 spreading activation (`AssociatedContexts`), topic centroids and the embedding dependency, the `AutoCreate` / `DirectedL2ID` / `DirectedL3ID` routes, and topic-level `L3Refs` (L2↔L3 now lives solely on the scene anchor `SceneSlot.L3ID`).
 

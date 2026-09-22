@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
@@ -99,22 +98,24 @@ func TestAgentDomainIsolation(t *testing.T) {
 		t.Fatalf("GetL0(b) = %+v err=%v, want agent-b", pb, err)
 	}
 
-	// Same trajectory session id in both domains: events stay per-agent.
-	session := common.FormatHash(common.HashID("shared-session"))
-	if err := db.AppendArchive(a, session, core.ArchiveSlot{Kind: core.KindEvent, EventType: "tool_call", Content: "a", CreatedAt: 1}); err != nil {
+	// One turn key per domain: each domain's own scene mints its own topic id,
+	// and the events under them stay per-agent.
+	sessionA, turnA, _ := newTurnKeyFor(t, db, a)
+	sessionB, turnB, _ := newTurnKeyFor(t, db, b)
+	if _, err := db.AppendArchive(a, sessionA, turnA, core.ArchiveSlot{Kind: core.KindEvent, EventType: "tool_call", Content: "a", CreatedAt: 1}); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AppendArchive(b, session, core.ArchiveSlot{Kind: core.KindEvent, EventType: "tool_call", Content: "b1", CreatedAt: 1}); err != nil {
+	if _, err := db.AppendArchive(b, sessionB, turnB, core.ArchiveSlot{Kind: core.KindEvent, EventType: "tool_call", Content: "b1", CreatedAt: 1}); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AppendArchive(b, session, core.ArchiveSlot{Kind: core.KindEvent, EventType: "tool_call", Content: "b2", CreatedAt: 2}); err != nil {
+	if _, err := db.AppendArchive(b, sessionB, turnB, core.ArchiveSlot{Kind: core.KindEvent, EventType: "tool_call", Content: "b2", CreatedAt: 2}); err != nil {
 		t.Fatal(err)
 	}
-	ea, err := db.eventsOf(a, session)
+	ea, err := db.eventsOf(a, turnA)
 	if err != nil || len(ea) != 1 || ea[0].Content != "a" {
 		t.Fatalf("events of a = %+v err=%v, want 1 event 'a'", ea, err)
 	}
-	eb, err := db.eventsOf(b, session)
+	eb, err := db.eventsOf(b, turnB)
 	if err != nil || len(eb) != 2 {
 		t.Fatalf("events of b = %+v err=%v, want 2 events", eb, err)
 	}

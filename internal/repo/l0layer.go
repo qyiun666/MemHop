@@ -23,8 +23,8 @@ func GetProfileL0(engine *core.StorageEngine, agentID uint64) (*core.ProfileSlot
 }
 
 func UpdateProfileL0(engine *core.StorageEngine, agentID uint64, slot *core.ProfileSlot) error {
-	slot.IDHash = common.HashID("profile")
-	return core.WriteProfileSlot(engine, agentID, slot.IDHash, slot)
+	id := common.HashID("profile")
+	return core.WriteProfileSlot(engine, agentID, id, slot)
 }
 
 // HasProfileL0 answers whether a domain's profile record is there, for a caller

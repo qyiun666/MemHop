@@ -33,7 +33,7 @@ func TestSurfaceL3Knowledge(t *testing.T) {
 	if err != nil || len(graphs) == 0 {
 		t.Fatalf("list l3 graphs: %d err=%v", len(graphs), err)
 	}
-	graphID := graphs[0].IDHash
+	graphID := graphs[0].ID
 	g, err := db.GetL3(graphID)
 	if err != nil || g == nil || g.Nodes == nil {
 		t.Fatalf("get l3 graph: %v", err)
@@ -52,7 +52,7 @@ func TestSurfaceL3Knowledge(t *testing.T) {
 	if _, err := db.QueryL3Nodes(L3NodeQuery{GraphID: ""}); CodeOf(err) != ErrInvalidQuery {
 		t.Fatalf("query nodes missing graph: want ErrInvalidQuery, got %v", err)
 	}
-	if _, err := db.QueryL3Subgraph(graphID, nodes[0].IDHash, 2, []GraphEdgeKind{EdgeRelated}); err != nil {
+	if _, err := db.QueryL3Subgraph(graphID, nodes[0].ID, 2, []GraphEdgeKind{EdgeRelated}); err != nil {
 		t.Fatalf("query subgraph: %v", err)
 	}
 	if err := db.DeleteL3(graphID); err != nil {

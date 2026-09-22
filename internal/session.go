@@ -40,10 +40,11 @@ func (s *Session) Search(q SearchQuery) (*SearchResult, error) {
 	return s.db.Search(s.agentID, q)
 }
 
-// Update distills the content this turn appended under topicID into that
-// topic's keyword track; sceneID names the scene Search read.
-func (s *Session) Update(sceneID, topicID string) error {
-	return s.db.Update(s.agentID, sceneID, topicID)
+// Settle distills the content this turn appended under topicID into that
+// topic's keyword track and returns the topic as stored; sceneID names the
+// scene Search read.
+func (s *Session) Settle(sceneID, topicID string) (*TopicSlot, error) {
+	return s.db.Settle(s.agentID, sceneID, topicID)
 }
 
 // ---- Dream ----
@@ -166,26 +167,21 @@ func (s *Session) SearchL4(q L4Query) ([]ArchiveSlot, error) {
 }
 
 // AppendArchive writes one piece of content — a dialogue original or an
-// operation event — under the topic id Search issued for this turn. Seq 0 lets the
-// library allocate the slot; a non-zero NodeSeq on an event hangs it on that plan
+// operation event — under the topic id Search issued for this turn, keyed to the
+// scene that turn belongs to. Seq 0 lets the library allocate the slot, and the
+// slot taken comes back; a non-zero NodeSeq on an event hangs it on that plan
 // step, which has to exist already. Nothing is written when this call returns an
 // error, and no step is ever created here.
-func (s *Session) AppendArchive(topicID string, slot ArchiveSlot) error {
-	return s.db.AppendArchive(s.agentID, topicID, slot)
+func (s *Session) AppendArchive(sceneID, topicID string, slot ArchiveSlot) (uint64, error) {
+	return s.db.AppendArchive(s.agentID, sceneID, topicID, slot)
 }
 
 // ---- L5 plan tree ----
 
-// PlanCreate opens a turn's plan tree by creating its first root step, and
-// returns the ordinal that step is addressed by from now on. topicID names the
-// turn that owns the plan.
-func (s *Session) PlanCreate(topicID, title string) (uint32, error) {
-	return s.db.PlanCreate(s.agentID, topicID, title)
-}
-
 // PlanNodeAdd adds one step to a turn's plan tree and returns its ordinal.
-// parentSeq 0 puts it at the top level; any other value must name a step the tree
-// already holds. A step has no other way into the tree.
+// parentSeq 0 puts it at the top level — which is also how a turn's tree is
+// opened, since a tree starts with no steps; any other value must name a step
+// the tree already holds. A step has no other way into the tree.
 func (s *Session) PlanNodeAdd(topicID string, parentSeq uint32, title string) (uint32, error) {
 	return s.db.PlanNodeAdd(s.agentID, topicID, parentSeq, title)
 }

@@ -112,8 +112,16 @@ func CollectAllStrict[T any](engine *StorageEngine, agentID uint64, rt uint8) ([
 	return out, nil
 }
 
+// ReadProfileSlot re-derives the MBTI type word from the stored dimensions:
+// the axes are the only fact on disk, so the word every reader sees is a
+// function of them rather than a second copy that could drift.
 func ReadProfileSlot(engine *StorageEngine, agentID, id uint64) (*ProfileSlot, error) {
-	return readJSON[ProfileSlot](engine, agentID, id, RecL0Profile, "ProfileSlot")
+	slot, err := readJSON[ProfileSlot](engine, agentID, id, RecL0Profile, "ProfileSlot")
+	if err != nil {
+		return nil, err
+	}
+	slot.MBTI.Type = DeriveMBTIType(slot.MBTI)
+	return slot, nil
 }
 
 func WriteProfileSlot(engine *StorageEngine, agentID, id uint64, slot *ProfileSlot) error {

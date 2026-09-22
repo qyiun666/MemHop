@@ -80,7 +80,7 @@ func stepEvents(t *testing.T, db *DB, topicID uint64, seq uint32) []core.Archive
 // to it while its ordinal lives on in the address it was stored at. Creating there
 // would replace a step this engine cannot read, and the events bound to that ordinal
 // would then read as the new step's work, so the create path asks the disk first.
-func TestPlanCreateRefusesAnAddressItCannotRead(t *testing.T) {
+func TestPlanNodeAddRefusesAnAddressItCannotRead(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	const topic = uint64(99)
 	topicID := common.FormatHash(topic)
@@ -91,7 +91,7 @@ func TestPlanCreateRefusesAnAddressItCannotRead(t *testing.T) {
 		t.Fatalf("write the step no mirror can list: %v", err)
 	}
 
-	if _, err := db.PlanCreate(core.DefaultAgentID, topicID, "重铸的一步"); common.CodeOf(err) != common.ErrDeserialization {
+	if _, err := db.PlanNodeAdd(core.DefaultAgentID, topicID, 0, "重铸的一步"); common.CodeOf(err) != common.ErrDeserialization {
 		t.Fatalf("creating at an address that does not decode must report its own code, got %v", err)
 	}
 	if _, data, err := db.engine.ReadRecord(core.DefaultAgentID, address); err != nil || string(data) != corrupt {
@@ -101,9 +101,9 @@ func TestPlanCreateRefusesAnAddressItCannotRead(t *testing.T) {
 
 func TestAppendArchiveAllocatesAboveDialogueSlots(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
-	session := common.FormatHash(99)
+	sceneHex, session, _ := newTurnKey(t, db)
 	for i := 1; i <= 3; i++ {
-		if err := db.AppendArchive(core.DefaultAgentID, session, ev("llm_request", int64(i))); err != nil {
+		if _, err := db.AppendArchive(core.DefaultAgentID, sceneHex, session, ev("llm_request", int64(i))); err != nil {
 			t.Fatalf("append %d: %v", i, err)
 		}
 	}
@@ -126,28 +126,49 @@ func TestAppendArchiveAllocatesAboveDialogueSlots(t *testing.T) {
 
 func TestAppendArchiveValidation(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
+	sceneHex, turnKey, _ := newTurnKey(t, db)
 	bare := core.ArchiveSlot{Kind: core.KindEvent, Content: "step", CreatedAt: 1}
-	if err := db.AppendArchive(core.DefaultAgentID, common.FormatHash(1), bare); common.CodeOf(err) != common.ErrInvalidQuery {
+	if _, err := db.AppendArchive(core.DefaultAgentID, sceneHex, turnKey, bare); common.CodeOf(err) != common.ErrInvalidQuery {
 		t.Fatalf("empty event type: want ErrInvalidQuery, got %v", err)
 	}
-	if err := db.AppendArchive(core.DefaultAgentID, common.FormatHash(1), core.ArchiveSlot{Kind: core.KindEvent, Content: "step", EventType: "tool_call"}); common.CodeOf(err) != common.ErrInvalidQuery {
+	if _, err := db.AppendArchive(core.DefaultAgentID, sceneHex, turnKey, core.ArchiveSlot{Kind: core.KindEvent, Content: "step", EventType: "tool_call"}); common.CodeOf(err) != common.ErrInvalidQuery {
 		t.Fatalf("zero timestamp: want ErrInvalidQuery, got %v", err)
 	}
 	// A plan-bound write is refused by the same contract, and the zero key is
 	// refused before it: neither may create a node on its way out.
-	if err := db.AppendArchive(core.DefaultAgentID, common.FormatHash(1), onStep(bare, 1)); common.CodeOf(err) != common.ErrInvalidQuery {
+	if _, err := db.AppendArchive(core.DefaultAgentID, sceneHex, turnKey, onStep(bare, 1)); common.CodeOf(err) != common.ErrInvalidQuery {
 		t.Fatalf("bound empty type: want ErrInvalidQuery, got %v", err)
 	}
-	if err := db.AppendArchive(core.DefaultAgentID, "0000000000000000", ev("x", 1)); common.CodeOf(err) != common.ErrInvalidQuery {
+	if _, err := db.AppendArchive(core.DefaultAgentID, sceneHex, "0000000000000000", ev("x", 1)); common.CodeOf(err) != common.ErrInvalidQuery {
 		t.Fatalf("reserved key: want ErrInvalidQuery, got %v", err)
+	}
+}
+
+// A topic the scene never opened must not take content: without this gate a
+// mistyped or invented key stores a record no read ever lists — an orphan only
+// the retention window sweeps. An unknown scene is the same refusal one level
+// up.
+func TestAppendArchiveRefusesAKeyTheSceneNeverOpened(t *testing.T) {
+	db := newTestDB(t, newTestEngine(t))
+	sceneHex, _, _ := newTurnKey(t, db)
+	// A well-formed id that is not a turn key of this scene.
+	foreign := common.FormatHash(common.HashID("never-minted"))
+	if _, err := db.AppendArchive(core.DefaultAgentID, sceneHex, foreign, ev("tool_call", 1000)); common.CodeOf(err) != common.ErrInvalidQuery {
+		t.Fatalf("a fabricated topic key: want ErrInvalidQuery, got %v", err)
+	}
+	if _, err := db.AppendArchive(core.DefaultAgentID, common.FormatHash(common.HashID("no-such-scene")), foreign, ev("tool_call", 1000)); common.CodeOf(err) != common.ErrNotFound {
+		t.Fatalf("an unknown scene: want ErrNotFound, got %v", err)
+	}
+	if n := countRecords(db.engine, core.DefaultAgentID, core.RecL4Archive); n != 0 {
+		t.Fatalf("refused appends stored %d content records", n)
 	}
 }
 
 func TestAppendEventPayloadRefused(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
-	key := common.FormatHash(3)
+	sceneHex, key, _ := newTurnKey(t, db)
 	long := strings.Repeat("x", content.MaxEventPayload+100)
-	if err := db.AppendArchive(core.DefaultAgentID, key, core.ArchiveSlot{
+	if _, err := db.AppendArchive(core.DefaultAgentID, sceneHex, key, core.ArchiveSlot{
 		Kind: core.KindEvent, EventType: "tool_call", Content: long, CreatedAt: 1,
 	}); common.CodeOf(err) != common.ErrInvalidQuery {
 		t.Fatalf("an over-budget payload must be refused with ErrInvalidQuery, got %v", err)
@@ -161,7 +182,7 @@ func TestAppendEventPayloadRefused(t *testing.T) {
 	}
 	// exactly at the budget still writes — the budget is the whole record, so a
 	// one-byte name leaves the rest to the body
-	if err := db.AppendArchive(core.DefaultAgentID, key, core.ArchiveSlot{
+	if _, err := db.AppendArchive(core.DefaultAgentID, sceneHex, key, core.ArchiveSlot{
 		Kind: core.KindEvent, EventType: "t",
 		Content: strings.Repeat("x", content.MaxEventPayload-1), CreatedAt: 1,
 	}); err != nil {
@@ -170,7 +191,7 @@ func TestAppendEventPayloadRefused(t *testing.T) {
 	// The name is part of the record. A caller that puts the bulk there instead of
 	// in Content is carrying the same oversized text, so it is refused the same way
 	// and stores nothing.
-	if err := db.AppendArchive(core.DefaultAgentID, key, core.ArchiveSlot{
+	if _, err := db.AppendArchive(core.DefaultAgentID, sceneHex, key, core.ArchiveSlot{
 		Kind: core.KindEvent, EventType: strings.Repeat("n", content.MaxEventPayload),
 		Content: "x", CreatedAt: 1,
 	}); common.CodeOf(err) != common.ErrInvalidQuery {
@@ -190,23 +211,25 @@ func TestAppendEventPayloadRefused(t *testing.T) {
 // whose every event expired reads back empty.
 func TestDreamPrunesExpiredEvents(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
-	a, b := common.FormatHash(11), common.FormatHash(22)
+	sceneA, a, _ := newTurnKey(t, db)
+	sceneB, b, _ := newTurnKey(t, db)
 	fresh := time.Now().Add(-time.Hour).UnixMilli()
-	appendOne := func(id string, ts int64) {
-		if err := db.AppendArchive(core.DefaultAgentID, id, ev("llm_request", ts)); err != nil {
+	appendOne := func(scene, id string, ts int64) {
+		if _, err := db.AppendArchive(core.DefaultAgentID, scene, id, ev("llm_request", ts)); err != nil {
 			t.Fatalf("append %s: %v", id, err)
 		}
 	}
-	appendOne(a, 100)
-	appendOne(a, fresh)
-	appendOne(b, 500)
+	appendOne(sceneA, a, 100)
+	appendOne(sceneA, a, fresh)
+	appendOne(sceneB, b, 500)
 
 	if events, err := db.eventsOf(core.DefaultAgentID, a); err != nil || len(events) != 2 {
 		t.Fatalf("both of a's events are inside the window: %+v err=%v", events, err)
 	}
 
-	// No active scenes, so the consolidation stages return early — the two
-	// pruning stages run unconditionally and are what this exercises.
+	// The scenes exist but hold no settled topics, so consolidation has nothing
+	// to chew — the two pruning stages run unconditionally and are what this
+	// exercises.
 	if _, err := db.RunDream(context.Background(), core.DefaultAgentID, 0); err != nil {
 		t.Fatalf("dream: %v", err)
 	}
@@ -227,7 +250,7 @@ func TestDialogueOnlyTurnHoldsNoEvents(t *testing.T) {
 	srv := mockLLMServer(t, turnKeywords)
 	db := newSearchTestDB(t, srv.URL)
 	sceneID, topicID := openTurn(t, db)
-	appendTurn(t, db, topicID, 1000)
+	appendTurn(t, db, sceneID, topicID, 1000)
 	if err := settle(db, sceneID, topicID); err != nil {
 		t.Fatalf("update: %v", err)
 	}
@@ -245,16 +268,16 @@ func TestDialogueOnlyTurnHoldsNoEvents(t *testing.T) {
 
 func TestTrajectorySeqContinuesAfterContextRebuild(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
-	session := common.FormatHash(77)
+	sceneHex, session, _ := newTurnKey(t, db)
 	for i := 1; i <= 2; i++ {
-		if err := db.AppendArchive(core.DefaultAgentID, session, ev("llm_request", int64(i))); err != nil {
+		if _, err := db.AppendArchive(core.DefaultAgentID, sceneHex, session, ev("llm_request", int64(i))); err != nil {
 			t.Fatalf("append %d: %v", i, err)
 		}
 	}
 	// Simulate the idle sweep dropping the agent context: the next access
 	// must rebuild the content index from records and continue Seq.
 	delete(db.agents, core.DefaultAgentID)
-	if err := db.AppendArchive(core.DefaultAgentID, session, ev("tool_call", 3)); err != nil {
+	if _, err := db.AppendArchive(core.DefaultAgentID, sceneHex, session, ev("tool_call", 3)); err != nil {
 		t.Fatalf("append after rebuild: %v", err)
 	}
 	events, err := db.eventsOf(core.DefaultAgentID, session)
@@ -269,11 +292,11 @@ func TestTrajectorySeqContinuesAfterContextRebuild(t *testing.T) {
 // A tree starts empty and a step's ordinal is the library's to hand out: the first
 // create of a turn is step 1 and each step after it is one higher, so a host can
 // address what it created without reading the tree back.
-func TestPlanCreateHandsOutOrdinals(t *testing.T) {
+func TestPlanNodeAddHandsOutOrdinals(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	defer db.Close()
-	pid := common.FormatHash(9)
-	first, err := db.PlanCreate(core.DefaultAgentID, pid, "第一步")
+	_, pid, topicID := newTurnKey(t, db)
+	first, err := db.PlanNodeAdd(core.DefaultAgentID, pid, 0, "第一步")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -287,13 +310,13 @@ func TestPlanCreateHandsOutOrdinals(t *testing.T) {
 		t.Fatalf("a child continues the same count: %d, want 3", child)
 	}
 	// A second turn counts from its own start: ordinals are per tree, not global.
-	other := common.FormatHash(10)
-	if got, err := db.PlanCreate(core.DefaultAgentID, other, "别的轮"); err != nil || got != 1 {
+	_, other, _ := newTurnKey(t, db)
+	if got, err := db.PlanNodeAdd(core.DefaultAgentID, other, 0, "别的轮"); err != nil || got != 1 {
 		t.Fatalf("another turn's first step = %d/%v, want 1", got, err)
 	}
 
 	restate(t, db, pid, first, PlanDone, "made it")
-	node, err := core.ReadPlanNode(db.engine, core.DefaultAgentID, core.HashPlanNode(9, 1))
+	node, err := core.ReadPlanNode(db.engine, core.DefaultAgentID, core.HashPlanNode(topicID, 1))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -306,12 +329,12 @@ func TestPlanCreateHandsOutOrdinals(t *testing.T) {
 // creation time while a later update moves only the update time.
 func TestPlanNodeCreateStampsTimes(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
-	pid := common.FormatHash(9)
-	seq, err := db.PlanCreate(core.DefaultAgentID, pid, "r")
+	_, pid, topicID := newTurnKey(t, db)
+	seq, err := db.PlanNodeAdd(core.DefaultAgentID, pid, 0, "r")
 	if err != nil {
 		t.Fatal(err)
 	}
-	node, err := core.ReadPlanNode(db.engine, core.DefaultAgentID, core.HashPlanNode(9, seq))
+	node, err := core.ReadPlanNode(db.engine, core.DefaultAgentID, core.HashPlanNode(topicID, seq))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -322,7 +345,7 @@ func TestPlanNodeCreateStampsTimes(t *testing.T) {
 		t.Fatalf("a created step carries one timestamp pair: %+v", node)
 	}
 	restate(t, db, pid, seq, PlanDone, "fin")
-	aged, err := core.ReadPlanNode(db.engine, core.DefaultAgentID, core.HashPlanNode(9, seq))
+	aged, err := core.ReadPlanNode(db.engine, core.DefaultAgentID, core.HashPlanNode(topicID, seq))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -394,8 +417,8 @@ func TestPlanWritesRefuseWithoutLeavingTrace(t *testing.T) {
 func TestEventBindsOnlyToACreatedStep(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	defer db.Close()
-	pid := common.FormatHash(9)
-	if err := db.AppendArchive(core.DefaultAgentID, pid, onStep(ev("llm_request", 1000), 3)); common.CodeOf(err) != common.ErrInvalidQuery {
+	sceneHex, pid, topicID := newTurnKey(t, db)
+	if _, err := db.AppendArchive(core.DefaultAgentID, sceneHex, pid, onStep(ev("llm_request", 1000), 3)); common.CodeOf(err) != common.ErrInvalidQuery {
 		t.Fatalf("an event on a step that does not exist: want ErrInvalidQuery, got %v", err)
 	}
 	if n := countRecords(db.engine, core.DefaultAgentID, core.RecL5PlanNode); n != 0 {
@@ -406,10 +429,10 @@ func TestEventBindsOnlyToACreatedStep(t *testing.T) {
 	}
 
 	seq := add(t, db, pid, 0, "一步")
-	if err := db.AppendArchive(core.DefaultAgentID, pid, onStep(ev("llm_request", 1001), seq)); err != nil {
+	if _, err := db.AppendArchive(core.DefaultAgentID, sceneHex, pid, onStep(ev("llm_request", 1001), seq)); err != nil {
 		t.Fatalf("binding to a created step: %v", err)
 	}
-	events := stepEvents(t, db, 9, seq)
+	events := stepEvents(t, db, topicID, seq)
 	if len(events) != 1 || events[0].EventType != "llm_request" {
 		t.Fatalf("want 1 llm_request event on the step, got %+v", events)
 	}
@@ -421,14 +444,14 @@ func TestEventBindsOnlyToACreatedStep(t *testing.T) {
 func TestStepReadCoversItsSubtree(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	defer db.Close()
-	pid := common.FormatHash(9)
+	sceneHex, pid, _ := newTurnKey(t, db)
 	root := add(t, db, pid, 0, "调研")
 	child := add(t, db, pid, root, "读码")
 	grandchild := add(t, db, pid, child, "改码")
 	sibling := add(t, db, pid, 0, "别的活")
 
 	for _, seq := range []uint32{root, child, grandchild, sibling} {
-		if err := db.AppendArchive(core.DefaultAgentID, pid, onStep(ev("tool_call", int64(1000+seq)), seq)); err != nil {
+		if _, err := db.AppendArchive(core.DefaultAgentID, sceneHex, pid, onStep(ev("tool_call", int64(1000+seq)), seq)); err != nil {
 			t.Fatalf("append on step %d: %v", seq, err)
 		}
 	}
@@ -615,13 +638,13 @@ func TestDreamPrunePlanNodesAndContent(t *testing.T) {
 	}
 
 	// All-Done plan created long ago, with a FRESH event bound to the step.
-	doneID := common.FormatHash(9)
+	sceneHex, doneID, doneTopic := newTurnKey(t, db)
 	doneStep := add(t, db, doneID, 0, "fin")
 	restate(t, db, doneID, doneStep, PlanDone, "fin")
-	if err := db.AppendArchive(core.DefaultAgentID, doneID, onStep(ev("note", now), doneStep)); err != nil {
+	if _, err := db.AppendArchive(core.DefaultAgentID, sceneHex, doneID, onStep(ev("note", now), doneStep)); err != nil {
 		t.Fatal(err)
 	}
-	age(9, doneStep)
+	age(doneTopic, doneStep)
 
 	// In-flight plan: an aged Done root plus a child created just now. The tree is
 	// exempt as a whole, so the stale root survives with it.
@@ -668,9 +691,9 @@ func TestDreamPrunePlanNodesAndContent(t *testing.T) {
 // transcript. The kinds also cannot wear each other's axes.
 func TestAppendEventCannotForgeContentFields(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
-	topicID := common.FormatHash(9)
+	sceneHex, topicID, topic := newTurnKey(t, db)
 	seq := add(t, db, topicID, 0, "一步")
-	if err := db.AppendArchive(core.DefaultAgentID, topicID, onStep(core.ArchiveSlot{
+	if _, err := db.AppendArchive(core.DefaultAgentID, sceneHex, topicID, onStep(core.ArchiveSlot{
 		Kind: core.KindEvent, TopicID: 4242,
 		Role: core.RoleDream, ContentType: core.ContentVideo,
 		EventType: "llm_request", Content: "payload", CreatedAt: 1000,
@@ -683,7 +706,7 @@ func TestAppendEventCannotForgeContentFields(t *testing.T) {
 	if n := countRecords(db.engine, core.DefaultAgentID, core.RecL5PlanNode); n != 1 {
 		t.Fatalf("plan nodes = %d, want only the created one", n)
 	}
-	node, err := core.ReadPlanNode(db.engine, core.DefaultAgentID, core.HashPlanNode(9, seq))
+	node, err := core.ReadPlanNode(db.engine, core.DefaultAgentID, core.HashPlanNode(topic, seq))
 	if err != nil {
 		t.Fatalf("the created step vanished: %v", err)
 	}
@@ -701,7 +724,7 @@ func TestAppendEventCannotForgeContentFields(t *testing.T) {
 	if landed == nil {
 		t.Fatal("the event record is missing")
 	}
-	if landed.TopicID != 9 || landed.IDHash != core.HashContent(9, landed.Seq) {
+	if landed.TopicID != topic || landed.IDHash != core.HashContent(topic, landed.Seq) {
 		t.Fatalf("an append must land under the topic it addressed: %+v", landed)
 	}
 	if landed.Seq != core.LastUtteranceSeq+1 {
@@ -724,7 +747,7 @@ func TestAppendEventCannotForgeContentFields(t *testing.T) {
 		"undefined kind":               {Kind: core.ArchiveKind(7), EventType: "tool_call", Content: "x", CreatedAt: 1},
 		"empty content":                {Kind: core.KindEvent, EventType: "tool_call", CreatedAt: 1},
 	} {
-		if err := db.AppendArchive(core.DefaultAgentID, topicID, slot); common.CodeOf(err) != common.ErrInvalidQuery {
+		if _, err := db.AppendArchive(core.DefaultAgentID, sceneHex, topicID, slot); common.CodeOf(err) != common.ErrInvalidQuery {
 			t.Fatalf("%s: want ErrInvalidQuery, got %v", name, err)
 		}
 	}
@@ -739,11 +762,11 @@ func TestSettledTurnKeepsEventsAppendedBeforeIt(t *testing.T) {
 	sceneID, topicID := openTurn(t, db)
 
 	for i, name := range []string{"llm_request", "tool_call"} {
-		if err := db.AppendArchive(core.DefaultAgentID, common.FormatHash(topicID), ev(name, int64(100+i))); err != nil {
+		if _, err := db.AppendArchive(core.DefaultAgentID, common.FormatHash(sceneID), common.FormatHash(topicID), ev(name, int64(100+i))); err != nil {
 			t.Fatalf("append %s: %v", name, err)
 		}
 	}
-	appendTurn(t, db, topicID, 1000)
+	appendTurn(t, db, sceneID, topicID, 1000)
 	if err := settle(db, sceneID, topicID); err != nil {
 		t.Fatalf("update: %v", err)
 	}
@@ -788,10 +811,10 @@ func TestSettledTurnKeepsEventsAppendedBeforeIt(t *testing.T) {
 func TestPlanEventNamesAreHostOwned(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	defer db.Close()
-	topicID := common.FormatHash(9)
+	sceneHex, topicID, _ := newTurnKey(t, db)
 	seq := add(t, db, topicID, 0, "一步")
 	for i, name := range []string{"sandbox_ask", "host_step"} {
-		if err := db.AppendArchive(core.DefaultAgentID, topicID,
+		if _, err := db.AppendArchive(core.DefaultAgentID, sceneHex, topicID,
 			onStep(ev(name, int64(1000+i)), seq)); err != nil {
 			t.Fatalf("a host-named plan event must be accepted: %v", err)
 		}
@@ -805,7 +828,7 @@ func TestPlanEventNamesAreHostOwned(t *testing.T) {
 			events[0].EventType, events[1].EventType)
 	}
 
-	if err := db.AppendArchive(core.DefaultAgentID, topicID, onStep(core.ArchiveSlot{Kind: core.KindEvent, Content: "step", CreatedAt: 1002}, 9)); common.CodeOf(err) != common.ErrInvalidQuery {
+	if _, err := db.AppendArchive(core.DefaultAgentID, sceneHex, topicID, onStep(core.ArchiveSlot{Kind: core.KindEvent, Content: "step", CreatedAt: 1002}, 9)); common.CodeOf(err) != common.ErrInvalidQuery {
 		t.Fatalf("empty event type: want ErrInvalidQuery, got %v", err)
 	}
 	if tree := mustTree(t, db, topicID); tree.TotalCount != 1 {
@@ -816,18 +839,18 @@ func TestPlanEventNamesAreHostOwned(t *testing.T) {
 func TestPlanCache_ConsistentWithDisk(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	defer db.Close()
-	topicID := common.FormatHash(9)
+	sceneHex, topicID, topic := newTurnKey(t, db)
 	root := add(t, db, topicID, 0, "r")
 	child := add(t, db, topicID, root, "a")
 	restate(t, db, topicID, child, PlanDone, "s")
-	if err := db.AppendArchive(core.DefaultAgentID, topicID, onStep(ev("tool_call", 1200), child)); err != nil {
+	if _, err := db.AppendArchive(core.DefaultAgentID, sceneHex, topicID, onStep(ev("tool_call", 1200), child)); err != nil {
 		t.Fatal(err)
 	}
 	ac := db.agents[core.DefaultAgentID]
 	if ac == nil {
 		t.Fatal("agent context missing")
 	}
-	cached := ac.Plans.Aggregate(9)
+	cached := ac.Plans.Aggregate(topic)
 	if cached == nil {
 		t.Fatal("cached aggregate missing")
 	}
@@ -837,7 +860,7 @@ func TestPlanCache_ConsistentWithDisk(t *testing.T) {
 	}
 	var disk *repo.PlanAggregate
 	for _, agg := range diskAggs {
-		if agg.TopicID == 9 {
+		if agg.TopicID == topic {
 			disk = &agg
 			break
 		}
@@ -895,12 +918,12 @@ func TestTurnRunsOnOneTopicID(t *testing.T) {
 	turnID := common.FormatHash(res.NewTopicID)
 
 	for _, name := range []string{"llm_request", "tool_call"} {
-		if err := db.AppendArchive(core.DefaultAgentID, turnID, ev(name, 1000)); err != nil {
+		if _, err := db.AppendArchive(core.DefaultAgentID, common.FormatHash(res.Scene.SceneID), turnID, ev(name, 1000)); err != nil {
 			t.Fatalf("append %s: %v", name, err)
 		}
 	}
 	settled := res.NewTopicID
-	appendTurn(t, db, settled, 1000)
+	appendTurn(t, db, res.Scene.SceneID, settled, 1000)
 	if err := settle(db, res.Scene.SceneID, settled); err != nil {
 		t.Fatalf("update: %v", err)
 	}
@@ -918,5 +941,45 @@ func TestTurnRunsOnOneTopicID(t *testing.T) {
 		if e.TopicID != settled {
 			t.Fatalf("event %s landed under key %d, want the turn's %d", e.EventType, e.TopicID, settled)
 		}
+	}
+}
+
+// The retention window is the host's to set: a domain configured with a short
+// window sweeps content the default window would keep, and a zero value falls
+// back to the engine's seven days rather than disabling the sweep.
+func TestDreamRetentionWindowIsConfigurable(t *testing.T) {
+	custom := DefaultMemHopDefaults
+	custom.ContentRetentionMs = (30 * time.Minute).Milliseconds()
+	engines := map[string]struct{ db *DB }{
+		"half-hour window": {db: func() *DB {
+			db := newTestDB(t, newTestEngine(t))
+			db.config.Defaults = custom
+			return db
+		}()},
+		"default window": {db: newTestDB(t, newTestEngine(t))},
+	}
+	hourAgo := time.Now().Add(-time.Hour).UnixMilli()
+	for name, tc := range engines {
+		t.Run(name, func(t *testing.T) {
+			sceneHex, turnKey, _ := newTurnKey(t, tc.db)
+			if _, err := tc.db.AppendArchive(core.DefaultAgentID, sceneHex, turnKey,
+				ev("note", hourAgo)); err != nil {
+				t.Fatalf("append: %v", err)
+			}
+			if _, err := tc.db.RunDream(context.Background(), core.DefaultAgentID, 0); err != nil {
+				t.Fatalf("dream: %v", err)
+			}
+			events, err := tc.db.eventsOf(core.DefaultAgentID, turnKey)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := 1
+			if name == "half-hour window" {
+				want = 0
+			}
+			if len(events) != want {
+				t.Fatalf("events after dream = %d, want %d (the one-hour-old record vs the window)", len(events), want)
+			}
+		})
 	}
 }

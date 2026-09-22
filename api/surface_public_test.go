@@ -55,7 +55,7 @@ func TestSessionPublicSurface(t *testing.T) {
 		// runtime/task face — the host drives these every turn and LLM tools
 		// bind to them
 		// core cycle (host-driven)
-		"Search", "Update", "Dream", "AppendArchive",
+		"Search", "Settle", "Dream", "AppendArchive",
 		// L0 profile
 		"GetL0", "UpdateL0",
 		// L1 scene hypergraph (read-only; Dream is the only writer)
@@ -67,8 +67,8 @@ func TestSessionPublicSurface(t *testing.T) {
 		// L4 archives
 		"SearchL4",
 		// the plan tree: written one step at a time — one step created or
-		// restated per call
-		"PlanCreate", "PlanNodeAdd", "PlanNodeUpdate", "PlanState",
+		// restated per call (parentSeq 0 opens the tree)
+		"PlanNodeAdd", "PlanNodeUpdate", "PlanState",
 
 		// assembly/admin face — host code at session boundaries and management
 		// channels only, never an LLM tool
@@ -87,11 +87,11 @@ func TestSessionPublicSurface(t *testing.T) {
 
 func TestDBPublicSurface(t *testing.T) {
 	// Two ways in — the domain the file was opened on, and one created under it
-	// by name — plus the file-level lifecycle. No agent id crosses either, and
-	// no LLM tool binds here.
+	// by name — plus the file-level lifecycle and the file-level diagnostics. No
+	// agent id crosses either, and no LLM tool binds here.
 	want := []string{
 		"Primary", "SubAgent",
-		"Checkpoint", "CompactTo", "Close", "IsClosed",
+		"Checkpoint", "CompactTo", "Close", "IsClosed", "Stats",
 	}
 	sort.Strings(want)
 

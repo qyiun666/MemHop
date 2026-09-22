@@ -157,7 +157,7 @@ func TestUpdateL3RenameSurvivesReimport(t *testing.T) {
 	sess := openSurfaceDB(t)
 	_, gid := importGraph(t, sess, L3ImportOverwrite)
 	renamed, err := sess.UpdateL3(gid, ptr("proj/renamed"))
-	if err != nil || renamed.Slot.Name != "proj/renamed" || renamed.Slot.IDHash != gid {
+	if err != nil || renamed.Slot.Name != "proj/renamed" || renamed.Slot.ID != gid {
 		t.Fatalf("UpdateL3: %+v err=%v", renamed.Slot, err)
 	}
 	// Importing under the ORIGINAL domain name resolves to the same graph and
@@ -251,8 +251,8 @@ func TestSceneAnchorAgreesWithTheGraphSurface(t *testing.T) {
 // tree it reads back afterwards is the tree it had before.
 func TestPlanWritesRejectedLeaveTreeUntouched(t *testing.T) {
 	sess := openSurfaceDB(t)
-	pid := mustTurnKey(t, sess)
-	root, err := sess.PlanCreate(pid, "root")
+	sceneID, pid := mustTurnKey(t, sess)
+	root, err := sess.PlanNodeAdd(pid, 0, "root")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -315,7 +315,7 @@ func TestPlanWritesRejectedLeaveTreeUntouched(t *testing.T) {
 	}
 	// The step's own work is content, written on the content surface and read
 	// back attributed to the step it names.
-	if err := sess.AppendArchive(pid, onStep(event("tool_call", "ran", 7), leaf)); err != nil {
+	if _, err := sess.AppendArchive(sceneID, pid, onStep(event("tool_call", "ran", 7), leaf)); err != nil {
 		t.Fatalf("append step event: %v", err)
 	}
 	evs := eventsOf(t, sess, pid)
@@ -329,10 +329,10 @@ func TestPlanWritesRejectedLeaveTreeUntouched(t *testing.T) {
 
 func TestAppendArchiveRefusesAndStoresNothing(t *testing.T) {
 	sess := openSurfaceDB(t)
-	turn := mustTurnKey(t, sess)
-	key := mustTurnKey(t, sess) // a second turn carries the plan-bound step below
+	turnScene, turn := mustTurnKey(t, sess)
+	keyScene, key := mustTurnKey(t, sess) // a second turn carries the plan-bound step below
 	over := strings.Repeat("字", 3000)
-	if err := sess.AppendArchive(turn, event("x", over, 1)); err == nil {
+	if _, err := sess.AppendArchive(turnScene, turn, event("x", over, 1)); err == nil {
 		t.Fatal("an over-budget event payload must be refused")
 	}
 	if evs := eventsOf(t, sess, turn); len(evs) != 0 {
@@ -340,12 +340,12 @@ func TestAppendArchiveRefusesAndStoresNothing(t *testing.T) {
 	}
 	// exactly at the budget is accepted — the budget is the whole record, so the
 	// one-byte name leaves the rest to the body
-	if err := sess.AppendArchive(turn, event("x", strings.Repeat("a", 4*1024-1), 1)); err != nil {
+	if _, err := sess.AppendArchive(turnScene, turn, event("x", strings.Repeat("a", 4*1024-1), 1)); err != nil {
 		t.Fatalf("event at the budget limit: %v", err)
 	}
 	// A name is part of the record too: putting the bulk there is the same
 	// oversized event, refused the same way, and it stores nothing.
-	if err := sess.AppendArchive(turn, event(strings.Repeat("n", 4*1024), "a", 1)); err == nil {
+	if _, err := sess.AppendArchive(turnScene, turn, event(strings.Repeat("n", 4*1024), "a", 1)); err == nil {
 		t.Fatal("an over-budget event name must be refused")
 	}
 	if evs := eventsOf(t, sess, turn); len(evs) != 1 {
@@ -353,21 +353,21 @@ func TestAppendArchiveRefusesAndStoresNothing(t *testing.T) {
 	}
 	// A step-bound event answers to the same content contract as a bare one: the
 	// step being real does not excuse a record missing its own name.
-	keyStep, err := sess.PlanCreate(key, "一步")
+	keyStep, err := sess.PlanNodeAdd(key, 0, "一步")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := sess.AppendArchive(key, onStep(ArchiveSlot{Kind: KindEvent, CreatedAt: 1}, keyStep)); err == nil {
+	if _, err := sess.AppendArchive(keyScene, key, onStep(ArchiveSlot{Kind: KindEvent, CreatedAt: 1}, keyStep)); err == nil {
 		t.Fatal("a plan-bound event must satisfy the same write contract")
 	}
 	// A dialogue original gets its own budget, and the same refuse-don't-truncate
 	// rule: 64 KiB is accepted, one rune more is not.
-	if err := sess.AppendArchive(turn, ArchiveSlot{
+	if _, err := sess.AppendArchive(turnScene, turn, ArchiveSlot{
 		Kind: KindUtterance, Role: RoleUser, Content: strings.Repeat("a", 64*1024), CreatedAt: 2,
 	}); err != nil {
 		t.Fatalf("utterance at the budget limit: %v", err)
 	}
-	if err := sess.AppendArchive(turn, ArchiveSlot{
+	if _, err := sess.AppendArchive(turnScene, turn, ArchiveSlot{
 		Kind: KindUtterance, Role: RoleUser, Content: strings.Repeat("a", 64*1024+1), CreatedAt: 3,
 	}); err == nil {
 		t.Fatal("an over-budget utterance must be refused, not truncated")
@@ -382,19 +382,18 @@ func TestUpdateFailsLoudlyWhenTheLLMCannotExtract(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
-	if err := sess.AppendArchive(sr.NewTopicID, ArchiveSlot{
+	if _, err := sess.AppendArchive(sr.Scene.SceneID, sr.NewTopicID, ArchiveSlot{
 		Kind: KindUtterance, Seq: 1, Role: RoleUser, Content: "我们聊聊 Rust 的所有权", CreatedAt: 1,
 	}); err != nil {
 		t.Fatalf("append user side: %v", err)
 	}
-	if err := sess.AppendArchive(sr.NewTopicID, ArchiveSlot{
+	if _, err := sess.AppendArchive(sr.Scene.SceneID, sr.NewTopicID, ArchiveSlot{
 		Kind: KindUtterance, Seq: 2, Role: RoleAgent, Content: "所有权规则保证了内存安全", CreatedAt: 2,
 	}); err != nil {
 		t.Fatalf("append agent side: %v", err)
 	}
-	err = sess.Update(sr.Scene.SceneID, sr.NewTopicID)
-	if err == nil {
-		t.Fatal("Update must fail when keyword extraction degrades, not settle a turn with fake keywords")
+	if _, err := sess.Settle(sr.Scene.SceneID, sr.NewTopicID); err == nil {
+		t.Fatal("Settle must fail when keyword extraction degrades, not settle a turn with fake keywords")
 	}
 	// nothing settled: the scene still has no topics
 	again, err := sess.Search(SearchQuery{SceneID: sr.Scene.SceneID})
@@ -424,13 +423,15 @@ func scenesOf(t *testing.T, sess *Session) int {
 	return len(scenes)
 }
 
-func mustTurnKey(t *testing.T, sess *Session) string {
+// mustTurnKey opens a scene and hands back the pair every turn-keyed write now
+// takes: the scene id and the topic id Search minted for the coming turn.
+func mustTurnKey(t *testing.T, sess *Session) (string, string) {
 	t.Helper()
 	sr, err := sess.Search(SearchQuery{})
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
-	return sr.NewTopicID
+	return sr.Scene.SceneID, sr.NewTopicID
 }
 
 func render(ns []PlanNodeView) string {

@@ -3,13 +3,16 @@
 
 // Tool registration for the memhop-mcp server. The tool set is a deliberate
 // subset of the public surface: most of it is session methods, plus
-// memhop_checkpoint and memhop_status from DB, plus a few convenience reads that
-// re-express a Go-side read for a client that holds no session state. What is
-// left off the tools on purpose — the plan write face, the memory-correction
-// deletes, and CompactTo — is listed in the repository's MCP boundary notes, and
-// the count and names are pinned by smoke_test.go. Arguments and results are
-// plain JSON (the DTOs carry json tags already). Record IDs reach a client as the
-// 16-char hex strings the api DTOs render — no numeric id crosses this boundary.
+// memhop_checkpoint / memhop_status / memhop_compact from DB and the registry,
+// plus a few convenience reads that re-express a Go-side read for a client that
+// holds no session state. What is left off the tools on purpose — the plan write
+// face and the memory-correction deletes — is listed in the repository's MCP
+// boundary notes, and the count and names are pinned by smoke_test.go. The one
+// file-level write is memhop_compact, and it is safe by construction: its paths
+// are constants inside db-dir, so a model cannot aim it at an arbitrary file the
+// way the raw CompactTo output path could. Arguments and results are plain JSON
+// (the DTOs carry json tags already). Record IDs reach a client as the 16-char
+// hex strings the api DTOs render — no numeric id crosses this boundary.
 
 package main
 
@@ -203,9 +206,11 @@ func resolveRole(name string) (uint8, error) {
 	return v, nil
 }
 
-// registerTools attaches all tools to the server for one tenant DB.
-func registerTools(s *mcp.Server, m *memhop.DB, db *memhop.Session) {
-	registerCoreTools(s, m, db)
+// registerTools attaches all tools to the server for one tenant DB. The
+// registry rides along for the one tool (memhop_compact) that has to act on the
+// shared file as a whole rather than on one tenant's domain.
+func registerTools(s *mcp.Server, m *memhop.DB, db *memhop.Session, reg *tenantRegistry) {
+	registerCoreTools(s, m, db, reg)
 	registerL1Tools(s, db)
 	registerL2Tools(s, db)
 	registerL3Tools(s, db)

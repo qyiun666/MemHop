@@ -33,13 +33,13 @@ func TestSSEMultiTenantIsolation(t *testing.T) {
 	alice := connectTenant(t, srv.URL, "alice")
 	bob := connectTenant(t, srv.URL, "bob")
 
-	// tools/list exposes all 24 tools on the alice session.
+	// tools/list exposes all 25 tools on the alice session.
 	tools, err := alice.ListTools(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("list tools: %v", err)
 	}
-	if len(tools.Tools) != 24 {
-		t.Errorf("expected 24 tools, got %d", len(tools.Tools))
+	if len(tools.Tools) != 25 {
+		t.Errorf("expected 25 tools, got %d", len(tools.Tools))
 	}
 	toolsByName := make(map[string]*mcp.Tool, len(tools.Tools))
 	for _, tool := range tools.Tools {
@@ -47,6 +47,7 @@ func TestSSEMultiTenantIsolation(t *testing.T) {
 	}
 	for _, want := range []string{
 		"memhop_search", "memhop_update", "memhop_dream", "memhop_checkpoint", "memhop_status",
+		"memhop_compact",
 		"memhop_l1_nodes",
 		"memhop_profile_get", "memhop_profile_update", "memhop_scene_list", "memhop_scene_merge",
 		"memhop_scene_topics", "memhop_scene_rename", "memhop_topic_rename",
@@ -75,6 +76,7 @@ func TestSSEMultiTenantIsolation(t *testing.T) {
 		{"memhop_dream", nil},
 		{"memhop_checkpoint", nil},
 		{"memhop_status", nil},
+		{"memhop_compact", nil},
 		{"memhop_l1_nodes", nil},
 		{"memhop_profile_get", nil},
 		{"memhop_profile_update", []string{"name"}},
@@ -92,8 +94,8 @@ func TestSSEMultiTenantIsolation(t *testing.T) {
 		{"memhop_knowledge_subgraph", []string{"graph_id", "start_node_id"}},
 		{"memhop_archive_search", nil},
 		{"memhop_archive_get", []string{"id"}},
-		{"memhop_archive_append", []string{"topic_id", "content", "timestamp"}},
-		{"memhop_trajectory_read", []string{"session_id"}},
+		{"memhop_archive_append", []string{"scene_id", "topic_id", "items"}},
+		{"memhop_trajectory_read", []string{"topic_id"}},
 	} {
 		tool, ok := toolsByName[want.name]
 		if !ok {
@@ -567,25 +569,39 @@ func TestSSETurnFlow(t *testing.T) {
 	}
 
 	// The turn's own record: two spoken lines and one operation, all under the key
-	// Search issued, differentiated only by kind.
-	appends := []map[string]any{
-		{"topic_id": turn.NewTopicID, "kind": "utterance", "role": "user",
-			"content": "go 项目怎么跑测试", "timestamp": 1000},
-		{"topic_id": turn.NewTopicID, "kind": "utterance", "role": "agent",
-			"content": "go test ./...", "timestamp": 2000},
-		{"topic_id": turn.NewTopicID, "kind": "event", "event_type": "tool_call",
-			"content": "ran go test", "timestamp": 1500},
+	// Search issued, differentiated only by kind — one batch, one round-trip.
+	appended, err := callClient(t, alice, "memhop_archive_append", map[string]any{
+		"scene_id": turn.Scene.SceneID, "topic_id": turn.NewTopicID,
+		"items": []any{
+			map[string]any{"kind": "utterance", "role": "user", "seq": 1,
+				"content": "go 项目怎么跑测试", "timestamp": 1000},
+			map[string]any{"kind": "utterance", "role": "agent", "seq": 2,
+				"content": "go test ./...", "timestamp": 2000},
+			map[string]any{"kind": "event", "event_type": "tool_call",
+				"content": "ran go test", "timestamp": 1500},
+		},
+	})
+	if err != nil {
+		t.Fatalf("archive append: %v", appended)
 	}
-	for _, args := range appends {
-		if _, err := callClient(t, alice, "memhop_archive_append", args); err != nil {
-			t.Fatalf("archive append %v: %v", args["kind"], err)
-		}
+	var seqs struct {
+		Seqs []uint64 `json:"seqs"`
+	}
+	if err := json.Unmarshal([]byte(appended), &seqs); err != nil {
+		t.Fatalf("append output: %v (%s)", err, appended)
+	}
+	// Dialogue names its two slots; the unnamed event takes the one above
+	// everything held. The reported seqs run in item order.
+	if len(seqs.Seqs) != 3 || seqs.Seqs[0] != 1 || seqs.Seqs[1] != 2 || seqs.Seqs[2] != 3 {
+		t.Fatalf("append must report the slots in item order (dialogue first): %s", appended)
 	}
 	// An utterance that does not say who spoke is refused: a label-less transcript
-	// is the thing keyword extraction cannot recover.
+	// is the thing keyword extraction cannot recover. Nothing of the refused item
+	// is written, and the already-landed seqs come back beside the error.
 	if _, err := callClient(t, alice, "memhop_archive_append", map[string]any{
-		"topic_id": turn.NewTopicID, "kind": "utterance",
-		"content": "anonymous", "timestamp": 2100,
+		"scene_id": turn.Scene.SceneID, "topic_id": turn.NewTopicID,
+		"items": []any{map[string]any{"kind": "utterance",
+			"content": "anonymous", "timestamp": 2100}},
 	}); err == nil {
 		t.Fatal("an utterance without a role must be refused")
 	}
@@ -614,14 +630,17 @@ func TestSSETurnFlow(t *testing.T) {
 		code memhop.Code
 	}{
 		{"append kind", "memhop_archive_append", map[string]any{
-			"topic_id": turn.NewTopicID, "kind": "nonsense", "role": "user",
-			"content": "x", "timestamp": 2200}, memhop.ErrInvalidQuery},
+			"scene_id": turn.Scene.SceneID, "topic_id": turn.NewTopicID,
+			"items": []any{map[string]any{"kind": "nonsense", "role": "user",
+				"content": "x", "timestamp": 2200}}}, memhop.ErrInvalidQuery},
 		{"append role", "memhop_archive_append", map[string]any{
-			"topic_id": turn.NewTopicID, "kind": "utterance", "role": "nonsense",
-			"content": "x", "timestamp": 2201}, memhop.ErrInvalidQuery},
+			"scene_id": turn.Scene.SceneID, "topic_id": turn.NewTopicID,
+			"items": []any{map[string]any{"kind": "utterance", "role": "nonsense",
+				"content": "x", "timestamp": 2201}}}, memhop.ErrInvalidQuery},
 		{"append content_type", "memhop_archive_append", map[string]any{
-			"topic_id": turn.NewTopicID, "kind": "utterance", "role": "user",
-			"content_type": "nonsense", "content": "x", "timestamp": 2202}, memhop.ErrInvalidQuery},
+			"scene_id": turn.Scene.SceneID, "topic_id": turn.NewTopicID,
+			"items": []any{map[string]any{"kind": "utterance", "role": "user",
+				"content_type": "nonsense", "content": "x", "timestamp": 2202}}}, memhop.ErrInvalidQuery},
 		{"import mode", "memhop_knowledge_import", map[string]any{
 			"items": []any{map[string]any{"title": "t", "domain": "d", "content": "c"}},
 			"mode":  "nonsense"}, memhop.ErrInvalidQuery},
@@ -701,8 +720,16 @@ func TestSSETurnFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("update: %v", err)
 	}
-	if !strings.Contains(settled, `"ok":true`) {
-		t.Fatalf("update reported %s, want ok", settled)
+	// The settled topic comes back with the track the model distilled, so closing
+	// a turn needs no second read to see what it was distilled into.
+	var topicOut struct {
+		FusedKeywords []string `json:"fused_keywords"`
+	}
+	if err := json.Unmarshal([]byte(settled), &topicOut); err != nil {
+		t.Fatalf("update output: %v (%s)", err, settled)
+	}
+	if len(topicOut.FusedKeywords) == 0 {
+		t.Fatalf("update must return the distilled keyword track: %s", settled)
 	}
 
 	reread, err := callClient(t, alice, "memhop_search", map[string]any{"scene_id": turn.Scene.SceneID})
@@ -713,7 +740,7 @@ func TestSSETurnFlow(t *testing.T) {
 		t.Fatalf("the turn must be back in the session surface: %s", reread)
 	}
 
-	events, err := callClient(t, alice, "memhop_trajectory_read", map[string]any{"session_id": turn.NewTopicID})
+	events, err := callClient(t, alice, "memhop_trajectory_read", map[string]any{"topic_id": turn.NewTopicID})
 	if err != nil {
 		t.Fatalf("trajectory read: %v", err)
 	}
@@ -738,5 +765,108 @@ func TestSSETurnFlow(t *testing.T) {
 		"scene_id": turn.Scene.SceneID,
 	}); err == nil {
 		t.Fatal("update without topic_id must be rejected")
+	}
+}
+
+// TestSSECompactRewritesTheSharedFile drives the one file-level write tool over
+// MCP: overwrites leave dead frames on the log, compact quiesces the file,
+// rewrites it in place, and the same tenant reads its data back from the new
+// file — the registry rebuilt its server, and the numbers say the bytes came
+// back.
+func TestSSECompactRewritesTheSharedFile(t *testing.T) {
+	srv, _ := newTestServer(t, nil)
+	alice := connectTenant(t, srv.URL, "alice")
+
+	opened, err := callClient(t, alice, "memhop_search", map[string]any{})
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	var turn struct {
+		Scene struct {
+			SceneID string `json:"scene_id"`
+		} `json:"scene"`
+		NewTopicID string `json:"new_topic_id"`
+	}
+	if err := json.Unmarshal([]byte(opened), &turn); err != nil {
+		t.Fatalf("search output: %v (%s)", err, opened)
+	}
+
+	// Ten rewrites of one slot: every version but the last is a dead frame the
+	// live reads can no longer see and only a compaction gives back.
+	items := make([]any, 0, 10)
+	for i := range 10 {
+		items = append(items, map[string]any{
+			"kind": "utterance", "role": "user", "seq": 1,
+			"content": fmt.Sprintf("version %d of one line", i), "timestamp": 1000 + int64(i),
+		})
+	}
+	appended, err := callClient(t, alice, "memhop_archive_append", map[string]any{
+		"scene_id": turn.Scene.SceneID, "topic_id": turn.NewTopicID, "items": items,
+	})
+	if err != nil {
+		t.Fatalf("append batch: %v (%s)", err, appended)
+	}
+
+	before, err := callClient(t, alice, "memhop_status", map[string]any{})
+	if err != nil {
+		t.Fatalf("status before compact: %v", err)
+	}
+	var beforeStats struct {
+		FileBytes   int64 `json:"file_bytes"`
+		RecordCount int64 `json:"record_count"`
+	}
+	if err := json.Unmarshal([]byte(before), &beforeStats); err != nil {
+		t.Fatalf("status output: %v (%s)", err, before)
+	}
+
+	compacted, err := callClient(t, alice, "memhop_compact", map[string]any{})
+	if err != nil {
+		t.Fatalf("compact: %v (%s)", err, compacted)
+	}
+	var sizes struct {
+		OK              bool  `json:"ok"`
+		FileBytesBefore int64 `json:"file_bytes_before"`
+		FileBytesAfter  int64 `json:"file_bytes_after"`
+	}
+	if err := json.Unmarshal([]byte(compacted), &sizes); err != nil {
+		t.Fatalf("compact output: %v (%s)", err, compacted)
+	}
+	if !sizes.OK {
+		t.Fatalf("compact reported %s, want ok", compacted)
+	}
+	if sizes.FileBytesAfter >= sizes.FileBytesBefore {
+		t.Fatalf("compaction must give the dead frames back: %d → %d", sizes.FileBytesBefore, sizes.FileBytesAfter)
+	}
+	if sizes.FileBytesBefore != beforeStats.FileBytes {
+		t.Fatalf("compact saw %d bytes, status reported %d", sizes.FileBytesBefore, beforeStats.FileBytes)
+	}
+
+	// The old session died with the old file: the reconnect lands on the rebuilt
+	// registry entry, and the final version is what the new file holds.
+	alice = connectTenant(t, srv.URL, "alice")
+	final, err := callClient(t, alice, "memhop_archive_search", map[string]any{
+		"topic_id": turn.NewTopicID, "kind": "utterance"})
+	if err != nil {
+		t.Fatalf("search after compact: %v", err)
+	}
+	if !strings.Contains(final, "version 9 of one line") || strings.Contains(final, "version 8") {
+		t.Fatalf("the compacted file holds %s, want only the last version", final)
+	}
+	live, err := callClient(t, alice, "memhop_status", map[string]any{})
+	if err != nil {
+		t.Fatalf("status after compact: %v", err)
+	}
+	var afterStats struct {
+		Closed      bool  `json:"closed"`
+		RecordCount int64 `json:"record_count"`
+	}
+	if err := json.Unmarshal([]byte(live), &afterStats); err != nil {
+		t.Fatalf("status output: %v (%s)", err, live)
+	}
+	if afterStats.Closed {
+		t.Fatal("the reopened database must not report closed")
+	}
+	if afterStats.RecordCount == 0 {
+		t.Fatal("the reopened database lost its records")
 	}
 }

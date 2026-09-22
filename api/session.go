@@ -6,11 +6,11 @@
 // method itself, so the surface is exactly what this file lists. Every call is
 // serialized per agent domain by the internal domain lock.
 //
-// The methods split by audience. The runtime/task face (19) is what the host
-// drives every turn and what LLM tools bind to: Search, Update, Dream,
+// The methods split by audience. The runtime/task face (18) is what the host
+// drives every turn and what LLM tools bind to: Search, Settle, Dream,
 // AppendArchive (the host-driven loop), SceneContext, ListScenes, GetL0,
 // UpdateL0, ListL1, SearchL4, GetL3, ListL3, ImportL3, QueryL3Nodes,
-// QueryL3Subgraph, PlanCreate, PlanNodeAdd, PlanNodeUpdate, PlanState.
+// QueryL3Subgraph, PlanNodeAdd, PlanNodeUpdate, PlanState.
 // The assembly/admin face (7) is host code at session boundaries and management
 // channels rather than the per-turn loop: UpdateScene, RenameTopic, MergeScenes,
 // DeleteTopic, DeleteScene, UpdateL3, DeleteL3. Five of them are also MCP tools;
@@ -35,11 +35,13 @@ type Session struct {
 
 // Search reads one scene — the host's session: its record plus its depth-1
 // topics in turn order, and the topic id this read opened for the turn the
-// host is about to run. An empty SearchQuery.SceneID allocates a fresh scene, which
-// SearchQuery.L3ID may anchor to an L3 project domain; naming a scene that already
-// exists together with an L3ID is refused (ErrInvalidQuery) instead of leaving that
-// anchor where the host cannot see it did nothing; UpdateScene moves the anchor of a
-// scene that exists.
+// host is about to run. It is the loop's one write-shaped read: opening a turn
+// advances the scene's turn counter, so a host calls it once per turn and not
+// as a poll — the pure read is SceneContext. An empty SearchQuery.SceneID
+// allocates a fresh scene, which SearchQuery.L3ID may anchor to an L3 project
+// domain; naming a scene that already exists together with an L3ID is refused
+// (ErrInvalidQuery) instead of leaving that anchor where the host cannot see it
+// did nothing; UpdateScene moves the anchor of a scene that exists.
 func (s *Session) Search(q SearchQuery) (*SearchResult, error) {
 	res, err := s.session.Search(q)
 	if err != nil {
@@ -48,13 +50,22 @@ func (s *Session) Search(q SearchQuery) (*SearchResult, error) {
 	return fromSearchResult(res), nil
 }
 
-// Update distills one finished turn into the keyword track of topicID, the id
-// Search opened for it, and reads that topic's appended utterances as the turn's
-// content: it writes no content of its own. One LLM call, inside the domain lock.
-// A turn whose content the retention window already reclaimed is refused with
-// ErrInvalidQuery instead of getting an empty track.
-func (s *Session) Update(sceneID, topicID string) error {
-	return s.session.Update(sceneID, topicID)
+// Settle closes one turn: it distills the utterances appended under topicID —
+// the id Search opened for it — into that topic's keyword track and returns the
+// topic as stored, the distilled track among its fields, so closing a turn needs
+// no second read to see what the turn was distilled into. It writes no content of
+// its own. One LLM call, inside the domain lock; a failed call leaves the turn
+// unsettled and the scene exactly as it was, and re-running Settle on the same
+// topic re-distills from what the topic holds. A turn whose content the retention
+// window already reclaimed is refused with ErrInvalidQuery instead of getting an
+// empty track.
+func (s *Session) Settle(sceneID, topicID string) (*TopicSlot, error) {
+	topic, err := s.session.Settle(sceneID, topicID)
+	if err != nil {
+		return nil, err
+	}
+	out := fromTopicSlot(*topic)
+	return &out, nil
 }
 
 // GetL0 returns the profile without the internal id_hash. A domain whose profile
@@ -232,14 +243,23 @@ func (s *Session) SearchL4(q L4Query) ([]ArchiveSlot, error) {
 }
 
 // AppendArchive writes one piece of a turn's content under topicID — the id Search
-// opened for it — and is the only way content enters a topic. KindUtterance is
+// opened for it, keyed to the scene that turn belongs to — and is the only way
+// content enters a topic. sceneID names the scene Search read, and the pair is
+// checked before anything is stored: topicID has to be a turn key that scene
+// opened, so a mistyped or invented id is refused (an unknown scene with
+// ErrNotFound, a key outside the scene's turns with ErrInvalidQuery) instead of
+// landing content under a key no read ever lists. KindUtterance is
 // something somebody said; KindEvent is something that happened while they said it.
-// Update distills the utterances of that key, its events come back from SearchL4
+// Settle distills the utterances of that key, its events come back from SearchL4
 // under a Kind condition, and the plan tree sharing the key comes back from
 // PlanState.
 //
+// The slot the record took is what this call returns: a Seq of 0 asks the library
+// to allocate one above everything the topic holds, and the address it chose comes
+// back — the address a replay rewrites. Read the same shape back from SearchL4.
+//
 // What is stored of what you hand in is Kind, Seq, Role, ContentType, EventType,
-// NodeSeq, Content and CreatedAt; IDHash and TopicID are ignored, which is what makes
+// NodeSeq, Content and CreatedAt; ID and TopicID are ignored, which is what makes
 // the round trip work — read a record back, change one field, write it to the slot it
 // came from. CreatedAt is yours to supply and the library never stamps it: a turn
 // records when things were said, not when the write happened. It is milliseconds since
@@ -271,25 +291,28 @@ func (s *Session) SearchL4(q L4Query) ([]ArchiveSlot, error) {
 // calls holding the domain lock.
 //
 // NodeSeq attributes an event to one step of this turn's plan tree, and that step
-// has to exist already: PlanCreate and PlanNodeAdd are the only writes that ever
-// create a step, so an event naming an ordinal nobody created is refused rather
-// than answered with a fresh branch, and a mistyped ordinal cannot open a second
-// tree. 0 attributes the event to no step at all.
+// has to exist already: PlanNodeAdd is the only write that ever creates a step, so
+// an event naming an ordinal nobody created is refused rather than answered with a
+// fresh branch, and a mistyped ordinal cannot open a second tree. 0 attributes the
+// event to no step at all.
 //
 // EventType is the host's own word for the step: the engine never branches on it,
 // it comes back verbatim through SearchL4.
 // These conventions are a shared vocabulary for the reader, not an accepted set:
 // plan_step, llm_request, llm_output, tool_call, tool_result, subagent_spawn,
 // subagent_done, context_inject, ask_user, user_reply.
-func (s *Session) AppendArchive(topicID string, slot ArchiveSlot) error {
-	return s.session.AppendArchive(topicID, toCoreAppendSlot(slot))
+func (s *Session) AppendArchive(sceneID, topicID string, slot ArchiveSlot) (uint64, error) {
+	return s.session.AppendArchive(sceneID, topicID, toCoreAppendSlot(slot))
 }
 
-// PlanCreate opens a turn's plan tree by creating its first step, and returns the
-// ordinal that step is addressed by from here on. topicID names the turn that
-// opened the tree — the id Search handed out for it, which the host only ever
-// passes back. A tree starts with no steps at all, so this is also how a plan
-// first appears under a turn.
+// PlanNodeAdd adds one step to a turn's plan tree and returns its ordinal.
+// parentSeq 0 hangs the step at the top level and opens the turn's tree — a tree
+// starts with no steps, so the first root step is how a plan first appears under a
+// turn, and there is no separate create call. topicID names the turn the tree
+// belongs to — the id Search handed out for it, which the host only ever passes
+// back. Any other parentSeq must name a step this tree already holds —
+// PlanNodeAdd under an unknown parent is refused rather than answered by growing
+// one.
 //
 // The returned ordinal is the library's to hand out and the host's to keep: it is
 // never derived from a title, and no two steps of one turn are ever live at the
@@ -297,23 +320,14 @@ func (s *Session) AppendArchive(topicID string, slot ArchiveSlot) error {
 // ordinals it removed, and an event that outlived the step it names keeps that
 // number — so a host returning to a turn older than the retention window treats
 // an ordinal it held before as a new step's address, not as the same step.
-func (s *Session) PlanCreate(topicID string, title string) (uint32, error) {
-	return s.session.PlanCreate(topicID, title)
-}
-
-// PlanNodeAdd adds one step to a turn's plan tree and returns its ordinal.
-// parentSeq 0 hangs the step at the top level, so this is also how a second root
-// joins the forest; any other value must name a step this tree already holds —
-// PlanNodeAdd under an unknown parent is refused rather than answered by growing
-// one.
 //
 // One refusal is durable rather than one-shot: if the address the next ordinal
 // names holds a record the engine cannot read back, the create reports that read's
 // own code, and the next call reports it again — the library will not step around a
 // record it cannot read in order to hand out a neighbouring number.
 //
-// This is the only way a step comes into existence. Nothing is written when either
-// create call returns an error, and a step's title may be filled in later by
+// This is the only way a step comes into existence. Nothing is written when the
+// call returns an error, and a step's title may be filled in later by
 // PlanNodeUpdate, which is why an empty title here is allowed: the view falls back
 // to the ordinal until the host names the step.
 func (s *Session) PlanNodeAdd(topicID string, parentSeq uint32, title string) (uint32, error) {
@@ -394,8 +408,8 @@ func (s *Session) SceneContext(sceneID string) (*SceneContext, error) {
 // The primary's name and anchor win, and nothing comes back — re-read the
 // primary to see the merged history.
 //
-// Settle before merging. A turn Search opened on a secondary scene and Update
-// never settled has no topic record yet — settling is what writes one — so it is
+// Settle before merging. A turn Search opened on a secondary scene and never
+// settled has no topic record yet — settling is what writes one — so it is
 // not among the topics this retargets. Its id names a scene that is now gone, the
 // turn can never be settled, and whatever the host appended under it is reclaimed
 // by the retention window like any other transcript.
@@ -418,7 +432,7 @@ func (s *Session) DeleteScene(sceneID string) error {
 
 // DeleteTopic removes one topic and its whole subtree (children at any depth)
 // with all of their L4 content and the plan trees those turns opened — the
-// memory-correction counterpart of Update. Nothing is left hanging: the subtree
+// memory-correction counterpart of Settle. Nothing is left hanging: the subtree
 // goes with the topic, so a surviving topic never keeps a parent that is gone.
 // Deleting a topic that does not exist is an error, not a no-op.
 //

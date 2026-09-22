@@ -94,7 +94,7 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    直到重启重建索引，前者留下一条陈旧的 `LastActiveAt` 让死树长期豁免清扫。
 6. **L5 键全零保留**：`0` 是每条记录未赋键时的值，故 `0000000000000000` 不是
    合法的 L5 键。读写两侧一律经 `content.ParseTopicID` 拒它——写侧
-   `AppendArchive`/`PlanCreate`/`PlanNodeAdd`/`PlanNodeUpdate`/`PlanState`，读与改侧
+   `AppendArchive`/`PlanNodeAdd`/`PlanNodeUpdate`/`PlanState`，读与改侧
    `SearchL4` 的话题过滤、`RenameTopic`、`DeleteTopic`。两侧都要拒，各有一半代价：
    写侧放过它，全零键下就会攒出永远读不出的记录；读侧放过它，一个根本没拿到键的
    查询会收到空清单，与一轮真的没内容分不清。
@@ -336,8 +336,8 @@ internal/{domain,scene,turn,dream,graph,plan,content}
 11. **`DB.CompactTo`**：core 的 `Compact` 用 `Create`（带
    `O_TRUNC`）在新路径写整理副本，故根层先拒空路径、拒当前库文件
    （`sameFile` 走绝对路径归一）与拒已存在的目标，绝不覆盖任何既有文件。
-12. **节点只由创建口带出来，重述口只改字段**：`PlanCreate`/`PlanNodeAdd` 是唯一
-   能让一个步骤存在的两个入口，序号由 `PlanCache.NextSeq` 在该轮的树上从 1 起顺序
+12. **节点只由创建口带出来，重述口只改字段**：`PlanNodeAdd` 是唯一
+   能让一个步骤存在的入口（parentSeq 0 即开树），序号由 `PlanCache.NextSeq` 在该轮的树上从 1 起顺序
    发号，宿主只回传、不自造。`parentSeq` 指向树上没有的一步是 `ErrNotFound`：一步
    的父是谁只有宿主知道，为它补出一个父节点是猜，猜错就长出一枝没人计划过的树。
    `PlanNodeUpdate` 只改已存在的这一步——`Status` 每次必须给（留空会被

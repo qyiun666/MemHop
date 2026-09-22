@@ -27,18 +27,19 @@ func runTurn(t *testing.T, sess *Session) {
 	if err != nil {
 		t.Fatalf("search: %v", err)
 	}
+	sceneID := common.FormatHash(res.Scene.SceneID)
 	topicID := common.FormatHash(res.NewTopicID)
 	utterances := []core.ArchiveSlot{
 		{Kind: core.KindUtterance, Seq: core.SeqUser, Role: core.RoleUser, Content: "跑一下测试", CreatedAt: 1000},
 		{Kind: core.KindUtterance, Seq: core.SeqAgent, Role: core.RoleAgent, Content: "全绿", CreatedAt: 2000},
 	}
 	for _, slot := range utterances {
-		if err := sess.AppendArchive(topicID, slot); err != nil {
+		if _, err := sess.AppendArchive(sceneID, topicID, slot); err != nil {
 			t.Fatalf("append: %v", err)
 		}
 	}
-	if err := sess.Update(common.FormatHash(res.Scene.SceneID), topicID); err != nil {
-		t.Fatalf("update: %v", err)
+	if _, err := sess.Settle(sceneID, topicID); err != nil {
+		t.Fatalf("settle: %v", err)
 	}
 }
 

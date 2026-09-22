@@ -50,6 +50,19 @@ func (e *StorageEngine) Contains(agentID, idHash uint64) bool {
 	return ok
 }
 
+// Stats reports the whole-file view: the mapped size in bytes — the file's size,
+// the mapping covers it end to end — and the number of live records across every
+// domain. Read-only diagnostics for the layers above; a closed engine reports
+// zeros.
+func (e *StorageEngine) Stats() (sizeBytes int64, records int) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	if e.closed {
+		return 0, 0
+	}
+	return int64(len(e.mmap)), e.totalRecordsLocked()
+}
+
 // IndexByType iterates all idHashes of a record type inside one agent
 // domain over a snapshot; the yield runs lock-free. A closed engine yields
 // nothing.

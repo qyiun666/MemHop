@@ -109,11 +109,12 @@ func turn(db *memhop.Session, sceneID, topicID, user, agent string) error {
 		{Kind: memhop.KindUtterance, Seq: 2, Role: memhop.RoleAgent, Content: agent, CreatedAt: ts + 1},
 	}
 	for _, u := range utterances {
-		if err := db.AppendArchive(topicID, u); err != nil {
+		if _, err := db.AppendArchive(sceneID, topicID, u); err != nil {
 			return err
 		}
 	}
-	return db.Update(sceneID, topicID)
+	_, err := db.Settle(sceneID, topicID)
+	return err
 }
 
 func TestInterfaceOpenClose(t *testing.T) {
@@ -183,14 +184,14 @@ func TestInterfaceSearchUpdateL2L4(t *testing.T) {
 	// what refuses it — content is addressed by topic alone, so running the whole
 	// host loop here would rewrite the turn under test before failing.
 	other := openSession(t, db)
-	if err := db.Update(other, topicID); err == nil {
+	if _, err := db.Settle(other, topicID); err == nil {
 		t.Fatal("settling another scene's turn should fail")
 	}
 	if surface, err := db.Search(memhop.SearchQuery{SceneID: other}); err != nil || len(surface.Topics) != 0 {
 		t.Fatalf("the refused cross-scene turn landed somewhere: %d topics, err %v", len(surface.Topics), err)
 	}
 	// An empty record is refused where it is written, not where it is distilled.
-	if err := db.AppendArchive(topicID, memhop.ArchiveSlot{
+	if _, err := db.AppendArchive(sceneID, topicID, memhop.ArchiveSlot{
 		Kind: memhop.KindUtterance, Role: memhop.RoleUser, CreatedAt: 1,
 	}); err == nil {
 		t.Fatal("an utterance with no content should fail")
@@ -213,7 +214,7 @@ func TestInterfaceSearchUpdateL2L4(t *testing.T) {
 	if len(arcs) == 0 {
 		t.Fatal("SearchL4 should find archives by keyword")
 	}
-	if one, err := db.SearchL4(internal.L4Query{IDs: []string{arcs[0].IDHash}}); err != nil || len(one) != 1 {
+	if one, err := db.SearchL4(internal.L4Query{IDs: []string{arcs[0].ID}}); err != nil || len(one) != 1 {
 		t.Fatalf("archive by id: %d found, err %v", len(one), err)
 	}
 }
@@ -272,15 +273,15 @@ func TestInterfaceUpdateRefusesAnOffContractReply(t *testing.T) {
 		{Kind: memhop.KindUtterance, Seq: 1, Role: memhop.RoleUser, Content: "用户要求重构代码", CreatedAt: ts},
 		{Kind: memhop.KindUtterance, Seq: 2, Role: memhop.RoleAgent, Content: "好的,我来重构这段代码", CreatedAt: ts + 1},
 	} {
-		if err := db.AppendArchive(topicID, u); err != nil {
+		if _, err := db.AppendArchive(sceneID, topicID, u); err != nil {
 			t.Fatalf("AppendArchive: %v", err)
 		}
 	}
 
 	llm.offContract = "这不是契约里的回包"
-	err := db.Update(sceneID, topicID)
+	_, err := db.Settle(sceneID, topicID)
 	if memhop.CodeOf(err) != memhop.ErrLLM {
-		t.Fatalf("Update over an off-contract reply = %v (code %d), want the LLM code %d",
+		t.Fatalf("Settle over an off-contract reply = %v (code %d), want the LLM code %d",
 			err, memhop.CodeOf(err), memhop.ErrLLM)
 	}
 	if llm.calls["keywords"] == 0 {

@@ -36,21 +36,22 @@ func openTurn(t *testing.T, db *DB) (uint64, uint64) {
 
 // appendTurn is the host's half of a turn: the two originals in the two slots
 // dialogue owns, under the timestamps the topic will report.
-func appendTurn(t *testing.T, db *DB, topicID uint64, userTS int64) {
+func appendTurn(t *testing.T, db *DB, sceneID, topicID uint64, userTS int64) {
 	t.Helper()
 	slots := []core.ArchiveSlot{
 		{Kind: core.KindUtterance, Seq: core.SeqUser, Role: core.RoleUser, Content: userTurnText, CreatedAt: userTS},
 		{Kind: core.KindUtterance, Seq: core.SeqAgent, Role: core.RoleAgent, Content: agentTurnText, CreatedAt: userTS + 1000},
 	}
 	for _, slot := range slots {
-		if err := db.AppendArchive(core.DefaultAgentID, common.FormatHash(topicID), slot); err != nil {
+		if _, err := db.AppendArchive(core.DefaultAgentID, common.FormatHash(sceneID), common.FormatHash(topicID), slot); err != nil {
 			t.Fatalf("AppendArchive seq %d: %v", slot.Seq, err)
 		}
 	}
 }
 
 func settle(db *DB, sceneID, topicID uint64) error {
-	return db.Update(core.DefaultAgentID, common.FormatHash(sceneID), common.FormatHash(topicID))
+	_, err := db.Settle(core.DefaultAgentID, common.FormatHash(sceneID), common.FormatHash(topicID))
+	return err
 }
 
 // archivesOfTopic reads what a topic owns straight off the archive records, so
@@ -73,7 +74,7 @@ func TestUpdateWritesOneTurnTopic(t *testing.T) {
 	srv, calls := countingLLMServer(t, turnKeywords)
 	db := newSearchTestDB(t, srv.URL)
 	sceneID, topicID := openTurn(t, db)
-	appendTurn(t, db, topicID, 1000)
+	appendTurn(t, db, sceneID, topicID, 1000)
 
 	if err := settle(db, sceneID, topicID); err != nil {
 		t.Fatalf("Update: %v", err)
@@ -140,7 +141,7 @@ func TestUpdateSettlesEachScenesTurnsInOrder(t *testing.T) {
 		{second.NewTopicID, 3000}, // the later turn settles first
 		{firstID, 1000},
 	} {
-		appendTurn(t, db, settleTurn.topicID, settleTurn.userTS)
+		appendTurn(t, db, sceneID, settleTurn.topicID, settleTurn.userTS)
 		if err := settle(db, sceneID, settleTurn.topicID); err != nil {
 			t.Fatalf("Update: %v", err)
 		}
@@ -195,8 +196,8 @@ func TestUpdateValidatesIds(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			appendTurn(t, db, topicID, 1000)
-			if err := db.Update(core.DefaultAgentID, tc.scene, tc.topic); common.CodeOf(err) != common.ErrInvalidQuery {
+			appendTurn(t, db, sceneID, topicID, 1000)
+			if _, err := db.Settle(core.DefaultAgentID, tc.scene, tc.topic); common.CodeOf(err) != common.ErrInvalidQuery {
 				t.Fatalf("err = %v, want ErrInvalidQuery", err)
 			}
 		})
@@ -236,7 +237,7 @@ func TestUpdateDistillFailureLeavesNoTopic(t *testing.T) {
 	srv := failingLLMServer(t, http.StatusBadRequest)
 	db := newSearchTestDB(t, srv.URL)
 	sceneID, topicID := openTurn(t, db)
-	appendTurn(t, db, topicID, 1000)
+	appendTurn(t, db, sceneID, topicID, 1000)
 
 	archivesBefore := countRecords(db.engine, core.DefaultAgentID, core.RecL4Archive)
 	if err := settle(db, sceneID, topicID); common.CodeOf(err) != common.ErrLLM {
@@ -255,7 +256,7 @@ func TestUpdateRejectsEmptyExtraction(t *testing.T) {
 	srv := mockLLMServer(t, `{"keywords":[]}`)
 	db := newSearchTestDB(t, srv.URL)
 	sceneID, topicID := openTurn(t, db)
-	appendTurn(t, db, topicID, 1000)
+	appendTurn(t, db, sceneID, topicID, 1000)
 
 	if err := settle(db, sceneID, topicID); common.CodeOf(err) != common.ErrLLM {
 		t.Fatalf("err = %v, want ErrLLM", err)
@@ -272,7 +273,7 @@ func TestUpdateDistillsRenderedTranscript(t *testing.T) {
 	srv, seen := recordingLLMServer(t, turnKeywords)
 	db := newSearchTestDB(t, srv.URL)
 	sceneID, topicID := openTurn(t, db)
-	appendTurn(t, db, topicID, 1000)
+	appendTurn(t, db, sceneID, topicID, 1000)
 
 	if err := settle(db, sceneID, topicID); err != nil {
 		t.Fatalf("Update: %v", err)
@@ -348,7 +349,7 @@ func TestUpdateReplayIsIdempotent(t *testing.T) {
 	srv := mockLLMServer(t, turnKeywords)
 	db := newSearchTestDB(t, srv.URL)
 	sceneID, topicID := openTurn(t, db)
-	appendTurn(t, db, topicID, 1000)
+	appendTurn(t, db, sceneID, topicID, 1000)
 
 	if err := settle(db, sceneID, topicID); err != nil {
 		t.Fatalf("Update: %v", err)
@@ -379,7 +380,7 @@ func TestUpdateReplayOverwritesPriorContent(t *testing.T) {
 	srv := mockLLMServer(t, turnKeywords)
 	db := newSearchTestDB(t, srv.URL)
 	sceneID, topicID := openTurn(t, db)
-	appendTurn(t, db, topicID, 1000)
+	appendTurn(t, db, sceneID, topicID, 1000)
 	if err := settle(db, sceneID, topicID); err != nil {
 		t.Fatalf("first Update: %v", err)
 	}
@@ -389,7 +390,7 @@ func TestUpdateReplayOverwritesPriorContent(t *testing.T) {
 		{Kind: core.KindUtterance, Seq: core.SeqAgent, Role: core.RoleAgent, Content: "同一时刻只允许一个可变借用", CreatedAt: 2000},
 	}
 	for _, slot := range revised {
-		if err := db.AppendArchive(core.DefaultAgentID, common.FormatHash(topicID), slot); err != nil {
+		if _, err := db.AppendArchive(core.DefaultAgentID, common.FormatHash(sceneID), common.FormatHash(topicID), slot); err != nil {
 			t.Fatalf("revised append: %v", err)
 		}
 	}
@@ -426,7 +427,7 @@ func TestUpdateRejectsForeignOrFusedTopic(t *testing.T) {
 	srv, calls := countingLLMServer(t, turnKeywords)
 	db := newSearchTestDB(t, srv.URL)
 	sceneID, topicID := openTurn(t, db)
-	appendTurn(t, db, topicID, 1000)
+	appendTurn(t, db, sceneID, topicID, 1000)
 
 	// A fused group: depth-2 child under a depth-1 fused parent, as Dream leaves it.
 	fusedParent := core.ComputeTopicID(sceneID, 500, 600)
@@ -476,7 +477,7 @@ func TestUpdateReplayKeepsASunkTurnSunk(t *testing.T) {
 	srv, _ := countingLLMServer(t, turnKeywords)
 	db := newSearchTestDB(t, srv.URL)
 	sceneID, topicID := openTurn(t, db)
-	appendTurn(t, db, topicID, 1000)
+	appendTurn(t, db, sceneID, topicID, 1000)
 	if err := settle(db, sceneID, topicID); err != nil {
 		t.Fatalf("first settle: %v", err)
 	}

@@ -26,11 +26,10 @@ type archiveSearchArgs struct {
 	Limit   int      `json:"limit,omitempty"`
 }
 
-// archiveAppendArgs is one content record as a host hands it over the wire: kind
-// says which track it belongs to, role says who spoke (utterances only), and seq
-// left at 0 lets the library pick the slot.
-type archiveAppendArgs struct {
-	TopicID     string `json:"topic_id"`
+// archiveAppendItem is one content record of a batch: kind says which track it
+// belongs to, role says who spoke (utterances only), and seq left at 0 lets the
+// library pick the slot.
+type archiveAppendItem struct {
 	Content     string `json:"content"`
 	Timestamp   int64  `json:"timestamp"`
 	Kind        string `json:"kind,omitempty"`
@@ -39,6 +38,24 @@ type archiveAppendArgs struct {
 	EventType   string `json:"event_type,omitempty"`
 	NodeSeq     uint32 `json:"node_seq,omitempty"`
 	Seq         uint64 `json:"seq,omitempty"`
+}
+
+// archiveAppendArgs is one batch write into one turn: the turn is keyed by
+// (scene_id, topic_id) — the pair the key validation checks together — and the
+// records ride in items, one append each.
+type archiveAppendArgs struct {
+	SceneID string              `json:"scene_id"`
+	TopicID string              `json:"topic_id"`
+	Items   []archiveAppendItem `json:"items"`
+}
+
+// appendResult reports the slot each item took, in item order. On a mid-batch
+// failure the seqs of the items that did land come back beside the error, so a
+// host can tell a partial batch from an empty one and re-drive only the rest —
+// or re-drive the whole batch with explicit seqs, since a named slot overwrites.
+type appendResult struct {
+	OK   bool     `json:"ok"`
+	Seqs []uint64 `json:"seqs"`
 }
 
 // contentTypeNames maps human-readable content type names to ContentType
@@ -153,77 +170,98 @@ func registerL4Tools(s *mcp.Server, db *memhop.Session) {
 	registerTurnEventsTool(s, db)
 }
 
-// turnEventsArgs names one turn by the topic id Search issued for it. The wire
-// name is the one MCP clients already send.
+// turnEventsArgs names one turn by the topic id Search issued for it.
 type turnEventsArgs struct {
-	SessionID string `json:"session_id"`
+	TopicID string `json:"topic_id"`
 }
 
 // registerTurnEventsTool installs the per-turn event read. It is a convenience
 // over memhop_archive_search with the kind pinned to event: a host that wants one
 // turn's operation log should not have to restate the filter. Retention is
-// automatic — Dream drops content older than 7 days — so there is no delete tool.
+// automatic — Dream drops content older than the retention window (seven days
+// by default) — so there is no delete tool.
 func registerTurnEventsTool(s *mcp.Server, db *memhop.Session) {
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_trajectory_read",
-		Description: "读取本轮的全部操作事件（按 Seq 升序）。本轮的计划节点不在这一读里——它们住在 L5，Go 侧用 PlanState 取。",
+		Description: "读取本轮的全部操作事件（按 Seq 升序）。topic_id 是本轮的话题 ID（16 位 hex，本轮 memhop_search 返回的 new_topic_id），不是场景 ID：场景 ID 过不了键校验，直接被拒。本轮的计划节点不在这一读里——它们住在 L5，Go 侧用 PlanState 取。",
 		InputSchema: objSchema(map[string]any{
-			"session_id": strProp("本轮的话题 ID（16 位 hex，本轮 memhop_search 返回值里的那个），必填。不是场景 ID：场景 ID 也解析得过去，读回来是空的事件轨，看起来像这一轮什么都没做"),
-		}, "session_id"),
+			"topic_id": strProp("本轮话题 ID（16 位 hex，memhop_search 返回的 new_topic_id），必填"),
+		}, "topic_id"),
 	}, handle[turnEventsArgs, []memhop.ArchiveSlot](func(a turnEventsArgs) ([]memhop.ArchiveSlot, error) {
 		kind := memhop.KindEvent
-		return db.SearchL4(memhop.L4Query{TopicID: &a.SessionID, Kind: &kind})
+		return db.SearchL4(memhop.L4Query{TopicID: &a.TopicID, Kind: &kind})
 	}))
 }
 
 // registerArchiveAppendTool installs the one content write: without it an MCP host
-// could read a turn's content but never produce it, since Update no longer carries
-// texts.
+// could read a turn's content but never produce it, since settling no longer
+// carries texts. One call writes a whole batch into one turn — a turn is several
+// records by construction, so one wire round-trip per record made the common case
+// the slow one.
 func registerArchiveAppendTool(s *mcp.Server, db *memhop.Session) {
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_archive_append",
-		Description: "向本轮写一条 L4 内容（每轮一个键：本轮 memhop_search 铸出的话题 ID）。kind=utterance 写谁说了什么（role 必填：user/agent/system），kind=event 写发生了什么（event_type 必填，由宿主自定；惯例：llm_request/llm_output/tool_call/tool_result/subagent_spawn/subagent_done/context_inject/ask_user/user_reply）。seq 不填即库分配：事件恒从 3 起，槽 1/2 留给对话；显式写一个已被占用的 seq 是覆写而非报错（重放因此收敛）。内容超预算直接拒写、不截断（事件整条 4KB——名字与正文合计；原文 64KB）。带 node_seq 的事件必须绑到本轮计划里已创建的步骤——步骤由 Go 侧 PlanCreate/PlanNodeAdd 创建（本工具面不暴露计划写面），所以纯 MCP 宿主用不了 node_seq。一切校验先于写入，被拒不留下任何记录与节点。",
+		Description: "向本轮写入一批 L4 内容（每轮一个键：scene_id 是该轮所属场景，topic_id 是 memhop_search 为本轮铸出的话题 ID；键对不上场景直接拒 [1003]，不产生任何孤儿内容）。items 数组逐条落盘，返回每条占用的槽位 seqs（与 items 同序同长）。单条规则：kind=utterance 写谁说了什么（role 必填：user/agent/system），kind=event 写发生了什么（event_type 必填，宿主自定；惯例：llm_request/llm_output/tool_call/tool_result/subagent_spawn/subagent_done/context_inject/ask_user/user_reply）。seq 不填即库分配：事件恒从 3 起，槽 1/2 留给对话；显式写一个已被占用的 seq 是覆写而非报错（重放因此收敛——用显式 seq 重跑同一批 items 是安全的，自动分配的条目重跑会再占新槽）。内容超预算直接拒写、不截断（事件整条 4KB——名字与正文合计；原文 64KB）。带 node_seq 的事件必须绑到本轮计划里已创建的步骤——步骤由 Go 侧计划写面创建（本工具面不暴露），纯 MCP 宿主用不了 node_seq。逐条校验先于写入：一条被拒只停在那一条，前面已落的 seqs 随错误一起返回。",
 		InputSchema: objSchema(map[string]any{
-			"topic_id":     strProp("本轮话题 ID（16 位 hex），必填"),
-			"kind":         strProp("utterance（对话原文，缺省）| event（操作事件）"),
-			"role":         strProp("说话者：user | agent | system（kind=utterance 必填）"),
-			"content":      strProp("内容本体；媒体类型的 content 存路径"),
-			"content_type": strProp("内容类型：text（缺省）| image | video | document | audio | code | other；仅 kind=utterance 采信，event 无媒介、恒存 text"),
-			"event_type":   strProp("事件名（kind=event 必填，任意非空宿主命名；与正文合计计入事件那条 4KB 预算）"),
-			"node_seq":     intProp("事件绑到哪一步（仅 kind=event，轮次内步骤序号）；该步必须已由 Go 侧 PlanCreate/PlanNodeAdd 创建，本工具面不建节点"),
-			"seq":          intProp("写入的槽位；0/不填 = 库自动分配（自动分配跳过 1/2）"),
-			"timestamp":    intProp("Unix 毫秒时间戳，必填"),
-		}, "topic_id", "content", "timestamp"),
-	}, handle[archiveAppendArgs, updateResult](func(a archiveAppendArgs) (updateResult, error) {
-		slot, err := toAppendSlot(a)
-		if err != nil {
-			return updateResult{}, err
+			"scene_id": strProp("场景 ID（16 位 hex），必填，须已存在——本轮归属的场景"),
+			"topic_id": strProp("本轮话题 ID（16 位 hex），必填，取自 memhop_search 的 new_topic_id"),
+			"items": map[string]any{
+				"type":        "array",
+				"description": "要写入的记录数组，每条对象字段：content（必填，正文/媒体路径）、timestamp（必填，Unix 毫秒）、kind（utterance 缺省 | event）、role（utterance 必填：user|agent|system）、content_type（text 缺省 | image | video | document | audio | code | other，仅 utterance 采信）、event_type（event 必填）、node_seq（仅 event，绑定的步骤序号）、seq（槽位；0/不填 = 库自动分配）",
+				"items": map[string]any{
+					"type":                 "object",
+					"additionalProperties": true,
+				},
+			},
+		}, "scene_id", "topic_id", "items"),
+	}, handle[archiveAppendArgs, appendResult](func(a archiveAppendArgs) (appendResult, error) {
+		if len(a.Items) == 0 {
+			return appendResult{}, memhop.NewError(memhop.ErrInvalidQuery, "items is empty: name at least one record to append")
 		}
-		return updateResult{OK: true}, db.AppendArchive(a.TopicID, slot)
+		// Resolve every item's wire vocabulary before any record is written, so
+		// a misspelled kind or role refuses the whole batch instead of half of it.
+		slots := make([]memhop.ArchiveSlot, len(a.Items))
+		for i, item := range a.Items {
+			slot, err := toAppendSlot(item)
+			if err != nil {
+				return appendResult{}, fmt.Errorf("items[%d]: %w", i, err)
+			}
+			slots[i] = slot
+		}
+		out := appendResult{Seqs: make([]uint64, 0, len(slots))}
+		for i, slot := range slots {
+			seq, err := db.AppendArchive(a.SceneID, a.TopicID, slot)
+			if err != nil {
+				return out, fmt.Errorf("items[%d]: %w", i, err)
+			}
+			out.Seqs = append(out.Seqs, seq)
+		}
+		out.OK = true
+		return out, nil
 	}))
 }
 
-// toAppendSlot turns the wire arguments into the content DTO, resolving the three
+// toAppendSlot turns one wire item into the content DTO, resolving the three
 // name-valued axes before the DB is touched so an unknown name is a bad argument
 // rather than a silent default.
-func toAppendSlot(a archiveAppendArgs) (memhop.ArchiveSlot, error) {
-	kind, err := resolveArchiveKind(a.Kind)
+func toAppendSlot(item archiveAppendItem) (memhop.ArchiveSlot, error) {
+	kind, err := resolveArchiveKind(item.Kind)
 	if err != nil {
 		return memhop.ArchiveSlot{}, err
 	}
-	ct, err := resolveContentType(a.ContentType)
+	ct, err := resolveContentType(item.ContentType)
 	if err != nil {
 		return memhop.ArchiveSlot{}, err
 	}
 	slot := memhop.ArchiveSlot{
-		Kind: kind, Seq: a.Seq, ContentType: ct,
-		EventType: a.EventType, NodeSeq: a.NodeSeq,
-		CreatedAt: a.Timestamp, Content: a.Content,
+		Kind: kind, Seq: item.Seq, ContentType: ct,
+		EventType: item.EventType, NodeSeq: item.NodeSeq,
+		CreatedAt: item.Timestamp, Content: item.Content,
 	}
 	if kind != memhop.KindUtterance {
 		return slot, nil
 	}
-	role, err := resolveRole(a.Role)
+	role, err := resolveRole(item.Role)
 	if err != nil {
 		return memhop.ArchiveSlot{}, err
 	}

@@ -23,9 +23,9 @@ type (
 	// own default (120 seconds, 8192 tokens).
 	LlmConfig = internal.LlmConfig
 	// MemHopDefaults holds the host-facing business knobs (consolidation
-	// thresholds and the idle-domain TTL); engine tuning constants are
-	// package-private. Exported so hosts can name the type instead of copying
-	// DefaultMemHopDefaults.
+	// thresholds, the idle-domain TTL and the content retention window);
+	// engine tuning constants are package-private. Exported so hosts can name
+	// the type instead of copying DefaultMemHopDefaults.
 	MemHopDefaults = internal.MemHopDefaults
 )
 
@@ -155,7 +155,8 @@ type (
 	// written to. Seq is the slot the line holds in a space its topic's events
 	// share, so the gaps in it are the slots this read did not get back — a turn
 	// keeps its own numbering and the first two slots belong to the dialogue.
-	// Content is the line itself, or a path for a non-text Type.
+	// Content is the line itself, or a path for a non-text Type. CreatedAt is
+	// milliseconds since the epoch.
 	SceneMessage = internal.SceneMessage
 )
 
@@ -224,19 +225,24 @@ type ProfileInput struct {
 // the pipeline is the only writer. Importance starts at 1.0 when the scene gains
 // its first turn and only falls from there; Valence runs 0 = very negative →
 // 0.5 = neutral → 1 = very positive and Arousal 0 = calm → 1 = highly excited, so
-// a 0 here is an extreme reading, not a missing one. TopicIDs are the depth-1 and
-// depth-2 topics the last Dream's sync found under the scene — a snapshot, not a
-// live listing. EdgeIDs name the co-occurrence edges incident on the node. An edge
-// has no read of its own, so those ids are useful exactly one way — two nodes
-// sharing one are a pair Dream judged related.
+// a 0 here is an extreme reading, not a missing one — EmotionSet is what tells
+// those apart from never-stamped: false means no Dream pass has distilled this
+// node yet, so the two signals carry no reading at all. TopicIDs are the depth-1
+// and depth-2 topics the last Dream's sync found under the scene — a snapshot,
+// not a live listing; a topic created after that pass is not in it, and one
+// deleted since still is until the next pass rebuilds the list. EdgeIDs name the
+// co-occurrence edges incident on the node. An edge has no read of its own, so
+// those ids are useful exactly one way — two nodes sharing one are a pair Dream
+// judged related. CreatedAt and UpdatedAt are milliseconds since the epoch.
 type SceneNodeView struct {
-	IDHash     string   `json:"id_hash"`
+	ID         string   `json:"id"`
 	SceneID    string   `json:"scene_id"`
 	TopicIDs   []string `json:"topic_ids"`
 	EdgeIDs    []string `json:"edge_ids"`
-	Importance float32  `json:"importance"`
+	Importance float64  `json:"importance"`
 	Valence    float64  `json:"valence"`
 	Arousal    float64  `json:"arousal"`
+	EmotionSet bool     `json:"emotion_set"`
 	CreatedAt  int64    `json:"created_at"`
 	UpdatedAt  int64    `json:"updated_at"`
 }
@@ -257,6 +263,10 @@ type SceneSlot struct {
 // ParentID pointing back here.
 // Name is the host's own label for it, written by RenameTopic and never derived
 // by the engine; empty means nobody has named this topic yet.
+// UserTimestamp is the turn's user-message time and AgentTimestamp its reply
+// time (a fused group takes its earliest user and latest agent turn), both in
+// milliseconds since the epoch — the unit every timestamp in this package
+// carries.
 type TopicSlot struct {
 	ID             string   `json:"id"`
 	SceneID        string   `json:"scene_id"`
@@ -283,16 +293,18 @@ type SearchResult struct {
 // HypergraphSlot holds L3 hypergraph container metadata. UpdatedAt is the
 // graph's change clock: an import that writes a node or an edge here moves it, as
 // does a rename, while a batch that changed nothing leaves it where it was.
+// Both timestamps are milliseconds since the epoch.
 type HypergraphSlot struct {
-	IDHash    string `json:"id_hash"`
+	ID        string `json:"id"`
 	Name      string `json:"name"`
 	CreatedAt int64  `json:"created_at"`
 	UpdatedAt int64  `json:"updated_at"`
 }
 
-// HypergraphNode is a node within an L3 hypergraph.
+// HypergraphNode is a node within an L3 hypergraph. CreatedAt and UpdatedAt are
+// milliseconds since the epoch.
 type HypergraphNode struct {
-	IDHash    string   `json:"id_hash"`
+	ID        string   `json:"id"`
 	GraphID   string   `json:"graph_id"`
 	Title     string   `json:"title"`
 	NodeType  string   `json:"node_type"`
@@ -305,12 +317,12 @@ type HypergraphNode struct {
 
 // HypergraphEdge is a hyperedge within an L3 hypergraph: an unordered relation
 // over its member nodes, distinguished by Kind (the edge id covers members and
-// kind, so one node pair can carry several relations at once). IDHash identifies
+// kind, so one node pair can carry several relations at once). ID identifies
 // the edge for a host comparing two reads; no method takes one. An edge is created
 // by ImportL3 and deleted only with its graph by DeleteL3 — no pass edits or decays
-// one.
+// one. CreatedAt is milliseconds since the epoch.
 type HypergraphEdge struct {
-	IDHash    string        `json:"id_hash"`
+	ID        string        `json:"id"`
 	GraphID   string        `json:"graph_id"`
 	Kind      GraphEdgeKind `json:"kind"`
 	NodeIDs   []string      `json:"node_ids"`
@@ -332,7 +344,7 @@ type L3Subgraph struct {
 
 // ArchiveSlot is one record of a topic's L4 content: a dialogue original
 // (KindUtterance) or an operation event (KindEvent) — and the same shape
-// AppendArchive takes, where IDHash and TopicID are ignored and a Seq of 0 asks
+// AppendArchive takes, where ID and TopicID are ignored and a Seq of 0 asks
 // the library for a slot. TopicID is the topic that owns a stored record and Seq
 // the slot it owns there, so (TopicID, Seq) is the address a replay rewrites.
 // Role is what a host declares when it appends — RoleUser / RoleAgent / RoleSystem,
@@ -344,7 +356,7 @@ type L3Subgraph struct {
 // microsecond band is refused rather than stored: the first would be swept as already
 // expired, the second would never expire.
 type ArchiveSlot struct {
-	IDHash      string      `json:"id_hash"`
+	ID          string      `json:"id"`
 	Kind        ArchiveKind `json:"kind"`
 	Seq         uint64      `json:"seq"`
 	ContentType ContentType `json:"content_type"`
@@ -361,6 +373,8 @@ type ArchiveSlot struct {
 // 0 for a step at the top level. A step whose parent is not in this tree heads its
 // own branch all the same and keeps naming that absent step, so the roots of what
 // a read returns are "ParentSeq 0 or not listed here", not just the former.
+// CreatedAt, FinishedAt and UpdatedAt are milliseconds since the epoch; FinishedAt
+// is 0 while the step is still in progress.
 type PlanNodeView struct {
 	Seq        uint32         `json:"seq"`
 	ParentSeq  uint32         `json:"parent_seq"`

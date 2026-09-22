@@ -25,7 +25,6 @@ func jsonRoundtrip(t *testing.T, v any, out any) {
 
 func TestProfileSlotRoundtrip(t *testing.T) {
 	p := ProfileSlot{
-		IDHash:       1,
 		Name:         "Meow",
 		Role:         "assistant",
 		Personality:  "friendly, helpful, curious",
@@ -37,14 +36,27 @@ func TestProfileSlotRoundtrip(t *testing.T) {
 	}
 	var got ProfileSlot
 	jsonRoundtrip(t, p, &got)
-	if got.IDHash != p.IDHash || got.Name != p.Name || got.Personality != p.Personality {
+	if got.Name != p.Name || got.Personality != p.Personality {
 		t.Fatalf("mismatch: %+v", got)
 	}
 	if got.AgentType != AgentTypeSub {
 		t.Fatalf("agent_type mismatch: got %d, want %d", got.AgentType, AgentTypeSub)
 	}
-	if got.EmotionState != p.EmotionState || got.MBTI != p.MBTI {
-		t.Fatalf("distilled signals mismatch: %+v %+v", got.EmotionState, got.MBTI)
+	if got.EmotionState != p.EmotionState {
+		t.Fatalf("emotion mismatch: %+v", got.EmotionState)
+	}
+	// The type word is not stored — even a word the axes contradict stays off the
+	// disk (this literal's "INTJ" is exactly such a drift), and the word a reader
+	// sees is re-derived from the axes: I/S/T/P here.
+	if got.MBTI.IE != p.MBTI.IE || got.MBTI.NS != p.MBTI.NS ||
+		got.MBTI.TF != p.MBTI.TF || got.MBTI.JP != p.MBTI.JP {
+		t.Fatalf("mbti axes mismatch: %+v", got.MBTI)
+	}
+	if got.MBTI.Type != "" {
+		t.Fatalf("the type word must stay off the disk, got %q", got.MBTI.Type)
+	}
+	if d := DeriveMBTIType(got.MBTI); d != "ISTP" {
+		t.Fatalf("derived type: got %q, want ISTP", d)
 	}
 	if got.Preferences["language"] != "Rust" {
 		t.Fatalf("preferences mismatch")

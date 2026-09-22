@@ -18,6 +18,13 @@ type MemHopDefaults struct {
 	DreamCompressMinTopics int `json:"dream_compress_min_topics"`
 	// AgentIdleTTLMs reclaims an idle agent's in-memory contexts (0 disables).
 	AgentIdleTTLMs int64 `json:"agent_idle_ttl_ms"`
+	// ContentRetentionMs is how long a turn's records (L4 content and L5 plan
+	// nodes) outlive it before a Dream sweeps them. A value of 0 or less means
+	// the library default — seven days, the window the engine ships with. There
+	// is no "keep everything" spelling: retention is what bounds the file, and
+	// a host that needs longer-lived originals raises the window rather than
+	// turning the sweep off.
+	ContentRetentionMs int64 `json:"content_retention_ms"`
 }
 
 // DefaultMemHopDefaults is the single hardcoded source of engine defaults.
@@ -28,5 +35,6 @@ type MemHopDefaults struct {
 var DefaultMemHopDefaults = MemHopDefaults{
 	SceneDreamTopicThreshold: 24,
 	DreamCompressMinTopics:   20,
-	AgentIdleTTLMs:           3600000, // 60 minutes of inactivity frees the agent's in-memory indices
+	AgentIdleTTLMs:           3600000,                 // 60 minutes of inactivity frees the agent's in-memory indices
+	ContentRetentionMs:       7 * 24 * 60 * 60 * 1000, // seven days, the engine's own window
 }

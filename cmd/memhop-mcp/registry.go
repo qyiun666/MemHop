@@ -123,7 +123,7 @@ func (r *tenantRegistry) get(tenant string) (*mcp.Server, error) {
 	server := mcp.NewServer(&mcp.Implementation{Name: "memhop", Version: version}, &mcp.ServerOptions{
 		Logger: r.logger,
 	})
-	registerTools(server, db, session)
+	registerTools(server, db, session, r)
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -190,4 +190,96 @@ func (r *tenantRegistry) CloseAll() error {
 	err := r.db.Close()
 	r.db = nil
 	return err
+}
+
+// compactResult reports what a compaction swap gave back.
+type compactResult struct {
+	OK              bool  `json:"ok"`
+	FileBytesBefore int64 `json:"file_bytes_before"`
+	FileBytesAfter  int64 `json:"file_bytes_after"`
+}
+
+// compactScratch is the fixed scratch name the compacted copy is written to
+// inside db-dir. It is a constant so the compaction cannot be pointed at any
+// path outside db-dir, and a leftover from a crashed run is the server's own
+// file to remove before the next attempt.
+const compactScratch = dbFileName + ".compacting"
+
+// compact rewrites the shared file in place: the live database is closed first
+// — which refuses every further call and makes the file quiescent — then a
+// defragmented copy is written to a scratch file inside db-dir, renamed over
+// the original, and the file is reopened. Every tenant entry is dropped, so the
+// next request rebuilds its server on the new handle; calls that were already
+// running on the old handle answer ErrClosed [5002] and the client retries.
+//
+// Closing before copying is what keeps the swap lossless: a copy taken while
+// the database was still open would miss whatever a mid-flight call wrote after
+// the snapshot, and the rename would bury it. With close-first, every confirmed
+// write is in the file the copy reads, and the only thing an in-flight call
+// loses is its own in-flight step.
+//
+// The whole swap holds the registry mutex: it is a few file operations and no
+// LLM round-trip, and a request that arrives during it waits one swap instead
+// of watching the database close under it.
+func (r *tenantRegistry) compact() (compactResult, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
+		return compactResult{}, errRegistryClosed
+	}
+	if r.db == nil {
+		if err := r.openShared(); err != nil {
+			return compactResult{}, err
+		}
+	}
+	beforeStats, err := r.db.Stats()
+	if err != nil {
+		return compactResult{}, err
+	}
+	before := beforeStats.FileBytes
+	mainPath := filepath.Join(r.dbDir, dbFileName)
+
+	// Quiesce: Close checkpoints and refuses every further call, so the copy
+	// below sees exactly what was confirmed and nothing that arrives after.
+	if err := r.db.Close(); err != nil {
+		r.db = nil
+		return compactResult{}, fmt.Errorf("close before compact: %w", err)
+	}
+	r.db = nil
+	clear(r.entries)
+
+	// Copy the now-quiet file into the scratch slot, then swap it in.
+	_ = os.Remove(filepath.Join(r.dbDir, compactScratch))
+	src, err := r.open(mainPath, r.llm, r.defaults, &primaryProfile)
+	if err != nil {
+		return compactResult{}, fmt.Errorf("reopen for compact: %w", err)
+	}
+	if err := src.CompactTo(filepath.Join(r.dbDir, compactScratch)); err != nil {
+		src.Close()
+		return compactResult{}, fmt.Errorf("compact: %w", err)
+	}
+	if err := src.Close(); err != nil {
+		return compactResult{}, fmt.Errorf("close after compact: %w", err)
+	}
+	if err := os.Rename(filepath.Join(r.dbDir, compactScratch), mainPath); err != nil {
+		// The original is still on the main path — reopen it and report.
+		reopened, rerr := r.open(mainPath, r.llm, r.defaults, &primaryProfile)
+		if rerr != nil {
+			return compactResult{}, fmt.Errorf("rename compacted file: %w (and reopen failed: %v)", err, rerr)
+		}
+		r.db = reopened
+		return compactResult{}, fmt.Errorf("rename compacted file: %w", err)
+	}
+	db, err := r.open(mainPath, r.llm, r.defaults, &primaryProfile)
+	if err != nil {
+		// Nothing to fall back to: the original is gone, but the compacted file
+		// is a complete database. The next request retries the open lazily.
+		return compactResult{}, fmt.Errorf("reopen after compact: %w", err)
+	}
+	r.db = db
+	afterStats, err := db.Stats()
+	if err != nil {
+		return compactResult{OK: true, FileBytesBefore: before}, err
+	}
+	return compactResult{OK: true, FileBytesBefore: before, FileBytesAfter: afterStats.FileBytes}, nil
 }

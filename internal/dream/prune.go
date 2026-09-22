@@ -13,19 +13,30 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
-// ContentRetention bounds how long a turn's records outlive it: Dream drops L4
-// content older than this, and plan nodes past it too. Both layers share the one
-// window because both hold the same thing — what happened in one turn — and a
-// topic that keeps neither originals nor events is left with the keyword track
-// that Dream folded out of them, which is the durable product.
+// ContentRetention is the sweep window a domain gets when its host did not
+// configure one: Dream drops L4 content older than this, and plan nodes past it
+// too. Both layers share the one window because both hold the same thing — what
+// happened in one turn — and a topic that keeps neither originals nor events is
+// left with the keyword track that Dream folded out of them, which is the
+// durable product.
 const ContentRetention = 7 * 24 * time.Hour
+
+// retentionWindow resolves the window for one domain: the host's configured
+// value when it set a positive one, the engine default otherwise. There is no
+// "keep everything" spelling — retention is what bounds the file.
+func retentionWindow(ac *domain.Context) time.Duration {
+	if ac.Defaults != nil && ac.Defaults.ContentRetentionMs > 0 {
+		return time.Duration(ac.Defaults.ContentRetentionMs) * time.Millisecond
+	}
+	return ContentRetention
+}
 
 // PruneContentStage drops the L4 records past the retention window, utterances
 // and events alike, and reports how many went away. Best-effort: a failure is
 // logged and recorded in the report but never aborts Dream. Callers hold ac.Mu.
 func PruneContentStage(ac *domain.Context, agentID uint64, rep *core.DreamReport) {
 	start := time.Now()
-	cutoff := time.Now().Add(-ContentRetention).UnixMilli()
+	cutoff := time.Now().Add(-retentionWindow(ac)).UnixMilli()
 	dropped, err := repo.DropExpiredArchives(ac.Engine, agentID, ac.L4, cutoff)
 	if err != nil {
 		slog.Warn("dream: content prune failed", "agent", common.FormatHash(agentID), "err", err)
@@ -45,7 +56,7 @@ func PruneContentStage(ac *domain.Context, agentID uint64, rep *core.DreamReport
 // Best-effort, like the content stage. Callers hold ac.Mu.
 func PrunePlanStage(ac *domain.Context, agentID uint64, rep *core.DreamReport) {
 	start := time.Now()
-	cutoff := time.Now().Add(-ContentRetention).UnixMilli()
+	cutoff := time.Now().Add(-retentionWindow(ac)).UnixMilli()
 	type sweep struct {
 		topicID uint64
 		ids     []uint64

@@ -43,22 +43,25 @@ func eventsOf(t *testing.T, db *Session, topicID string) []ArchiveSlot {
 // inside the window and loses the one outside it.
 func TestSurfaceDreamPrunesExpiredEvents(t *testing.T) {
 	db := openSurfaceDB(t)
-	sessionA := common.FormatHash(common.HashID("lifecycle-a"))
-	sessionB := common.FormatHash(common.HashID("lifecycle-b"))
-	appendOne := func(id string, ts int64) {
-		if err := db.AppendArchive(id, event("llm_request", "asked", ts)); err != nil {
+	sceneA, sessionA := mustTurnKey(t, db)
+	sceneB, sessionB := mustTurnKey(t, db)
+	appendOne := func(scene, id string, ts int64) {
+		if _, err := db.AppendArchive(scene, id, event("llm_request", "asked", ts)); err != nil {
 			t.Fatalf("append %s: %v", id, err)
 		}
 	}
 	fresh := time.Now().Add(-time.Hour).UnixMilli()
-	appendOne(sessionA, 100)
-	appendOne(sessionA, fresh)
-	appendOne(sessionB, 1_700_000_050_000)
+	appendOne(sceneA, sessionA, 100)
+	appendOne(sceneA, sessionA, fresh)
+	appendOne(sceneB, sessionB, 1_700_000_050_000)
 
 	if got := eventsOf(t, db, sessionA); len(got) != 2 {
 		t.Fatalf("both of A's events are inside the window: %+v", got)
 	}
 
+	// The two scenes exist but hold no settled topics, so the consolidation
+	// stages have nothing to chew and no LLM call is made; the prune stage is
+	// what this exercises.
 	if _, err := db.Dream(context.Background(), ""); err != nil {
 		t.Fatalf("dream: %v", err)
 	}
@@ -73,19 +76,19 @@ func TestSurfaceDreamPrunesExpiredEvents(t *testing.T) {
 
 func TestSurfaceArchiveAppendAndRead(t *testing.T) {
 	db := openSurfaceDB(t)
-	sessionID := common.FormatHash(common.HashID("session-42"))
+	sceneID, sessionID := mustTurnKey(t, db)
 	events := []ArchiveSlot{
 		event("llm_request", "user asks", 1_700_000_040_000),
 		event("tool_call", "search", 1_700_000_040_100),
 		event("llm_output", "replied", 1_700_000_040_200),
 	}
 	for _, ev := range events {
-		if err := db.AppendArchive(sessionID, ev); err != nil {
+		if _, err := db.AppendArchive(sceneID, sessionID, ev); err != nil {
 			t.Fatalf("append content: %v", err)
 		}
 	}
 	// Missing required fields must be rejected.
-	if err := db.AppendArchive(sessionID, ArchiveSlot{Kind: KindEvent, Content: "no type"}); CodeOf(err) != ErrInvalidQuery {
+	if _, err := db.AppendArchive(sceneID, sessionID, ArchiveSlot{Kind: KindEvent, Content: "no type"}); CodeOf(err) != ErrInvalidQuery {
 		t.Fatalf("append invalid event: want ErrInvalidQuery, got %v", err)
 	}
 	got := eventsOf(t, db, sessionID)
@@ -105,8 +108,8 @@ func TestSurfaceArchiveAppendAndRead(t *testing.T) {
 			e.CreatedAt != want.CreatedAt {
 			t.Fatalf("event[%d] lost its body on the way back: got %+v want %+v", i, e, want)
 		}
-		if !isHexID(e.IDHash) || e.TopicID != sessionID {
-			t.Fatalf("event[%d] ids: hash=%q context=%q", i, e.IDHash, e.TopicID)
+		if !isHexID(e.ID) || e.TopicID != sessionID {
+			t.Fatalf("event[%d] ids: hash=%q context=%q", i, e.ID, e.TopicID)
 		}
 	}
 }
@@ -218,18 +221,18 @@ func TestSurfaceUpdateSceneAnchor(t *testing.T) {
 func TestSurfaceReservedTopicID(t *testing.T) {
 	db := openSurfaceDB(t)
 	const zero = "0000000000000000"
-	turn := mustTurnKey(t, db)
+	sceneID, turn := mustTurnKey(t, db)
 	now := time.Now().UnixMilli()
 	for i := 0; i < 3; i++ {
-		if err := db.AppendArchive(turn, event("llm_request", "asked", now)); err != nil {
+		if _, err := db.AppendArchive(sceneID, turn, event("llm_request", "asked", now)); err != nil {
 			t.Fatal(err)
 		}
 	}
 	ev := event("plan_step", "stepped", now)
 	calls := map[string]func() error{
-		"AppendBare":     func() error { return db.AppendArchive(zero, ev) },
-		"AppendStep":     func() error { return db.AppendArchive(zero, onStep(ev, 1)) },
-		"PlanCreate":     func() error { _, err := db.PlanCreate(zero, "一步"); return err },
+		"AppendBare":     func() error { _, err := db.AppendArchive(sceneID, zero, ev); return err },
+		"AppendStep":     func() error { _, err := db.AppendArchive(sceneID, zero, onStep(ev, 1)); return err },
+		"AppendForeign":  func() error { _, err := db.AppendArchive(sceneID, "000000000000000f", ev); return err },
 		"PlanNodeAdd":    func() error { _, err := db.PlanNodeAdd(zero, 0, "一步"); return err },
 		"PlanNodeUpdate": func() error { return db.PlanNodeUpdate(zero, PlanStep{Seq: 1, Status: "done"}) },
 		"PlanState":      func() error { _, err := db.PlanState(zero); return err },
@@ -251,10 +254,10 @@ func TestSurfaceReservedTopicID(t *testing.T) {
 func TestSurfaceAppendArchivePlanBranch(t *testing.T) {
 	db := openSurfaceDB(t)
 	now := time.Now().UnixMilli()
-	turn := mustTurnKey(t, db)
-	planTurn := mustTurnKey(t, db)
+	turnScene, turn := mustTurnKey(t, db)
+	planScene, planTurn := mustTurnKey(t, db)
 
-	if err := db.AppendArchive(turn, event("llm_request", "asked", now)); err != nil {
+	if _, err := db.AppendArchive(turnScene, turn, event("llm_request", "asked", now)); err != nil {
 		t.Fatalf("bare turn event: %v", err)
 	}
 	// A turn that only logged plain events owns no tree: a bare event references
@@ -264,14 +267,14 @@ func TestSurfaceAppendArchivePlanBranch(t *testing.T) {
 	}
 	// An event cannot open a step. Creating the step first is the whole point: a
 	// step the plan does not hold is the host's plan and its record disagreeing.
-	if err := db.AppendArchive(planTurn, onStep(event("tool_call", "p", now+1), 2)); CodeOf(err) != ErrInvalidQuery {
+	if _, err := db.AppendArchive(planScene, planTurn, onStep(event("tool_call", "p", now+1), 2)); CodeOf(err) != ErrInvalidQuery {
 		t.Fatalf("event on a step that does not exist: want ErrInvalidQuery, got %v", err)
 	}
 	if empty, err := db.PlanState(planTurn); err != nil || empty.TotalCount != 0 {
 		t.Fatalf("the refused event built a step: %+v err=%v", empty, err)
 	}
 
-	root, err := db.PlanCreate(planTurn, "父")
+	root, err := db.PlanNodeAdd(planTurn, 0, "父")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -279,7 +282,7 @@ func TestSurfaceAppendArchivePlanBranch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AppendArchive(planTurn, onStep(event("tool_call", "p", now+1), child)); err != nil {
+	if _, err := db.AppendArchive(planScene, planTurn, onStep(event("tool_call", "p", now+1), child)); err != nil {
 		t.Fatalf("step-bound event: %v", err)
 	}
 	evs := eventsOf(t, db, planTurn)
@@ -288,16 +291,16 @@ func TestSurfaceAppendArchivePlanBranch(t *testing.T) {
 	}
 	// The plan branch takes the host's own event name exactly as the bare path
 	// does, and refuses only an empty one.
-	if err := db.AppendArchive(planTurn, onStep(event("sandbox_ask", "asked", now+2), root)); err != nil {
+	if _, err := db.AppendArchive(planScene, planTurn, onStep(event("sandbox_ask", "asked", now+2), root)); err != nil {
 		t.Fatalf("host-named plan event: %v", err)
 	}
-	if err := db.AppendArchive(planTurn, onStep(ArchiveSlot{Kind: KindEvent, Content: "x", CreatedAt: now + 3}, root)); CodeOf(err) != ErrInvalidQuery {
+	if _, err := db.AppendArchive(planScene, planTurn, onStep(ArchiveSlot{Kind: KindEvent, Content: "x", CreatedAt: now + 3}, root)); CodeOf(err) != ErrInvalidQuery {
 		t.Fatalf("empty plan event type: want ErrInvalidQuery, got %v", err)
 	}
 	// An ordinal no step of this turn holds can never name one, so the same rule
 	// refuses it — and nothing about the tree changes on the way out. An integer
 	// address has no malformed spelling to catch: a step either exists or does not.
-	if err := db.AppendArchive(planTurn, onStep(event("x", "p", now+4), 77)); CodeOf(err) != ErrInvalidQuery {
+	if _, err := db.AppendArchive(planScene, planTurn, onStep(event("x", "p", now+4), 77)); CodeOf(err) != ErrInvalidQuery {
 		t.Fatalf("an ordinal nobody created: want ErrInvalidQuery, got %v", err)
 	}
 	if still, err := db.PlanState(planTurn); err != nil || still.TotalCount != 2 {
@@ -305,7 +308,7 @@ func TestSurfaceAppendArchivePlanBranch(t *testing.T) {
 	}
 	// An event that claims the dialogue track while naming a step is refused: the
 	// two kinds do not share axes.
-	if err := db.AppendArchive(planTurn, onStep(ArchiveSlot{
+	if _, err := db.AppendArchive(planScene, planTurn, onStep(ArchiveSlot{
 		Kind: KindUtterance, Role: RoleUser, EventType: "tool_call", Content: "x", CreatedAt: now + 5,
 	}, root)); CodeOf(err) != ErrInvalidQuery {
 		t.Fatalf("utterance wearing an event: want ErrInvalidQuery, got %v", err)
@@ -319,8 +322,8 @@ func TestSurfaceAppendArchivePlanBranch(t *testing.T) {
 	if bound[0].NodeSeq == 0 || bound[0].NodeSeq == bound[1].NodeSeq {
 		t.Fatalf("plan-bound event lost its step attribution: %+v", bound)
 	}
-	if !isHexID(bound[1].IDHash) {
-		t.Fatalf("event id is not a library hex token: %q", bound[1].IDHash)
+	if !isHexID(bound[1].ID) {
+		t.Fatalf("event id is not a library hex token: %q", bound[1].ID)
 	}
 }
 

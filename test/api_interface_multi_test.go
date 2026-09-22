@@ -141,7 +141,7 @@ func TestInterfaceAgentDomainsAreIsolated(t *testing.T) {
 	if err != nil || len(graphs) != 1 {
 		t.Fatalf("beta cannot see alpha's graph: %+v err %v", graphs, err)
 	}
-	if nodes, err := sb.QueryL3Nodes(internal.L3NodeQuery{GraphID: graphs[0].IDHash}); err != nil || len(nodes) != 1 {
+	if nodes, err := sb.QueryL3Nodes(internal.L3NodeQuery{GraphID: graphs[0].ID}); err != nil || len(nodes) != 1 {
 		t.Fatalf("beta query over alpha's graph: %+v err %v", nodes, err)
 	}
 	if shared, err := primary.ListL3(); err != nil || len(shared) != 1 {
@@ -237,7 +237,7 @@ func TestInterfaceCompactTo(t *testing.T) {
 	if err != nil || len(graphs) != 1 {
 		t.Fatalf("compacted copy lost the graph: %+v err %v", graphs, err)
 	}
-	if got, err := sess.GetL3(graphs[0].IDHash); err != nil || len(got.Nodes) != 1 {
+	if got, err := sess.GetL3(graphs[0].ID); err != nil || len(got.Nodes) != 1 {
 		t.Fatalf("compacted graph = %+v err %v", got, err)
 	}
 	if _, err := sess.Search(memhop.SearchQuery{SceneID: sceneID}); err == nil {

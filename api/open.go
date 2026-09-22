@@ -100,6 +100,26 @@ func (d *DB) SubAgent(llm LlmConfig, profile ProfileInput) (*Session, error) {
 // Checkpoint persists the per-agent index snapshots without closing.
 func (d *DB) Checkpoint() error { return d.db.Checkpoint() }
 
+// DBStats is the file-level view Stats hands back: the size of the .meh file in
+// bytes and the number of live records across every domain of the file.
+type DBStats struct {
+	FileBytes   int64 `json:"file_bytes"`
+	RecordCount int64 `json:"record_count"`
+}
+
+// Stats reports how big the file has grown and how many live records it holds —
+// the numbers a compaction decision is made from. RecordCount is what a read can
+// reach; the bytes a deleted record still occupies on the log are in FileBytes
+// but not in RecordCount, and that gap is exactly what CompactTo gives back.
+// It takes no domain lock, so it answers while domains are busy.
+func (d *DB) Stats() (DBStats, error) {
+	size, records, err := d.db.Stats()
+	if err != nil {
+		return DBStats{}, err
+	}
+	return DBStats{FileBytes: size, RecordCount: int64(records)}, nil
+}
+
 // CompactTo writes a defragmented copy of the whole file at newPath — only
 // live records, in one fresh log with its own rebuilt index — and leaves the
 // open file untouched. Deletions are tombstones, so this is where a domain that

@@ -33,8 +33,8 @@ func TestSurfaceTurnFlow(t *testing.T) {
 
 	// One finished turn: its content is appended, then it settles into the topic
 	// that read opened.
-	if err := settleTurn(db, sceneID, openedTopic, "remember the launch date", "noted, launching next monday"); err != nil {
-		t.Fatalf("update: %v", err)
+	if _, err := settleTurn(db, sceneID, openedTopic, "remember the launch date", "noted, launching next monday"); err != nil {
+		t.Fatalf("settle: %v", err)
 	}
 
 	// The session read returns exactly that turn.
@@ -51,8 +51,8 @@ func TestSurfaceTurnFlow(t *testing.T) {
 	if _, err := db.Search(SearchQuery{SceneID: ghost}); CodeOf(err) != ErrNotFound {
 		t.Fatalf("search unknown scene: want ErrNotFound, got %v", err)
 	}
-	if err := db.Update(ghost, openedTopic); CodeOf(err) != ErrNotFound {
-		t.Fatalf("update unknown scene: want ErrNotFound, got %v", err)
+	if _, err := db.Settle(ghost, openedTopic); CodeOf(err) != ErrNotFound {
+		t.Fatalf("settle unknown scene: want ErrNotFound, got %v", err)
 	}
 
 	// A turn named by an id the library never issued is refused with
@@ -63,7 +63,7 @@ func TestSurfaceTurnFlow(t *testing.T) {
 		{sceneID, "0000000000000000"},
 		{sceneID, "not-hex"},
 	} {
-		if err := db.Update(bad[0], bad[1]); CodeOf(err) != ErrInvalidQuery {
+		if _, err := db.Settle(bad[0], bad[1]); CodeOf(err) != ErrInvalidQuery {
 			t.Fatalf("bad turn ids %d: want ErrInvalidQuery, got %v", i, err)
 		}
 	}
@@ -78,7 +78,7 @@ func TestSurfaceTurnFlow(t *testing.T) {
 		{Kind: KindEvent, Content: "c", CreatedAt: 1},
 		{Kind: ArchiveKind(9), EventType: "x", Content: "c", CreatedAt: 1},
 	} {
-		if err := db.AppendArchive(openedTopic, bad); CodeOf(err) != ErrInvalidQuery {
+		if _, err := db.AppendArchive(sceneID, openedTopic, bad); CodeOf(err) != ErrInvalidQuery {
 			t.Fatalf("bad content %d: want ErrInvalidQuery, got %v", i, err)
 		}
 	}

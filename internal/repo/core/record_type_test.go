@@ -55,6 +55,30 @@ func TestTypedReadersRejectForeignRecordType(t *testing.T) {
 	}
 }
 
+// The MBTI type word is a function of the four axes, so the record stores the
+// axes only: a payload whose "type" key contradicts them — the shape drift
+// would take — decodes to the word the axes derive, not the word on disk.
+func TestReadProfileSlotDerivesMBTITypeFromAxes(t *testing.T) {
+	engine, err := Create(tempPath(t, "profile_mbti_derive"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { engine.Close() })
+
+	const id = uint64(8001)
+	if _, err := engine.WriteRecord(DefaultAgentID, RecL0Profile, id,
+		[]byte(`{"name":"meow","mbti":{"i_e":0.3,"n_s":0.5,"t_f":0.1,"j_p":0.7,"type":"INTJ"}}`)); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ReadProfileSlot(engine, DefaultAgentID, id)
+	if err != nil {
+		t.Fatalf("read profile: %v", err)
+	}
+	if got.MBTI.Type != "ESFP" {
+		t.Fatalf("type word must come from the axes: got %q, want ESFP", got.MBTI.Type)
+	}
+}
+
 // A topic's L4 content and its L5 plan tree are addressed by the same topic id
 // and nothing else, so the two newest record types have the most to lose from a
 // reader that ignored the frame type: decoding a node into an archive slot and

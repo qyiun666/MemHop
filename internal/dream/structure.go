@@ -21,14 +21,14 @@ import (
 // scene-similarity floor of hyperedge construction.
 const (
 	// L1 decay.
-	lambdaNode              float32 = 0.01
-	lambdaEdge              float32 = 0.02
-	nodeRemoveThreshold     float32 = 0.05
-	nodePruneEdgesThreshold float32 = 0.15
-	edgeRemoveThreshold     float32 = 0.05
+	lambdaNode              float64 = 0.01
+	lambdaEdge              float64 = 0.02
+	nodeRemoveThreshold     float64 = 0.05
+	nodePruneEdgesThreshold float64 = 0.15
+	edgeRemoveThreshold     float64 = 0.05
 	minEdgeNodes            int     = 2
 	// L1 scene hypergraph construction.
-	l1EdgeMinSimilarity float32 = 0.15
+	l1EdgeMinSimilarity float64 = 0.15
 )
 
 // StructureStages runs stages 2 through 5 of the pipeline: rebuild the L2Meta
@@ -47,8 +47,8 @@ func StructureStages(ctx context.Context, ac *domain.Context, agentID uint64, re
 	// used the fresh one.
 	ac.L2Meta = newL2Meta
 	decayParams := engram.DecayParams{
-		LambdaNode:             float64(lambdaNode),
-		LambdaEdge:             float64(lambdaEdge),
+		LambdaNode:             lambdaNode,
+		LambdaEdge:             lambdaEdge,
 		NodeRemoveThreshold:    nodeRemoveThreshold,
 		NodePruneEdgeThreshold: nodePruneEdgesThreshold,
 		EdgeRemoveThreshold:    edgeRemoveThreshold,

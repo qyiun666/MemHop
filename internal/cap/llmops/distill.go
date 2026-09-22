@@ -173,7 +173,7 @@ func parseDistillResponse(response string, known map[uint64]struct{}) (*DistillO
 		PerNode:     make(map[uint64]core.NodeEmotion, len(raw.PerNode)),
 	}
 	// Type re-derived from the four dimensions (never trusted from the LLM).
-	out.MBTI.Type = deriveMBTIType(out.MBTI)
+	out.MBTI.Type = core.DeriveMBTIType(out.MBTI)
 	for _, n := range raw.PerNode {
 		id, err := common.ParseID(n.IDHex)
 		if err != nil {
@@ -210,31 +210,4 @@ func clampSigned(v float64) float64 {
 		return 1
 	}
 	return v
-}
-
-// deriveMBTIType reads the four dimensions as one type. A dimension answered with
-// exactly 0 carries no strength — the prompt's own rule says magnitude is strength —
-// so it gets 'X' rather than being resolved by sign: four silent dimensions derive
-// no type word at all, which is what a profile nobody has distilled already
-// carries.
-func deriveMBTIType(m MBTIScore) string {
-	if m.IE == 0 && m.NS == 0 && m.TF == 0 && m.JP == 0 {
-		return ""
-	}
-	letter := func(v float64, neg, pos byte) byte {
-		switch {
-		case v == 0:
-			return 'X'
-		case v < 0:
-			return neg
-		default:
-			return pos
-		}
-	}
-	return string([]byte{
-		letter(m.IE, 'I', 'E'),
-		letter(m.NS, 'N', 'S'),
-		letter(m.TF, 'T', 'F'),
-		letter(m.JP, 'J', 'P'),
-	})
 }

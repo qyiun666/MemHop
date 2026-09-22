@@ -70,3 +70,6 @@ test/testsupport/key_config.json
 
 # Local build artifacts
 /memhop-mcp
+
+# ZCode workspace config (hook registrations)
+.zcode/

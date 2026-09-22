@@ -32,7 +32,7 @@ func SettleTarget(sceneID, topicID, turnSeq uint64) error {
 		}
 	}
 	return common.NewError(common.ErrInvalidQuery,
-		"Update: topic_id is not a turn this scene opened; settle the id Search returned")
+		"topic_id is not a turn this scene opened; use the id Search returned")
 }
 
 // ReadProfile loads the domain's L0 profile. A profile that was never written

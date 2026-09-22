@@ -260,6 +260,18 @@ func (db *DB) Checkpoint() error {
 	return db.engine.Checkpoint()
 }
 
+// Stats reports the file-level diagnostics: the size of the .meh file in bytes
+// and the number of live records across every domain of the file. Read-only and
+// scoped to the engine's own mutex — no domain lock is taken, so it answers
+// while domains are busy.
+func (db *DB) Stats() (int64, int, error) {
+	if db.closed.Load() {
+		return 0, 0, common.NewError(common.ErrClosed, "database is closed")
+	}
+	size, records := db.engine.Stats()
+	return size, records, nil
+}
+
 // CompactTo writes a defragmented copy of the database at newPath: only live
 // records, in one fresh log, with that copy's own rebuilt index. Deletes are
 // tombstones — removing a scene or a graph frees no bytes until a

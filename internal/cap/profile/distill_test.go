@@ -23,7 +23,7 @@ func tempEngine(t *testing.T) *core.StorageEngine {
 
 // writeNode stores one L1 scene node carrying count topics, each with its own
 // keyword track.
-func writeNode(t *testing.T, engine *core.StorageEngine, id uint64, importance float32, updatedAt int64, count int) {
+func writeNode(t *testing.T, engine *core.StorageEngine, id uint64, importance float64, updatedAt int64, count int) {
 	t.Helper()
 	node := core.SceneNode{
 		IDHash: id, SceneID: id, Importance: importance,

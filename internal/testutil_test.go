@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/domain"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
@@ -27,6 +28,25 @@ func newTestEngine(t *testing.T) *core.StorageEngine {
 	}
 	t.Cleanup(func() { engine.Close() })
 	return engine
+}
+
+// newTurnKey opens a scene the way the read path does and hands back the pair a
+// turn-keyed write needs: the scene id and the turn topic id, both hex — the
+// only keys AppendArchive now accepts. The uint64 form comes back too, for
+// tests that read the topic's records straight off the engine. Binds the file's
+// default domain.
+func newTurnKey(t *testing.T, db *DB) (sceneHex, topicHex string, topicID uint64) {
+	return newTurnKeyFor(t, db, core.DefaultAgentID)
+}
+
+// newTurnKeyFor is newTurnKey for an explicit agent domain.
+func newTurnKeyFor(t *testing.T, db *DB, agentID uint64) (sceneHex, topicHex string, topicID uint64) {
+	t.Helper()
+	res, err := db.Search(agentID, SearchQuery{})
+	if err != nil {
+		t.Fatalf("open scene: %v", err)
+	}
+	return common.FormatHash(res.Scene.SceneID), common.FormatHash(res.NewTopicID), res.NewTopicID
 }
 
 // newTopic builds a depth-1 turn topic fixture stamped at ts.

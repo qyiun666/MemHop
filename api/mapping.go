@@ -76,13 +76,14 @@ func toCoreProfileSlot(s *ProfileInput) internal.ProfileSlot {
 
 func fromSceneNode(n internal.SceneNode) SceneNodeView {
 	return SceneNodeView{
-		IDHash:     formatID(n.IDHash),
+		ID:         formatID(n.IDHash),
 		SceneID:    formatID(n.SceneID),
 		TopicIDs:   formatIDs(n.TopicIDs),
 		EdgeIDs:    formatIDs(n.EdgeIDs),
 		Importance: n.Importance,
 		Valence:    n.Valence,
 		Arousal:    n.Arousal,
+		EmotionSet: n.EmotionSet,
 		CreatedAt:  n.CreatedAt,
 		UpdatedAt:  n.UpdatedAt,
 	}
@@ -125,7 +126,7 @@ func fromSearchResult(r *internal.SearchResult) *SearchResult {
 
 func fromHypergraphSlot(s internal.HypergraphSlot) HypergraphSlot {
 	return HypergraphSlot{
-		IDHash:    formatID(s.IDHash),
+		ID:        formatID(s.IDHash),
 		Name:      s.Name,
 		CreatedAt: s.CreatedAt,
 		UpdatedAt: s.UpdatedAt,
@@ -134,7 +135,7 @@ func fromHypergraphSlot(s internal.HypergraphSlot) HypergraphSlot {
 
 func fromHypergraphNode(n internal.HypergraphNode) HypergraphNode {
 	return HypergraphNode{
-		IDHash:    formatID(n.IDHash),
+		ID:        formatID(n.IDHash),
 		GraphID:   formatID(n.GraphID),
 		Title:     n.Title,
 		NodeType:  n.NodeType,
@@ -148,7 +149,7 @@ func fromHypergraphNode(n internal.HypergraphNode) HypergraphNode {
 
 func fromHypergraphEdge(e internal.HypergraphEdge) HypergraphEdge {
 	return HypergraphEdge{
-		IDHash:    formatID(e.IDHash),
+		ID:        formatID(e.IDHash),
 		GraphID:   formatID(e.GraphID),
 		Kind:      e.Kind,
 		NodeIDs:   formatIDs(e.NodeIDs),
@@ -187,7 +188,7 @@ func fromL3Subgraph(g *internal.L3Subgraph) *L3Subgraph {
 
 func fromArchiveSlot(s internal.ArchiveSlot) ArchiveSlot {
 	return ArchiveSlot{
-		IDHash:      formatID(s.IDHash),
+		ID:          formatID(s.IDHash),
 		Kind:        s.Kind,
 		Seq:         s.Seq,
 		ContentType: s.ContentType,
@@ -210,7 +211,7 @@ func formatOptionalID(id uint64) string {
 // toCoreAppendSlot maps the fields a host owns onto a content slot for the append
 // path. The owning topic comes from the argument the call is keyed by, and the
 // record id follows from (topic, Seq), so neither is part of what a caller hands in
-// — IDHash and TopicID are read from the slot and dropped.
+// — ID and TopicID are read from the slot and dropped.
 func toCoreAppendSlot(s ArchiveSlot) internal.ArchiveSlot {
 	return internal.ArchiveSlot{
 		Kind:        s.Kind,

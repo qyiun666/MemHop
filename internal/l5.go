@@ -16,20 +16,14 @@ import (
 	"github.com/qyiun666/MemHop/internal/plan"
 )
 
-// PlanCreate opens a turn's plan tree: it creates the turn's first root step and
-// returns that step's ordinal. A turn's tree is keyed by the topic id Search
-// issued for it, so `topicID` is the whole address of the tree — and the ordinal
-// the call hands back is what later reads and updates that step by.
-func (db *DB) PlanCreate(agentID uint64, topicID, title string) (uint32, error) {
-	return db.PlanNodeAdd(agentID, topicID, 0, title)
-}
-
 // PlanNodeAdd adds one step to a turn's plan tree and returns its ordinal. A
-// parentSeq of 0 hangs it at the top level, so this is also how a second root
-// joins the forest; any other value names a step this tree already holds —
-// CreateNode refuses a step whose parent is missing rather than quietly growing a
-// branch to hang it on. This is the only way a node comes into existence: no
-// write elsewhere, an event included, creates one.
+// parentSeq of 0 hangs it at the top level and opens the turn's tree — a tree
+// starts with no steps, so the first root step is how a plan first appears under
+// a turn, and there is no separate "create the tree" call. Any other parentSeq
+// names a step this tree already holds — CreateNode refuses a step whose parent
+// is missing rather than quietly growing a branch to hang it on. This is the only
+// way a node comes into existence: no write elsewhere, an event included, creates
+// one.
 func (db *DB) PlanNodeAdd(agentID uint64, topicID string, parentSeq uint32, title string) (uint32, error) {
 	ac, th, err := db.lockSession(agentID, topicID)
 	if err != nil {

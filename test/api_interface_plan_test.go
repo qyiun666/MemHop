@@ -92,10 +92,10 @@ func planEvent(ts int64, kind, payload string) memhop.ArchiveSlot {
 
 // mustAppend writes one event, binding it to a plan step when nodeSeq names one
 // (0 leaves it bound to nothing).
-func mustAppend(t *testing.T, db *testDB, key string, nodeSeq uint32, ev memhop.ArchiveSlot) {
+func mustAppend(t *testing.T, db *testDB, sceneID, key string, nodeSeq uint32, ev memhop.ArchiveSlot) {
 	t.Helper()
 	ev.NodeSeq = nodeSeq
-	if err := db.AppendArchive(key, ev); err != nil {
+	if _, err := db.AppendArchive(sceneID, key, ev); err != nil {
 		t.Fatalf("AppendArchive(%s, step=%d): %v", key, nodeSeq, err)
 	}
 }
@@ -131,7 +131,7 @@ func TestInterfacePlanTreeLivesOnItsTurn(t *testing.T) {
 	ts := time.Now().UnixMilli()
 
 	step := mustCreate(t, db, first, 0, "第一步")
-	mustAppend(t, db, first, step, planEvent(ts, "plan_step", "第一步"))
+	mustAppend(t, db, sceneID, first, step, planEvent(ts, "plan_step", "第一步"))
 	if got := mustPlanState(t, db, first); got.TotalCount != 1 {
 		t.Fatalf("first turn's tree = %+v, want one node", got)
 	}
@@ -306,7 +306,7 @@ func TestInterfaceTurnEventsKeyToTheirOwnTurn(t *testing.T) {
 
 	// A bare turn event takes any EventType the host names and is keyed to the
 	// turn it logs, so the log cannot disagree with the turn.
-	mustAppend(t, db, turnID, 0, planEvent(ts, "host_note", "本轮没有工具调用"))
+	mustAppend(t, db, sceneID, turnID, 0, planEvent(ts, "host_note", "本轮没有工具调用"))
 	turnEvents := mustEvents(t, db, turnID)
 	if len(turnEvents) != 1 {
 		t.Fatalf("turn events = %+v, want the one appended", turnEvents)
@@ -316,8 +316,8 @@ func TestInterfaceTurnEventsKeyToTheirOwnTurn(t *testing.T) {
 	}
 
 	step := mustCreate(t, db, planTurn, 0, "开始")
-	mustAppend(t, db, planTurn, step, planEvent(ts+1, "plan_step", "开始"))
-	mustAppend(t, db, planTurn, step, planEvent(ts+2, "tool_call", `{"tool":"bash","cmd":"go test"}`))
+	mustAppend(t, db, sceneID, planTurn, step, planEvent(ts+1, "plan_step", "开始"))
+	mustAppend(t, db, sceneID, planTurn, step, planEvent(ts+2, "tool_call", `{"tool":"bash","cmd":"go test"}`))
 	planEvents := mustEvents(t, db, planTurn)
 	// Seq is one space a topic shares with its dialogue, which holds slots 1 and 2,
 	// so a topic's first event is 3.
@@ -329,7 +329,7 @@ func TestInterfaceTurnEventsKeyToTheirOwnTurn(t *testing.T) {
 	// exactly like a complete one, and nothing is written either way.
 	tooBig := planEvent(ts+3, "tool_result", strings.Repeat("x", 4097))
 	tooBig.NodeSeq = step
-	if err := db.AppendArchive(planTurn, tooBig); err == nil {
+	if _, err := db.AppendArchive(sceneID, planTurn, tooBig); err == nil {
 		t.Fatal("a payload over the 4 KiB event budget should be refused")
 	}
 	if again := mustEvents(t, db, planTurn); len(again) != 2 {
@@ -350,11 +350,11 @@ func TestInterfacePlanAndTrajectorySurviveReopen(t *testing.T) {
 	turnID := openTurn(t, db, sceneID)
 	ts := time.Now().UnixMilli()
 
-	mustAppend(t, db, turnID, 0, planEvent(ts, "tool_call", `{"tool":"bash"}`))
+	mustAppend(t, db, sceneID, turnID, 0, planEvent(ts, "tool_call", `{"tool":"bash"}`))
 	root := mustCreate(t, db, turnID, 0, "计划")
 	leaf := mustCreate(t, db, turnID, root, "调研")
 	mustUpdate(t, db, turnID, leaf, memhop.PlanStatusDone, "结论一")
-	mustAppend(t, db, turnID, leaf, planEvent(ts+1, "plan_step", "第一步"))
+	mustAppend(t, db, sceneID, turnID, leaf, planEvent(ts+1, "plan_step", "第一步"))
 	if err := db.Checkpoint(); err != nil {
 		t.Fatalf("checkpoint: %v", err)
 	}

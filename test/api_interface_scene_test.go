@@ -395,7 +395,7 @@ func TestInterfaceDeleteSceneAndTopic(t *testing.T) {
 		}
 		out := make([]string, 0, len(hits))
 		for _, h := range hits {
-			out = append(out, h.IDHash)
+			out = append(out, h.ID)
 		}
 		return out
 	}

@@ -96,8 +96,7 @@ func TestSearchL4TopicOnly(t *testing.T) {
 func TestSearchL4ByNodeSeq(t *testing.T) {
 	engine := newTestEngine(t)
 	db := newTestDB(t, engine)
-	topic := common.HashID("turn-tree")
-	topicHex := common.FormatHash(topic)
+	sceneHex, topicHex, topic := newTurnKey(t, db)
 
 	// The branch this read must walk: step 1 → 2 → 3, and a second top-level step
 	// with no link to it.
@@ -112,7 +111,7 @@ func TestSearchL4ByNodeSeq(t *testing.T) {
 			Kind: core.KindEvent, EventType: "tool_call", Content: "work",
 			CreatedAt: int64(2000 + slotSeq), Seq: slotSeq, NodeSeq: nodeSeq,
 		}
-		if err := db.AppendArchive(core.DefaultAgentID, topicHex, slot); err != nil {
+		if _, err := db.AppendArchive(core.DefaultAgentID, sceneHex, topicHex, slot); err != nil {
 			t.Fatalf("append on step %d: %v", nodeSeq, err)
 		}
 		return core.HashContent(topic, slotSeq)
@@ -335,8 +334,7 @@ func TestSearchL4RefusesUndefinedFilterValues(t *testing.T) {
 func TestAppendArchiveRefusesASlotItCannotRead(t *testing.T) {
 	engine := newTestEngine(t)
 	db := newTestDB(t, engine)
-	const topic = uint64(4242)
-	topicID := common.FormatHash(topic)
+	sceneHex, topicID, topic := newTurnKey(t, db)
 	address := core.HashContent(topic, core.LastUtteranceSeq+1)
 	const corrupt = `{"id":`
 	if _, err := engine.WriteRecord(core.DefaultAgentID, core.RecL4Archive, address,
@@ -344,7 +342,7 @@ func TestAppendArchiveRefusesASlotItCannotRead(t *testing.T) {
 		t.Fatalf("write the slot no mirror can list: %v", err)
 	}
 
-	if err := db.AppendArchive(core.DefaultAgentID, topicID, ev("tool_call", 5000)); common.CodeOf(err) != common.ErrDeserialization {
+	if _, err := db.AppendArchive(core.DefaultAgentID, sceneHex, topicID, ev("tool_call", 5000)); common.CodeOf(err) != common.ErrDeserialization {
 		t.Fatalf("allocating onto an undecodable slot must report its own code, got %v", err)
 	}
 	if _, data, err := engine.ReadRecord(core.DefaultAgentID, address); err != nil || string(data) != corrupt {

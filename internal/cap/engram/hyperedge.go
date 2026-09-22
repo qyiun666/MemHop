@@ -27,7 +27,7 @@ import (
 // pass would lift a decayed edge back to full strength and edge forgetting would
 // never accumulate. Stale edges are left to DecayNetwork (natural forgetting),
 // never deleted here. Returns the number of edges created or strengthened.
-func BuildHyperedges(engine *core.StorageEngine, agentID uint64, minSimilarity float32, touched map[uint64]struct{}) (int, error) {
+func BuildHyperedges(engine *core.StorageEngine, agentID uint64, minSimilarity float64, touched map[uint64]struct{}) (int, error) {
 	// A node this enumeration steps over pairs with nothing, and unlike a node this
 	// pass refuses to fade, the missing edge never reports itself later.
 	nodes, err := core.CollectAllStrict[core.SceneNode](engine, agentID, core.RecL1SceneNode)
@@ -110,7 +110,7 @@ func collectNodeKeywordSets(engine *core.StorageEngine, agentID uint64, nodes []
 
 // jaccard returns the keyword-set similarity; ok is false for an empty
 // union (nothing to compare).
-func jaccard(setA, setB map[string]struct{}) (float32, bool) {
+func jaccard(setA, setB map[string]struct{}) (float64, bool) {
 	inter, union := 0, len(setA)
 	for kw := range setB {
 		if _, ok := setA[kw]; ok {
@@ -122,7 +122,7 @@ func jaccard(setA, setB map[string]struct{}) (float32, bool) {
 	if union == 0 {
 		return 0, false
 	}
-	return float32(inter) / float32(union), true
+	return float64(inter) / float64(union), true
 }
 
 // upsertSceneEdge writes the co-occurrence edge between two scene nodes
@@ -130,7 +130,7 @@ func jaccard(setA, setB map[string]struct{}) (float32, bool) {
 // attaches it to both nodes' EdgeIDs. A new edge is weighted by the similarity;
 // an existing one only rises when evidenceChanged says one endpoint's turn list
 // came out different. Returns whether the edge was actually written.
-func upsertSceneEdge(engine *core.StorageEngine, agentID uint64, nodeA, nodeB uint64, weight float32, now int64, evidenceChanged bool) (bool, error) {
+func upsertSceneEdge(engine *core.StorageEngine, agentID uint64, nodeA, nodeB uint64, weight float64, now int64, evidenceChanged bool) (bool, error) {
 	lo, hi := min(nodeA, nodeB), max(nodeA, nodeB)
 	edgeID := common.HashID(fmt.Sprintf("l1edge:%d:%d", lo, hi))
 	edge, err := core.ReadSceneEdge(engine, agentID, edgeID)

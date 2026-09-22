@@ -20,9 +20,9 @@ import (
 type DecayParams struct {
 	LambdaNode             float64
 	LambdaEdge             float64
-	NodeRemoveThreshold    float32
-	NodePruneEdgeThreshold float32
-	EdgeRemoveThreshold    float32
+	NodeRemoveThreshold    float64
+	NodePruneEdgeThreshold float64
+	EdgeRemoveThreshold    float64
 	MinEdgeNodes           int
 }
 
@@ -170,7 +170,7 @@ func skipDeepNode(node *core.SceneNode, l2Meta *index.L2MetaIndex) bool {
 func decayOneNode(engine *core.StorageEngine, agentID uint64, cfg *DecayParams, node *core.SceneNode, nowMs int64, report *DecayReport, removedNodeIDs map[uint64]bool, clearedEdges map[uint64]map[uint64]bool) error {
 	dtHours := common.ElapsedHours(nowMs, node.UpdatedAt)
 	lambda := applyEmotionalBoost(cfg.LambdaNode, node.Valence, node.Arousal)
-	newImportance := node.Importance * float32(math.Exp(-lambda*dtHours))
+	newImportance := node.Importance * math.Exp(-lambda*dtHours)
 	if newImportance < cfg.NodeRemoveThreshold {
 		if _, err := engine.DeleteRecord(agentID, node.IDHash); err != nil {
 			return err
@@ -244,7 +244,7 @@ func decayOneEdge(engine *core.StorageEngine, agentID uint64, cfg *DecayParams, 
 		baseMs = edge.CreatedAt
 	}
 	dtHours := common.ElapsedHours(nowMs, baseMs)
-	newWeight := edge.Weight * float32(math.Exp(-cfg.LambdaEdge*dtHours))
+	newWeight := edge.Weight * math.Exp(-cfg.LambdaEdge*dtHours)
 
 	// A member is gone either because this pass removed it or because something
 	// outside it did — a scene delete takes its node with it between two Dreams.

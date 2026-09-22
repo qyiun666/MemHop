@@ -156,6 +156,12 @@ README 的版本表与 git log。
     - **门面与工具面另有十处失真改准**：`api/open.go` 仍说门面靠内嵌提升方法（那个字段第 15 轮已转私、26 个方法全部显式声明）；`DeleteTopic` 补上 L1 的滞后（节点的 `TopicIDs` 是上一次同步的快照，删掉的话题要等下一次 Dream 才从里面消失，期间按它去读答 `ErrNotFound`）；`MergeScenes` 补上被并掉那个场景的 L1 节点随它一起走、指名它的超边留给边衰减（与 `DeleteScene` 同形）；`SceneNodeView.TopicIDs` 与 `HypergraphEdge.IDHash` 各补一句定义（后者没有任何方法收它：边只由 `ImportL3` 建、只随 `DeleteL3` 删，没有哪个阶段改写或衰减它）；工具面上 `memhop_scene_topics` 的 depth/child_count 规则、`memhop_archive_get` 也会交回事件（并复述词表与 `[3001]`）、`memhop_knowledge_get` 的数字 kind 词表、`memhop_status` 的两个数不同域（`closed` 是整份共享文件的、`scene_count` 只数本租户）各改准；`memhop_knowledge_import` 不再声称 `content` 必填——整批预校验只拒缺 title 或 domain，那条嵌套 required 清单同批被一条新断言钉住。
     - **第 39 项记下的三件待裁定事项原样留着**（`cmd/memhop-mcp` 跑的零值 `MemHopDefaults`、`memhop_trajectory_read` 的入参名、`api.ProfileSlot` 那两个没有公开别名的字段类型）。
 
+41. **字段面逐层审计（磁盘只存源事实 / 读侧时间戳写明单位 / L1 数值链统一精度）**：
+    - **`MBTI.Type` 此前是磁盘上的派生冗余**：类型词恒等于四轴的函数（唯一的写入点本就写明「绝不采信 LLM、从轴重推」），却与轴并排落盘——一份事实存两份，一致只靠唯一的写路径恰好记得派生。现在 `type` 键不再落盘（`json:"-"`），`ReadProfileSlot` 解码后从轴重派生，派生函数从 `llmops` 下沉为 `core.DeriveMBTIType`；旧文件里的 `type` 键解码时跳过，读回与轴一致，公开形状不变（`TestReadProfileSlotDerivesMBTITypeFromAxes` 钉住「盘上字面与轴矛盾时以轴为准」，`TestProfileSlotRoundtrip` 改钉磁盘无 `type` 键；两处自带漂移的夹具——轴推 ESFP、字面写 INTJ/INTP——改成自洽）。
+    - **`ProfileSlot.IDHash` 删除**：画像是固定地址 `hash("profile")` 的单例，payload 里那份 id 全仓零读者（其余记录的 IDHash 都有真实读者：映射输出、L4 索引镜像、衰减回指）；旧文件多出的键解码时跳过，格式版本不动。
+    - **L1 数值链统一 float64**：`Importance`/`Weight` 此前是 float32，而情感与 MBTI 信号全 float64——同属巩固/蒸馏算出的信号，精度选择没有语义依据，且衰减是连乘，float32 的舍入误差随轮次累积。记录字段、`DecayParams` 阈值、dream 调参常量、jaccard 与建边权重、蒸馏样本同批统一；公开面随之变化一处：`api.SceneNodeView.Importance` 变 float64。
+    - **读侧时间戳的单位写明毫秒**：写侧那轮（`ArchiveSlot.CreatedAt` 与 `L4Query.Start/End` 写明毫秒并在写边界拒错单位）只覆盖了 L4；同样毫秒落盘、同样出公开面的 `TopicSlot.UserTimestamp/AgentTimestamp`、`SceneNodeView` 两个时间戳、L3 三个类型的 `CreatedAt/UpdatedAt`、`PlanNodeView` 三个时间戳与 `SceneMessage.CreatedAt` 补同一句话——宿主拿它们与自己的秒级时钟比较，是同一类事故的反方向。
+
 ## v1.6.3 — 2026-09-10 — L4 是一轮唯一的内容层，L5 只剩计划树，`Update` 只蒸馏
 
 一轮发生过什么，此前被劈在两层：L4 存两条对话原文，轨迹层存事件与计划节点。两层早就共用

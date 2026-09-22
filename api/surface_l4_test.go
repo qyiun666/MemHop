@@ -16,7 +16,7 @@ func TestSurfaceL4Archive(t *testing.T) {
 		t.Fatalf("seed search: %v", err)
 	}
 	topicID := res.NewTopicID
-	if err := settleTurn(db, res.Scene.SceneID, topicID, "archive me", "the archived reply"); err != nil {
+	if _, err := settleTurn(db, res.Scene.SceneID, topicID, "archive me", "the archived reply"); err != nil {
 		t.Fatalf("seed turn: %v", err)
 	}
 	byKeyword, err := db.SearchL4(L4Query{Keyword: "archived"})
@@ -39,8 +39,8 @@ func TestSurfaceL4Archive(t *testing.T) {
 		t.Fatalf("empty l4 query: got %d archives, err %v", len(all), err)
 	}
 	// A single archive is a by-ID query — there is no dedicated getter.
-	got, err := db.SearchL4(L4Query{IDs: []string{byKeyword[0].IDHash}})
-	if err != nil || len(got) != 1 || got[0].IDHash != byKeyword[0].IDHash {
+	got, err := db.SearchL4(L4Query{IDs: []string{byKeyword[0].ID}})
+	if err != nil || len(got) != 1 || got[0].ID != byKeyword[0].ID {
 		t.Fatalf("archive by id: %+v err %v", got, err)
 	}
 	if _, err := db.SearchL4(L4Query{IDs: []string{"nothex"}}); CodeOf(err) != ErrInvalidQuery {

@@ -21,8 +21,8 @@ func TestSurfaceL2Scenes(t *testing.T) {
 		t.Fatalf("search scene two: %v", err)
 	}
 	// A scene with content, so the context view has something to render.
-	if err := settleTurn(db, first.Scene.SceneID, first.NewTopicID, "scene one topic", "noted"); err != nil {
-		t.Fatalf("update: %v", err)
+	if _, err := settleTurn(db, first.Scene.SceneID, first.NewTopicID, "scene one topic", "noted"); err != nil {
+		t.Fatalf("settle: %v", err)
 	}
 
 	scenes, err := db.ListScenes("")
@@ -69,7 +69,7 @@ func TestSurfaceRenameTopicIsVisibleOnTheReadPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("search: %v", err)
 	}
-	if err := settleTurn(db, res.Scene.SceneID, res.NewTopicID, "把 L5 让给计划树", "好"); err != nil {
+	if _, err := settleTurn(db, res.Scene.SceneID, res.NewTopicID, "把 L5 让给计划树", "好"); err != nil {
 		t.Fatalf("settle turn: %v", err)
 	}
 
