@@ -570,3 +570,61 @@ func TestUpdateReplayKeepsASunkTurnSunk(t *testing.T) {
 		t.Fatalf("keyword track = %v, want the distilled %v", after.FusedKeywords, want)
 	}
 }
+
+// A decision-loop kernel can end one round twice: the arm that suspends it and the
+// resume that finishes it are separate invocations, and each hands its own closing
+// call over. This is what a turn then keeps — the dialogue is the pair the *last* close
+// stated (Seq 1 and 2 are this turn's dialogue, not a log of every exchange), while
+// both endings stay on the event track as their own records. A host that must keep an
+// earlier arm's words records them with AppendArchive while the round runs; the close
+// is not where a turn's history accumulates.
+func TestTwoClosesOfOneTurnKeepBothEndingsAndTheLastDialogue(t *testing.T) {
+	srv := mockLLMServer(t, turnKeywords)
+	db := newSearchTestDB(t, srv.URL)
+	_, topicID := openTurn(t, db)
+
+	first, err := db.Update(core.DefaultAgentID, core.TurnEnd{
+		Input: "要不要换成 mmap", Output: "换成 mmap，读路径零拷贝",
+		Outcome: "suspended", CreatedAt: 1000,
+	})
+	if err != nil {
+		t.Fatalf("close at suspension: %v", err)
+	}
+	second, err := db.Update(core.DefaultAgentID, core.TurnEnd{
+		Input: "那写入呢", Output: "写入走 msync",
+		Outcome: "done", CreatedAt: 2000,
+	})
+	if err != nil {
+		t.Fatalf("close after the resume: %v", err)
+	}
+	if second.ID != first.ID {
+		t.Fatalf("the two closes settled into two topics (%d, %d), want the turn's one",
+			first.ID, second.ID)
+	}
+	if n := countRecords(db.engine, core.DefaultAgentID, core.RecL2Topic); n != 1 {
+		t.Fatalf("topic records = %d, want 1", n)
+	}
+
+	// Addressed by slot, because the slot is what says which line of the turn this is;
+	// the record scan order is not the turn's order.
+	dialogue := map[uint64]string{}
+	endings := map[string]bool{}
+	for _, arc := range archivesOfTopic(t, db.engine, topicID) {
+		switch arc.Kind {
+		case core.KindUtterance:
+			dialogue[arc.Seq] = arc.Content
+		case core.KindEvent:
+			if arc.EventType != outcomeEvent {
+				t.Fatalf("an event this turn did not close with: %+v", arc)
+			}
+			endings[arc.Content] = true
+		}
+	}
+	if len(dialogue) != 2 || dialogue[core.SeqUser] != "那写入呢" || dialogue[core.SeqAgent] != "写入走 msync" {
+		t.Fatalf("the turn's dialogue = %v, want the last close's pair on Seq %d and %d",
+			dialogue, core.SeqUser, core.SeqAgent)
+	}
+	if len(endings) != 2 || !endings["suspended"] || !endings["done"] {
+		t.Fatalf("the turn's endings = %v, want both arms' outcomes kept apart", endings)
+	}
+}

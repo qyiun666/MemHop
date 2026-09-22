@@ -322,7 +322,16 @@ exit arm. Those two hooks are the first and third rows above, and nothing betwee
 carries a key — what an adapter is left holding is one session handle plus the kernel's own
 name for how the round ended.
 
-What is left for the host is four facts to know, not four adapters to write:
+What is left for the host is five facts to know, not five adapters to write:
+
+- **One round may end twice, and that is the one place the loop loses a word.** A kernel's
+  memory port fires at the terminal point of every invocation, so a round that suspends for
+  input and then resumes closes twice. Each `Update` rewrites the turn's two dialogue slots
+  with the pair it was handed, so the resume's question-and-answer is what the turn ends up
+  stating — while both endings stay on the event track as separate records, pinned by
+  `TestTwoClosesOfOneTurnKeepBothEndingsAndTheLastDialogue`. Words from the earlier arm that
+  must survive go in through `AppendArchive` while the round runs: the close is not where a
+  turn's history accumulates, and one topic still comes out of it.
 
 - **Only `Update` and `Dream` talk to the model.** `Update` makes exactly one call, inside
   the domain lock; the read that opens a turn and every write inside it are deterministic.
