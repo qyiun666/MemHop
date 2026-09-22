@@ -2,7 +2,7 @@
 
 ## 职责
 
-- `ParseTopicID`：话题键的解析 + 拒零，读写两侧共用一个入口。
+- `ParseTopicID`：话题键的解析 + 拒零，宿主还递着键的那几条路径共用一个入口。
 - `ValidateAppend`：内容写入契约，两种 Kind 各管各的轴（`TestValidateAppendRefusals`）。
 - `Append`：把一条记录写进该话题的内容轨，必要时分配 `Seq`——本包唯一的写路径，
   占用的槽位号随调用交回：重放同一轮要靠那批槽位重写，序号就是那条记录的地址。

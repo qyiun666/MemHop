@@ -25,10 +25,12 @@ func TestInterfaceDream(t *testing.T) {
 	defer db.Close()
 
 	sceneID := openSession(t, db)
-	if err := turn(db.Session, sceneID, openTurn(t, db, sceneID), "用户要求重构代码", "好的,我来重构这段代码"); err != nil {
+	openTurn(t, db, sceneID)
+	if _, err := turn(db.Session, "用户要求重构代码", "好的,我来重构这段代码"); err != nil {
 		t.Fatalf("turn 1: %v", err)
 	}
-	if err := turn(db.Session, sceneID, openTurn(t, db, sceneID), "继续重构第二个模块", "第二个模块也补上测试"); err != nil {
+	openTurn(t, db, sceneID)
+	if _, err := turn(db.Session, "继续重构第二个模块", "第二个模块也补上测试"); err != nil {
 		t.Fatalf("turn 2: %v", err)
 	}
 
@@ -130,6 +132,42 @@ func TestInterfaceDream(t *testing.T) {
 	if _, err := db.Dream(context.Background(), sceneID); err != nil {
 		t.Fatalf("directed Dream on scene %s: err=%v", sceneID, err)
 	}
+
+	// The loop keeps running after consolidation, and the state it runs on is the
+	// library's: an un-named read continues the same scene, and the turn it opens
+	// closes onto its own topic — one that stands as a root of its own, rather than
+	// being handed to the fused group that swallowed the turns before it.
+	after, err := db.Search(memhop.SearchQuery{})
+	if err != nil {
+		t.Fatalf("Search after consolidation: %v", err)
+	}
+	if after.Scene.SceneID != sceneID {
+		t.Fatalf("consolidation moved the domain onto scene %s, want the scene it was on (%s)",
+			after.Scene.SceneID, sceneID)
+	}
+	closed, err := turn(db.Session, "巩固之后接着问", "巩固之后的答复")
+	if err != nil {
+		t.Fatalf("turn after consolidation: %v", err)
+	}
+	if closed != after.NewTopicID {
+		t.Fatalf("the close settled topic %s, want the turn just opened (%s)", closed, after.NewTopicID)
+	}
+	tail, err := db.SceneContext(sceneID)
+	if err != nil {
+		t.Fatalf("SceneContext after the extra turn: %v", err)
+	}
+	if len(tail.Topics) != 4 {
+		t.Fatalf("scene topics = %+v, want the fused parent, its 2 sunk turns and this new root", tail.Topics)
+	}
+	var fresh *memhop.SceneContextTopic
+	for i := range tail.Topics {
+		if tail.Topics[i].TopicID == closed {
+			fresh = &tail.Topics[i]
+		}
+	}
+	if fresh == nil || fresh.Depth != 1 || fresh.ChildCount != 0 {
+		t.Fatalf("a turn opened after consolidation must be its own root, not a member of the fused group: %+v", tail.Topics)
+	}
 }
 
 func TestInterfaceCheckpointPersist(t *testing.T) {
@@ -140,7 +178,7 @@ func TestInterfaceCheckpointPersist(t *testing.T) {
 	db := newTestDB(t, m)
 	sceneID := openSession(t, db)
 	topicID := openTurn(t, db, sceneID)
-	if err := turn(db.Session, sceneID, topicID, "用户要求重构代码", "好的,我来重构这段代码"); err != nil {
+	if _, err := turn(db.Session, "用户要求重构代码", "好的,我来重构这段代码"); err != nil {
 		t.Fatalf("turn: %v", err)
 	}
 	if err := db.Checkpoint(); err != nil {

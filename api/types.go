@@ -36,9 +36,15 @@ var DefaultMemHopDefaults = internal.DefaultMemHopDefaults
 // These are the shapes a host fills in.
 
 type (
-	// SearchQuery scopes one scene read. An empty SceneID asks for a fresh scene,
-	// which L3ID may anchor to a project domain.
+	// SearchQuery scopes one scene read. Leaving SceneID empty continues the domain's
+	// current scene, so a host running one agent over one library fills nothing;
+	// NewScene asks for a fresh scene instead, which L3ID may anchor to a project
+	// domain.
 	SearchQuery = internal.SearchQuery
+	// TurnEnd is what Update records to close a turn: the stimulus that opened it,
+	// the answer that ended it, and the host's own word for which arm it took.
+	// CreatedAt is milliseconds and is the host's to supply.
+	TurnEnd = internal.TurnEnd
 	// L3ImportItem is one knowledge node of an ImportL3 batch: Title names it
 	// inside its graph, Domain says which graph, and SourceRef carries a positional
 	// reference (file:line, or a URL). Related declares same-graph hyperedges by
@@ -232,7 +238,7 @@ type SceneSlot struct {
 	L3ID      string `json:"l3_id,omitempty"`
 }
 
-// TopicSlot is one L2 conversation node: a single turn closed by Settle, or a
+// TopicSlot is one L2 conversation node: a single turn closed by Update, or a
 // Dream-fused group of turns. FusedKeywords is its only keyword track. What was said
 // is not on the topic: the L4 archives a turn owns are addressed by that topic's id.
 // A fused group names no children either; the turns it swallowed carry ParentID
@@ -253,7 +259,7 @@ type TopicSlot struct {
 }
 
 // SearchResult is the read surface of one scene. NewTopicID is the topic this read
-// opened for the turn the host is about to run: Settle closes that turn into it, and
+// opened for the turn the host is about to run: Update closes that turn into it, and
 // the turn's L4 records and L5 plan tree key on it.
 type SearchResult struct {
 	Profile      ProfileSlot `json:"profile"`

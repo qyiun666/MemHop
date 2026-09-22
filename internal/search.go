@@ -12,20 +12,23 @@ package internal
 
 import (
 	"github.com/qyiun666/MemHop/internal/cap/profile"
+	"github.com/qyiun666/MemHop/internal/common"
+	"github.com/qyiun666/MemHop/internal/domain"
 	"github.com/qyiun666/MemHop/internal/repo"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 	"github.com/qyiun666/MemHop/internal/scene"
 	"github.com/qyiun666/MemHop/internal/turn"
 )
 
-// Search reads one scene and opens the turn the host is about to run: it
-// returns the scene record, its depth-1 topics in turn order (the host's
-// context), the domain's L0 profile and the topic id this read minted for the
-// new turn — Settle distills that turn into it, and everything the turn records
-// (its L4 content, its L5 plan tree) keys on it. An empty SceneID allocates a
-// fresh scene, anchored to L3ID when given; a non-empty SceneID must already
-// exist, and an L3ID handed in alongside one is refused rather than dropped,
-// since that anchor is a creation-time field (UpdateScene moves it).
+// Search reads the domain's conversation and opens the turn the host is about to
+// run: it returns the scene record, its depth-1 topics in turn order (the host's
+// context), the domain's L0 profile and the topic id this read minted for the new
+// turn — Update closes that turn, and everything the turn records (its L4 content,
+// its L5 plan tree) keys on it. Which scene and which turn are the domain's to
+// remember, so a host running one agent over one library carries no id across
+// calls. Naming a SceneID scopes this read to that scene instead, and an L3ID
+// handed in alongside one is refused rather than dropped, since that anchor is a
+// creation-time field (UpdateScene moves it).
 func (db *DB) Search(agentID uint64, q SearchQuery) (*SearchResult, error) {
 	ac, err := db.lockAgent(agentID)
 	if err != nil {
@@ -33,7 +36,7 @@ func (db *DB) Search(agentID uint64, q SearchQuery) (*SearchResult, error) {
 	}
 	defer ac.Mu.Unlock()
 
-	sceneID, err := db.resolveScene(agentID, q)
+	sceneID, err := db.resolveScene(ac, agentID, q)
 	if err != nil {
 		return nil, err
 	}
@@ -46,35 +49,70 @@ func (db *DB) Search(agentID uint64, q SearchQuery) (*SearchResult, error) {
 		return nil, err
 	}
 	topics := scene.SurfaceTopics(ac, sceneSlot.SceneID)
+	opened := core.ComputeTurnTopicID(sceneSlot.SceneID, sceneSlot.TurnSeq)
+	if opened == 0 {
+		// Zero is what the domain uses to say "no turn is open", so a turn key that
+		// hashes to it could never be told apart from a read that never happened.
+		// The scene's counter has already advanced, so this reports the collision
+		// instead of silently dropping the turn the host is about to run.
+		return nil, common.NewError(common.ErrCorruption,
+			"the turn key this scene allocated is the reserved zero value")
+	}
+	ac.Scene, ac.Turn = sceneSlot.SceneID, opened
 	return &SearchResult{
 		Profile:      slot,
 		ProfileBrief: profile.Brief(slot),
 		Scene:        *sceneSlot,
 		Topics:       topics,
-		NewTopicID:   core.ComputeTurnTopicID(sceneSlot.SceneID, sceneSlot.TurnSeq),
+		NewTopicID:   opened,
 	}, nil
 }
 
-// resolveScene reads the host's query into the scene this read is scoped to,
-// creating one when the query names none. A host's hex ids stop here: an empty
-// SceneID asks for a fresh scene, and its optional anchor is parsed only on that
-// path — naming a scene that cannot be read back reports the scene, not the anchor
-// handed in alongside it.
-func (db *DB) resolveScene(agentID uint64, q SearchQuery) (uint64, error) {
-	if q.SceneID == "" {
-		var anchor uint64
-		if q.L3ID != "" {
-			id, err := parseID("l3", q.L3ID)
-			if err != nil {
-				return 0, err
-			}
-			anchor = id
+// resolveScene reads the host's query into the scene this read is scoped to. An
+// empty SceneID continues the domain's current one, which restores from the records
+// on the first read after an open or a sweep; a domain with no scene yet gets its
+// first one. NewScene asks for a fresh conversation instead. An anchor is a
+// creation-time field, so it is parsed on the creating paths and refused on the one
+// that continues a scene — dropping it there would let a project domain go unadopted
+// while the read looked like it had taken one. A named scene is resolved by
+// scene.ResolveExisting, whose refusal reports the scene the host actually pointed
+// at. Continuing never re-checks existence: OpenSceneTurn reads the record next.
+func (db *DB) resolveScene(ac *domain.Context, agentID uint64, q SearchQuery) (uint64, error) {
+	if q.SceneID != "" {
+		named, err := parseID("scene", q.SceneID)
+		if err != nil {
+			return 0, err
 		}
-		return scene.Create(db.engine, agentID, anchor)
+		return scene.ResolveExisting(db.engine, agentID, named, q.L3ID != "")
 	}
-	named, err := parseID("scene", q.SceneID)
+	anchor, err := sceneAnchor(q.L3ID)
 	if err != nil {
 		return 0, err
 	}
-	return scene.ResolveExisting(db.engine, agentID, named, q.L3ID != "")
+	if q.NewScene {
+		return scene.Create(db.engine, agentID, anchor)
+	}
+	if ac.Scene == 0 {
+		if ac.Scene, err = scene.CurrentScene(db.engine, agentID); err != nil {
+			return 0, err
+		}
+	}
+	if ac.Scene == 0 {
+		return scene.Create(db.engine, agentID, anchor)
+	}
+	if anchor != 0 {
+		return 0, common.NewError(common.ErrInvalidQuery,
+			"an L3 anchor is set when a scene is created: pass NewScene to hang a new conversation on a project, or UpdateScene to move the current one")
+	}
+	return ac.Scene, nil
+}
+
+// sceneAnchor parses the project domain a created scene hangs on; an empty string
+// is no anchor, and a named one that does not parse is refused before any scene is
+// allocated.
+func sceneAnchor(l3ID string) (uint64, error) {
+	if l3ID == "" {
+		return 0, nil
+	}
+	return parseID("l3", l3ID)
 }

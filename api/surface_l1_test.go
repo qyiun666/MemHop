@@ -37,16 +37,21 @@ func TestSurfaceListL1RendersHexIDs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("search scene one: %v", err)
 	}
-	second, err := db.Search(SearchQuery{})
+	// Nodes are synced from a scene's topics, so a scene that never settled a
+	// turn has nothing to build one out of. Each scene's turn is closed while it
+	// is the one the library holds: an un-named read would continue the first
+	// scene instead of opening the second, so the second is asked for by name.
+	if _, err := settleTurn(db, "第一个会话聊了什么", "记下了"); err != nil {
+		t.Fatalf("settle scene one: %v", err)
+	}
+	second, err := db.Search(SearchQuery{NewScene: true})
 	if err != nil {
 		t.Fatalf("search scene two: %v", err)
 	}
-	// Nodes are synced from a scene's topics, so a scene that never settled a
-	// turn has nothing to build one out of.
-	if _, err := settleTurn(db, first.Scene.SceneID, first.NewTopicID, "第一个会话聊了什么", "记下了"); err != nil {
-		t.Fatalf("settle scene one: %v", err)
+	if second.Scene.SceneID == first.Scene.SceneID {
+		t.Fatalf("NewScene continued the domain's current scene: %s", first.Scene.SceneID)
 	}
-	if _, err := settleTurn(db, second.Scene.SceneID, second.NewTopicID, "第二个会话聊了什么", "也记下了"); err != nil {
+	if _, err := settleTurn(db, "第二个会话聊了什么", "也记下了"); err != nil {
 		t.Fatalf("settle scene two: %v", err)
 	}
 	if _, err := db.Dream(context.Background(), ""); err != nil {

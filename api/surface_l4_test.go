@@ -16,7 +16,7 @@ func TestSurfaceL4Archive(t *testing.T) {
 		t.Fatalf("seed search: %v", err)
 	}
 	topicID := res.NewTopicID
-	if _, err := settleTurn(db, res.Scene.SceneID, topicID, "archive me", "the archived reply"); err != nil {
+	if _, err := settleTurn(db, "archive me", "the archived reply"); err != nil {
 		t.Fatalf("seed turn: %v", err)
 	}
 	byKeyword, err := db.SearchL4(L4Query{Keyword: "archived"})

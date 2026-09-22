@@ -173,8 +173,13 @@ func (db *DB) MergeScenes(agentID uint64, primaryID string, secondaryIDs []strin
 		return err
 	}
 	// Mirror the scene retarget in the L2MetaIndex so cached topics match the
-	// merged records (storage write already done).
+	// merged records (storage write already done), and move the domain's own memory
+	// of which scene it is on: a host that never names a scene would otherwise be
+	// left resuming one the merge just destroyed.
 	ac.RetargetL2Meta(primaryHash, common.ToSet(hashes))
+	for _, secondary := range hashes {
+		ac.MoveScene(secondary, primaryHash)
+	}
 	return nil
 }
 
@@ -263,7 +268,15 @@ func (db *DB) DeleteTopic(agentID uint64, topicID string) error {
 	if len(topics) == 0 {
 		return common.NewError(common.ErrNotFound, "topic not found")
 	}
-	return scene.DeleteCascade(ac, agentID, nil, topics)
+	if err := scene.DeleteCascade(ac, agentID, nil, topics); err != nil {
+		return err
+	}
+	// The whole closure goes, so the open turn may be anywhere inside it: a fused
+	// group deleted from the scene's surface takes the turn it swallowed.
+	for _, id := range topics {
+		ac.ForgetTurn(id)
+	}
+	return nil
 }
 
 // DeleteScene removes a scene: its scene record, every topic (all depths),
@@ -294,5 +307,9 @@ func (db *DB) DeleteScene(agentID uint64, sceneID string) error {
 	// Drop the L1 scene node right away (its ID is derivable without an
 	// index). The hyperedges still naming it are dropped by the next Dream's decay
 	// pass, which prunes any edge member the domain no longer holds.
-	return repo.DeleteSceneNodeL1(db.engine, agentID, sceneHash)
+	if err := repo.DeleteSceneNodeL1(db.engine, agentID, sceneHash); err != nil {
+		return err
+	}
+	ac.ForgetScene(sceneHash)
+	return nil
 }

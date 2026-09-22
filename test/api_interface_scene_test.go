@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	memhop "github.com/qyiun666/MemHop/api"
 	internal "github.com/qyiun666/MemHop/internal"
@@ -40,13 +41,18 @@ func findScene(t *testing.T, db *testDB, sceneID string) memhop.SceneSlot {
 }
 
 // settleTurn runs one full turn the way a host does: read the session (which opens
-// the turn), append what the turn said, then settle it. It returns the topic id
-// that now carries it.
+// the turn), then close it with what the turn said. It returns the topic id that now
+// carries it — and pins that it is the one Search minted, since a closing call names
+// no id of either kind.
 func settleTurn(t *testing.T, db *testDB, sceneID, user, agent string) string {
 	t.Helper()
 	id := openTurn(t, db, sceneID)
-	if err := turn(db.Session, sceneID, id, user, agent); err != nil {
+	closed, err := turn(db.Session, user, agent)
+	if err != nil {
 		t.Fatalf("turn(%q): %v", user, err)
+	}
+	if closed != id {
+		t.Fatalf("Update settled topic %s, want the turn Search opened (%s)", closed, id)
 	}
 	return id
 }
@@ -301,6 +307,14 @@ func TestInterfaceMergeScenes(t *testing.T) {
 
 	if err := db.MergeScenes(primary, []string{secondary}); err != nil {
 		t.Fatalf("MergeScenes: %v", err)
+	}
+	// The merge empties the domain's memory of the turn it held on the scene that
+	// went under — a turn id derives from its scene, so that close is refused rather
+	// than written onto the merged one, and the host has to read before writing again.
+	if _, err := db.Update(memhop.TurnEnd{Input: "被吞掉的那一轮", Output: "不该落笔",
+		CreatedAt: time.Now().UnixMilli()}); err == nil ||
+		!strings.Contains(err.Error(), "no turn is open") {
+		t.Fatalf("closing after the merge that swallowed the scene = %v, want the open-turn refusal", err)
 	}
 	// The secondary scene is gone from every listing and read.
 	if _, err := db.Search(memhop.SearchQuery{SceneID: secondary}); err == nil {

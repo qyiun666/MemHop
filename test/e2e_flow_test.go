@@ -39,10 +39,10 @@ func TestE2EUpdateDream(t *testing.T) {
 		t.Fatal("the opening read must issue the turn's topic id")
 	}
 
-	// 2. The turn's content is appended under that topic, then settled: one
-	// topic with distilled keywords over the two originals.
+	// 2. The turn Search opened is closed by one Update carrying both originals:
+	// one topic with distilled keywords over the two lines, keyed by that topic id.
 	topicID := res.NewTopicID
-	if err := db.SettleTurn(sceneID, topicID, userText, agentText, ts); err != nil {
+	if err := db.CloseTurn(userText, agentText, ts); err != nil {
 		t.Fatalf("settle turn: %v", err)
 	}
 

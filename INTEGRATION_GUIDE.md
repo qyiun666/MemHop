@@ -34,8 +34,8 @@ host process
 | Contract | Meaning |
 |---|---|
 | **Single instance** | One `.meh` file is locked exclusively; a second `api.Open` on the same file fails. Every call runs through a `Session` bound to one agent domain. |
-| **Serial calls** | Same-agent operations (Search / Settle / Dream / write APIs) are serialized by the library's per-agent domain lock — the LLM call runs inside that lock, so one slow response holds its own domain and no other. Different agents run in parallel. The host needs no external queue, and there is no raw-file access path left for it to guard. |
-| **LLM on the write path** | `Settle` and `Dream` call the LLM and fail when it is down (no silent degradation) — `Settle` exactly once per turn, and a failed distillation writes nothing. `Search` never calls it: a read cannot be blocked by the LLM. |
+| **Serial calls** | Same-agent operations (Search / Update / Dream / write APIs) are serialized by the library's per-agent domain lock — the LLM call runs inside that lock, so one slow response holds its own domain and no other. Different agents run in parallel. The host needs no external queue, and there is no raw-file access path left for it to guard. |
+| **LLM on the write path** | `Update` and `Dream` call the LLM and fail when it is down (no silent degradation) — `Update` exactly once per turn, and a failed distillation writes no topic and leaves the turn open for a retry. `Search` never calls it: a read cannot be blocked by the LLM. |
 | **ID shape** | All external IDs are 16-char lowercase hex strings (xxhash64). Treat them as opaque: the library issues every id and a host only echoes it back — there is nothing to convert. An agent domain is never named by an id at this boundary: you hold the `*Session` the library gave you. The turn topic id `Search` returns is what addresses that turn's L4 content and the plan tree it opened. |
 | **Timestamps** | Unix milliseconds everywhere; `<= 0` is `ErrInvalidQuery`. |
 
@@ -96,7 +96,7 @@ open an issue.
 
 | Field | Default | Meaning |
 |---|---|---|
-| SceneDreamTopicThreshold | 24 | Once a scene's depth-1 topic count passes this, `Settle` schedules that scene's Dream in the background. **0 disables the trigger** (relevant when building a partial literal). |
+| SceneDreamTopicThreshold | 24 | Once a scene's depth-1 topic count passes this, `Update` schedules that scene's Dream in the background. **0 disables the trigger** (relevant when building a partial literal). |
 | DreamCompressMinTopics | 20 | Topics per scene before Dream will compress. |
 | AgentIdleTTLMs | 3600000 | An agent domain whose context has been idle this long is freed from memory (it rebuilds from its records on next use). 0 disables the sweep. |
 | ContentRetentionMs | 604800000 (7 days) | How long a turn's records (L4 content and L5 plan nodes) outlive it before a Dream sweeps them. 0 or less means the library default. There is no "keep everything" spelling: raise the window rather than turning the sweep off. |
@@ -160,16 +160,21 @@ primary domain's profile:
 
 ## 6. Core memory loop (every turn)
 
-The host drives per turn: **turn start `Search` (read this session's memory and open the turn) → turn end `Settle` (settle the whole turn into the topic that read opened; the distilled track comes back with the call)**. Consolidation is scheduled by the engine once a scene's topic count passes the threshold; hosts may also call `Dream` explicitly. **One L2 scene = one host session, one turn = one topic** — the host decides which scene to read and never mints an id itself; the engine never guesses.
+The host drives per turn: **turn start `Search` (read this session's memory and open the turn) → during the turn `AppendArchive` (record what happened) → turn end `Update` (record how the turn opened and ended, and distill the whole turn into the topic that read opened; the distilled track comes back with the call)**. Consolidation is scheduled by the engine once a scene's topic count passes the threshold; hosts may also call `Dream` explicitly. **One L2 scene = one host session, one turn = one topic** — and the library holds both ids: `Search` continues the domain's current scene and opens the next turn on it, so a host running one agent over one library names no ids and carries no keys across the write calls. The engine never guesses which scene to read.
 
 ### 6.1 Turn start: `Search(q)`
 
 ```go
 res, err := db.Search(api.SearchQuery{
-    SceneID: sceneIDHex,  // empty = ask the library for a fresh scene (first turn of a session)
-    L3ID:    graphIDHex,  // anchors a *newly created* scene to an L3 project domain;
-                          // naming an existing scene together with it is refused
-                          // (ErrInvalidQuery), not ignored
+    SceneID:  sceneIDHex,  // empty = continue this domain's current scene (after a reopen it
+                           // restores the one whose turn counter ran furthest); name a scene to
+                           // scope this read to it instead
+    NewScene: false,       // true = open a fresh scene — the only way to start a second
+                           // conversation over the same domain
+    L3ID:     graphIDHex,  // anchors a scene to an L3 project domain, and only a read that
+                           // *creates* a scene takes it (NewScene, or the domain's first scene);
+                           // handed in along with a scene this read continues it is refused
+                           // (ErrInvalidQuery), not ignored
 })
 ```
 
@@ -181,32 +186,36 @@ No `ctx` parameter — the read path holds no cancellable LLM or network work �
 |---|---|---|
 | `Profile` | L0 profile snapshot | can go into the system prompt |
 | `ProfileBrief` | bounded compact profile digest | light per-turn injection; fetch full `Profile` only when needed |
-| `Scene` | the scene just read (`SceneID` / `SceneName` / `L3ID`) | keep `Scene.SceneID` — Settle and later reads use it |
+| `Scene` | the scene just read (`SceneID` / `SceneName` / `L3ID`) | read-side and corrections only — `SceneContext`, `UpdateScene`, `MergeScenes` take it; the write path never needs it, the library holds the open scene |
 | `Topics` | the scene's depth-1 topics in user-timestamp order, each with its `FusedKeywords` | **the memory injected into this turn's prompt**; originals are addressed by a turn's own topic id — `SearchL4(L4Query{TopicID})` |
-| `NewTopicID` | the topic this read opened for the turn about to run | hand it to `AppendArchive` and to `Settle` — one turn, one id |
+| `NewTopicID` | the topic this read opened for the turn about to run | the read/correction key for this turn's content (`SearchL4{TopicID}`, `DeleteTopic`); the write calls (`AppendArchive`, `Update`, the plan family) do **not** take it — the library holds the open turn |
 
-An unknown `SceneID` returns `ErrNotFound` (the library will not create a scene you asked to read); an empty one creates a scene and returns its id.
+An unknown `SceneID` returns `ErrNotFound` (the library will not create a scene you asked to read); an empty one continues the domain's current scene, creating one only when it holds none. `NewScene: true` skips all of that and opens a fresh scene.
 
-### 6.2 During the turn: `AppendArchive(sceneID, topicID, ArchiveSlot)`
+### 6.2 During the turn: `AppendArchive(ArchiveSlot)`
 
-The host records the turn itself, one call per record, keyed by the
-`(sceneID, topicID)` pair — the topic must be a turn that scene opened, and the key
-is checked before anything is stored, so a mistyped or invented id is refused
-(`ErrInvalidQuery`) instead of landing content under a key no read ever lists.
-`AppendArchive` returns the slot the record took and is the only way content enters
-a topic.
+The host records what happens while the turn runs, one call per record, into the turn
+`Search` opened — which turn that is belongs to the library, so this call names no ids
+and what it writes cannot land on a turn the host is not working, nor under a key no
+read ever lists. With no turn open the call is refused (`ErrInvalidQuery`, its message
+contains `no turn is open`). The turn's dialogue itself — what the host was asked and
+what it answered — is written by `Update` when the turn closes; `AppendArchive` is for
+everything in between. `AppendArchive` returns the slot the record took and is the only
+way content enters a topic.
 
 ```go
-seq, err := db.AppendArchive(sceneIDHex, topicIDHex, api.ArchiveSlot{
+seq, err := db.AppendArchive(api.ArchiveSlot{
     Kind:      api.KindUtterance, // or api.KindEvent
-    Seq:       1,                 // 0 lets the library allocate the slot; the slot taken is the return value
+    Seq:       0,                 // 0 lets the library allocate a slot (Seq 1 and 2 are the
+                                  // dialogue slots Update writes, so it allocates above them);
+                                  // the slot taken is the return value
     Role:      api.RoleUser,      // utterance only: RoleUser / RoleAgent / RoleSystem
     ContentType: api.ContentText, // utterance only; a non-text slot carries its media path/URL in Content
     Content:   userRawText,       // required
     CreatedAt: userTS,            // Unix milliseconds — a seconds- or microsecond-scale stamp is refused
 })
 // An event names itself instead of taking a speaker, and may hang on a plan step:
-seq, err = db.AppendArchive(sceneIDHex, topicIDHex, api.ArchiveSlot{
+seq, err = db.AppendArchive(api.ArchiveSlot{
     Kind:      api.KindEvent,
     EventType: "tool_call",       // event only; free-form, no whitelist
     NodeSeq:   2,                 // optional: the ordinal PlanNodeAdd handed out for this turn
@@ -216,9 +225,9 @@ seq, err = db.AppendArchive(sceneIDHex, topicIDHex, api.ArchiveSlot{
 })
 ```
 
-`ID` and `TopicID` are ignored on the way in: the topic comes from the
-argument and the record id follows from `(topic, Seq)`, which is what lets a host
-read a record back, change one field and write it to the slot it came from. `Seq: 0`
+`ID` and `TopicID` are ignored on the way in: the topic is the turn `Search` opened and
+the record id follows from `(topic, Seq)`, which is what lets a host read a record back,
+change one field and write it to the slot it came from. `Seq: 0`
 allocates above every held slot, skipping 1 and 2, which are the dialogue's; because
 allocating is the library choosing the slot, it confirms that slot is empty first, and
 one whose record will not read back is refused with that read's own code rather than
@@ -240,24 +249,42 @@ library marks its own summaries with it), and content over budget — 4 KiB per 
 KiB per utterance. Over budget is **refused, never truncated**: a shortened record reads
 back exactly like a complete one.
 
-### 6.3 Turn end: `Settle(sceneID, topicID)`
+### 6.3 Turn end: `Update(TurnEnd)`
 
 ```go
-topic, err := db.Settle(sceneIDHex, topicIDHex)
+topic, err := db.Update(api.TurnEnd{
+    Input:     userRawText,   // lands on the user's dialogue slot (Seq 1)
+    Output:    agentReply,    // lands on the agent's dialogue slot (Seq 2)
+    Outcome:   "resolved",    // recorded as one `turn_outcome` event for this call
+    CreatedAt: time.Now().UnixMilli(), // Unix milliseconds — the host's to supply
+})
 // topic.FusedKeywords is the track the turn was distilled into — no second read needed
 ```
 
-One distillation over the utterances that topic holds produces its keyword track,
-which comes back with the stored topic, and
-`Settle` writes no content of its own: exactly one LLM call per turn, and it runs
-before the topic is written, so a failed call or an empty extraction leaves no
-half-recorded topic — while the records the host appended earlier stay where it put
-them. Unknown scene → `ErrNotFound`; a `topicID` that is not a turn of that scene, or
-a topic with no content left to distill → `ErrInvalidQuery`, the latter without
-reaching the LLM at all. Settling the same topic twice re-derives its track from what
-the topic holds now, so retrying a timed-out `Settle` is safe.
+`Update` closes the turn `Search` opened and, in the same call, distills it. `Input` and
+`Output` land on the two dialogue slots a reader looks for them on — so closing the same
+turn again rewrites those two lines instead of accumulating versions — and `Outcome` is
+appended as one `turn_outcome` event per call (a suspension and the resume that followed
+it are two facts, not one line written twice). An empty field writes nothing; if all
+three are empty the call is `ErrInvalidQuery`. Every record passes the same
+`content.ValidateAppend` budget check as `AppendArchive`, and all of them are checked
+before any is written.
 
-What may be settled is bounded: the `TopicID` has to be **a turn this scene opened** (the id `Search` minted for one of the turns the scene has counted so far). A Dream-fused topic, another scene's turn, or an id you built yourself is `ErrInvalidQuery` — before the LLM call, so a refusal leaves nothing behind. Replaying the current turn and settling an earlier turn that is still open both stay valid, which is what keeps an at-least-once write loop safe without letting a stale retry rewrite a turn that already settled.
+It then reads the turn's utterances and runs exactly one LLM distillation, before the
+topic is written, so a failed call or an empty extraction leaves no half-recorded topic —
+while the records already on the turn (the host's appends, and `Update`'s own three) stay
+where they are. A failed call leaves the turn open, so the host may close it again; a
+replay rewrites the two dialogue slots rather than duplicating them. A turn whose
+originals the retention window already reclaimed is refused (`ErrInvalidQuery`) without
+reaching the LLM; with no turn open the call is `ErrInvalidQuery` and its message contains
+`no turn is open`.
+
+`Search` and `Update` are the pair that makes a turn: one turn is one `Search` plus one
+(replayable) `Update`. Which scene and which turn this is belongs to the library — this
+call names no ids — and the engine re-checks that the turn it closes is one the scene
+actually counted, so a stale retry after a delete or merge is refused before the LLM call
+with nothing written. That is what keeps an at-least-once write loop safe without letting
+a stale retry rewrite a turn that already closed.
 
 ### 6.4 Consolidation: `Dream(ctx, sceneID)`
 
@@ -266,19 +293,64 @@ rep, err := db.Dream(ctx, "")      // empty sceneID sweeps every scene of the do
 // or db.Dream(ctx, sceneIDHex)    // one scene only
 ```
 
-Usually **the host does not need to call it**: once a scene's depth-1 topic count passes `Defaults.SceneDreamTopicThreshold` (default 24), `Settle` schedules that scene's Dream in the background (one in flight per scene).
+Usually **the host does not need to call it**: once a scene's depth-1 topic count passes `Defaults.SceneDreamTopicThreshold` (default 24), `Update` schedules that scene's Dream in the background (one in flight per scene).
 
 Runs L2→L1→L0 compression / decay / profile distillation (several LLM calls, slow) — keep it in a goroutine or between turns.
 Returns a structured `*DreamReport`: `ConsolidatedScenes / L2TopicsCompressed / L1NodesAdded|Removed / L1EdgesAdded|Removed / L0Updated` plus `Stages []DreamStage{Name, Status, DurationMs}` (status `ok | skipped | cancelled | error`). Three of those figures are easy to misread: `L2TopicsCompressed` counts the topics sunk into fused groups, not the number of groups; `L1NodesAdded` counts the scene nodes the sync wrote, which includes an existing node re-stamped because its topic set moved, not only newly created ones; and `L1EdgesAdded` counts the co-occurrence edges created **or strengthened** by the pass. The two removal counters span both stages that remove — the stale rebuild and the decay — and count the edges each took with it as well as the nodes. An empty report is not an error; a mid-pipeline failure returns the partial report with the error. What a host reads back is bounded by convergence, not by a cap: passing the threshold schedules that scene's Dream, and Dream only merges the groups the model judges one — topics it never picked stay at depth 1.
+
+### 6.5 Driving it from a decision-loop kernel
+
+One `.meh` file, one decision loop, one agent domain is the shape this surface is built
+for. Because the library holds which scene and which turn are open, the kernel carries no
+bookkeeping of its own:
+
+| The loop | The library |
+|---|---|
+| decides to start a round | `Search(SearchQuery{})` — nothing goes in, the scene's next turn comes open |
+| runs its arms (model call, tool call, sandbox answer) | one `AppendArchive` per fact worth keeping, on the turn now open |
+| ends the round with a status word | `Update(TurnEnd{Input, Output, Outcome, CreatedAt})` |
+| plans the round step by step | `PlanNodeAdd` / `PlanNodeUpdate` / `PlanState`, all on the open turn |
+| sleeps | `Dream` |
+
+`Outcome` takes the kernel's own word for which arm ended the round: the engine stores it
+verbatim and never branches on it, the same posture an event's `EventType` has. So no
+status vocabulary is imposed on the kernel, and nothing translates on the way in.
+
+A decision-loop kernel's memory port already has this shape: a recall that runs before the
+model is consulted, and a remember that runs once at the round's terminal point on every
+exit arm. Those two hooks are the first and third rows above, and nothing between them
+carries a key — what an adapter is left holding is one session handle plus the kernel's own
+name for how the round ended.
+
+What is left for the host is four facts to know, not four adapters to write:
+
+- **Only `Update` and `Dream` talk to the model.** `Update` makes exactly one call, inside
+  the domain lock; the read that opens a turn and every write inside it are deterministic.
+  The background consolidation an `Update` may schedule also takes the domain lock, so a
+  slow Dream holds up that domain's other calls — and never another domain's.
+- **Milliseconds, everywhere.** Every timestamp on this surface is Unix milliseconds, and
+  the write boundary refuses the seconds band (1e9–1e11) rather than storing a value the
+  next consolidation would sweep away as expired. A kernel carrying `time.Time` or Unix
+  seconds converts once where it fills the struct (`t.UnixMilli()`); that is the only
+  conversion left on this path.
+- **"The last N turns" counts topics, not records.** A turn is one topic on the scene's
+  surface (`Search` and `SceneContext` hand them over in turn order), while
+  `SearchL4{Limit}` caps *records*. A recall window of N turns therefore takes those N
+  topics and then reads each one's content; no L4 query on this surface counts turns.
+- **Loops stay apart.** The open turn belongs to an agent domain, so a second file — or a
+  second domain of the same file — cannot write onto the first one's turn
+  (`api/surface_turn_test.go` pins it). Sub-agent domains are the separate facility for
+  several domains sharing one file and one L3 knowledge graph; a second decision loop does
+  not need one, it needs a second `Open`.
 
 ---
 
 ## 7. One turn, one topic
 
-A turn is one topic: the id `Search` minted for it, and everything the host records
+A turn is one topic: the id `Search` minted for it and now holds, and everything the host records
 about it lives under that id. Dialogue originals and operation events are the same
 kind of record differing only by `Kind`, so a turn can hold as many of either as the
-host recorded, and one `Settle` distills them into one keyword track.
+host recorded, and one `Update` distills them into one keyword track.
 
 What happens *while* the turn runs (tool calls, intermediate output, subagent results)
 is not conversation, so it goes in as `Kind: api.KindEvent` beside the utterances —
@@ -300,7 +372,7 @@ summary is the one record whose type and role the library fixes — `text`, role
 
 The 25 session methods split by audience:
 
-- **Runtime/task face (18)** — the host drives these every turn and LLM tools bind to them: `Search` / `AppendArchive` / `Settle` / `Dream` (the host-driven loop), `GetL0` / `UpdateL0`, `ListL1`, `ListScenes` / `SceneContext`, `GetL3` / `ListL3` / `ImportL3` / `QueryL3Nodes` / `QueryL3Subgraph`, `SearchL4`, `PlanNodeAdd` / `PlanNodeUpdate` / `PlanState`.
+- **Runtime/task face (18)** — the host drives these every turn and LLM tools bind to them: `Search` / `AppendArchive` / `Update` / `Dream` (the host-driven loop), `GetL0` / `UpdateL0`, `ListL1`, `ListScenes` / `SceneContext`, `GetL3` / `ListL3` / `ImportL3` / `QueryL3Nodes` / `QueryL3Subgraph`, `SearchL4`, `PlanNodeAdd` / `PlanNodeUpdate` / `PlanState`.
 - **Assembly/admin face (7)** — host code at session boundaries and management channels only, never an LLM tool: `UpdateScene` / `RenameTopic` / `MergeScenes` / `DeleteScene` / `DeleteTopic`, `UpdateL3` / `DeleteL3`.
 
 The file-level lifecycle and diagnostics sit on `api.DB` instead (7): `Primary` / `SubAgent`, then `Checkpoint` / `CompactTo` / `Close` / `IsClosed` / `Stats` (file size plus reachable record count across the file — the numbers a compaction decision is made from). There is no capability surface anywhere: the engine neither stores nor parses cards, so a host reads the events of a turn with `SearchL4{Kind: event}` and organizes them itself.
@@ -441,16 +513,16 @@ on a large domain.
 ### Turn events (what a turn did, beside what it said)
 
 ```go
-// A turn's events are L4 content of kind event, under the NewTopicID Search
-// returned for this turn — the host never derives a turn key itself.
-err := db.AppendArchive(turnIDHex, api.ArchiveSlot{
+// A turn's events are L4 content of kind event, written into the turn Search
+// opened — the host names no key.
+_, err := db.AppendArchive(api.ArchiveSlot{
     Kind:      api.KindEvent,
     EventType: "tool_call",   // any non-empty name the host chooses; no whitelist
     Content:   "tool name + arg summary", // 4 KiB covers the whole record, name included
     CreatedAt: time.Now().UnixMilli(),
 })
-// Seq and the owning topic are engine-assigned: the key you append under IS the
-// turn's topic id, and the plan nodes that turn opened live under the same key.
+// Seq and the owning topic are engine-assigned: what you append lands on the open
+// turn, and that turn's plan nodes live under the same key.
 // `NodeSeq` is what binds an event to a step — see the plan surface below;
 // leave it 0 for a plain turn event.
 ```
@@ -473,32 +545,34 @@ appended under them still has them.
 
 ### L5 plan tree (Go host surface)
 
-A plan belongs to the turn that opened it: **the L5 key is that turn's
-topic id** — the one `Search` hands back — and it addresses the turn's nodes, while
-the same key addresses the turn's content in L4. A step is addressed by a **per-turn
+A plan belongs to the turn that opened it: **the library keys the tree on that turn's
+topic id** — the one `Search` minted and now holds — and the same key addresses the
+turn's content in L4. A step is addressed by a **per-turn
 ordinal** (`Seq`, a `uint32` the library hands out from 1 and the host only ever echoes
 back: the create calls return it), and `ParentSeq` says which step it hangs under
-(`0` = a root). There is no plan id and no path string to mint, and
-`PlanState(topicID)` is how a tree comes back.
+(`0` = a root). There is no plan id and no path string to mint, the plan calls name no
+topic id (they act on the turn `Search` opened), and `PlanState()` is how a tree comes
+back.
 
 | Call | Meaning |
 |---|---|
-| `seq, err := db.PlanNodeAdd(topicID, 0, title)` | open this turn's tree by creating its first root step, and take back the ordinal that step is addressed by from here on. A turn's tree starts with no steps, so this is also how a plan first appears under a turn; there is no separate "create the tree" call |
-| `seq, err := db.PlanNodeAdd(topicID, parentSeq, title)` | add one step to the tree and get its ordinal. `parentSeq` `0` hangs it at the top level, so this is also how a second root joins the forest; any other value must name a step this tree already holds — `PlanNodeAdd` under an unknown parent is `ErrNotFound` and grows nothing. A step is created `in_progress`, so no status is asked for here; a title may be left empty and filled in later, and the view falls back to the ordinal until the host names the step |
-| `err := db.PlanNodeUpdate(topicID, api.PlanStep{Seq: seq, Status: api.PlanStatusDone, Summary: s})` | restate one step: its `Status` plus the node's own `Title`/`Summary`. `Status` is stated every time (there is no "leave it as it was" spelling) while a blank `Title`/`Summary` keeps what the node holds, so updating a step never rewinds its title or erases a folded summary. A step reaching a terminal status records `FinishedAt`; restating a settled step as `in_progress` re-opens it and drops that timestamp. Once every direct child of a `Done` parent is itself terminal, the parent's summary folds up from its children's. A status outside `in_progress` / `done` / `failed`, or an ordinal this turn never created (`ErrNotFound`), is refused **before the node is touched** and leaves the tree exactly as it was. This call writes no content |
-| `tree, err := db.PlanState(topicID)` | read the forest view (`PlanTree.Roots` + `DoneCount` / `TotalCount`, which are summed over every step of every tree; every `PlanNodeView` carries `Seq` / `ParentSeq` / `Status` / `Summary` / `Children`) — also the restart recovery path |
-| `db.AppendArchive(sceneID, topicID, ev)` with a non-zero `ev.NodeSeq` | record a step event against one step of this turn's tree. The step has to exist already: an ordinal nobody created refuses the whole record (`ErrInvalidQuery`) and stores nothing, because an event naming a step the plan never holds is the plan and the record disagreeing — the tree is `PlanNodeAdd`'s to build, and a mistyped ordinal cannot quietly open a second one. `EventType` is **the host's own name for the step**, on this path exactly as on a bare turn event — the engine never branches on it (the name comes back verbatim through `SearchL4`) and only refuses an empty one. Convention names for readers: `plan_step`, `llm_request`, `llm_output`, `tool_call`, `tool_result`, `subagent_spawn`, `subagent_done`, `context_inject`, `ask_user`, `user_reply` |
+| `seq, err := db.PlanNodeAdd(0, title)` | open this turn's tree by creating its first root step, and take back the ordinal that step is addressed by from here on. A turn's tree starts with no steps, so this is also how a plan first appears under a turn; there is no separate "create the tree" call |
+| `seq, err := db.PlanNodeAdd(parentSeq, title)` | add one step to the tree and get its ordinal. `parentSeq` `0` hangs it at the top level, so this is also how a second root joins the forest; any other value must name a step this tree already holds — `PlanNodeAdd` under an unknown parent is `ErrNotFound` and grows nothing. A step is created `in_progress`, so no status is asked for here; a title may be left empty and filled in later, and the view falls back to the ordinal until the host names the step |
+| `err := db.PlanNodeUpdate(api.PlanStep{Seq: seq, Status: api.PlanStatusDone, Summary: s})` | restate one step: its `Status` plus the node's own `Title`/`Summary`. `Status` is stated every time (there is no "leave it as it was" spelling) while a blank `Title`/`Summary` keeps what the node holds, so updating a step never rewinds its title or erases a folded summary. A step reaching a terminal status records `FinishedAt`; restating a settled step as `in_progress` re-opens it and drops that timestamp. Once every direct child of a `Done` parent is itself terminal, the parent's summary folds up from its children's. A status outside `in_progress` / `done` / `failed`, or an ordinal this turn never created (`ErrNotFound`), is refused **before the node is touched** and leaves the tree exactly as it was. This call writes no content |
+| `tree, err := db.PlanState()` | read the forest view (`PlanTree.Roots` + `DoneCount` / `TotalCount`, which are summed over every step of every tree; every `PlanNodeView` carries `Seq` / `ParentSeq` / `Status` / `Summary` / `Children`) — also the restart recovery path |
+| `db.AppendArchive(ev)` with a non-zero `ev.NodeSeq` | record a step event against one step of this turn's tree. The step has to exist already: an ordinal nobody created refuses the whole record (`ErrInvalidQuery`) and stores nothing, because an event naming a step the plan never holds is the plan and the record disagreeing — the tree is `PlanNodeAdd`'s to build, and a mistyped ordinal cannot quietly open a second one. `EventType` is **the host's own name for the step**, on this path exactly as on a bare turn event — the engine never branches on it (the name comes back verbatim through `SearchL4`) and only refuses an empty one. Convention names for readers: `plan_step`, `llm_request`, `llm_output`, `tool_call`, `tool_result`, `subagent_spawn`, `subagent_done`, `context_inject`, `ask_user`, `user_reply` |
 
 Status has three values and one string encoding each: `api.PlanStatusInProgress`
 (`in_progress`), `api.PlanStatusDone` (`done`), `api.PlanStatusFailed` (`failed`). The
 engine keeps no "planned but not started" state — a step exists because the host created
 it, and it exists in progress.
 
-The plan write surface sits on `api.Session`'s 18 task-face methods: a tree has to be
-built by a caller that holds the turn it belongs to.
+The plan write surface sits on `api.Session`'s 18 task-face methods: a tree is built on
+the turn `Search` opened for the domain, so these calls name no topic id.
 
-`0000000000000000` is reserved (it is the value a record leaves its key unset
-with) and every L5 entry rejects it — reads included.
+The all-zero key `0000000000000000` is reserved (it is the value a record leaves its key
+unset with) — `Search` never opens a turn on it, and the read entries that do take a
+topic id (`SearchL4{TopicID}`, `RenameTopic`, `DeleteTopic`) reject it.
 
 ---
 
@@ -508,7 +582,7 @@ with) and every L5 entry rejects it — reads included.
 |---|---|---|
 | entry & handles | **`Open`** → `*DB`, then `DB.Primary()` / `DB.SubAgent(llm, profile)` → `*Session` | the only ways in; an agent domain is held as a handle, never named by an id |
 | config | **`LlmConfig`** / `MemHopDefaults` + `DefaultMemHopDefaults` | the endpoint and tuning arguments `Open` takes |
-| input shapes | **`ProfileInput`** / `SearchQuery` / `ScenePatch` / `L3ImportItem` / `L3Relation` / `L3ImportMode` / `L3NodeQuery` / `L4Query` / `PlanStep` / `ArchiveSlot` (also a result) | inputs; `ProfileInput` is the only profile a host may write, and of its four fields only `Name` is required |
+| input shapes | **`ProfileInput`** / `SearchQuery` / `TurnEnd` / `ScenePatch` / `L3ImportItem` / `L3Relation` / `L3ImportMode` / `L3NodeQuery` / `L4Query` / `PlanStep` / `ArchiveSlot` (also a result) | inputs; `ProfileInput` is the only profile a host may write, and of its four fields only `Name` is required |
 | response DTOs | `ProfileSlot` / `SceneNodeView` / `SceneSlot` / `TopicSlot` / `SceneContext` / `SceneContextTopic` / `SceneMessage` / `SearchResult` / `HypergraphSlot` / `HypergraphNode` / `HypergraphEdge` / `L3Graph` / `L3Subgraph` / `L3ImportResult` / `PlanTree` / `PlanNodeView` / `DreamReport` / `DreamStage` | every id field is a 16-char hex string, and every one of them was issued by the library |
 | enums | `GraphEdgeKind` / `ContentType` / `ArchiveKind` / `PlanStatus` / `AgentTypePrimary` + `AgentTypeSub` | the vocabulary a call is written in |
 | errors | `Code` + the `Err*` constants, read with `CodeOf(err)` | the numeric code behind an error string |
@@ -591,43 +665,37 @@ func main() {
     db, err := lib.Primary()
     if err != nil { log.Fatal(err) }
 
-    // One host session = one scene. The first read asks for a scene with an
-    // empty SceneID and keeps the returned id.
-    opened, err := db.Search(api.SearchQuery{})
-    if err != nil { log.Fatal(err) }
-    sceneID := opened.Scene.SceneID
-
-    // Per turn: start — read this session's memory (zero LLM), splice the
-    // topics in, and keep NewTopicID: it is where this turn will settle.
-    res, err := db.Search(api.SearchQuery{SceneID: sceneID})
+    // One host session = one scene, and the library holds it: an empty SearchQuery
+    // continues the domain's current scene (creating one on first use) and opens the
+    // next turn. NewScene: true starts a second conversation instead. A host running
+    // one agent over one library carries no id across the write calls.
+    res, err := db.Search(api.SearchQuery{})
     if err != nil { log.Fatal(err) }
     _ = res // Profile/ProfileBrief + Topics (FusedKeywords per topic)
-
-    // Per turn: record what was said and what happened, under that topic id.
-    topicID := res.NewTopicID
-    userTS := time.Now().UnixMilli()
-    _, _ = db.AppendArchive(sceneID, topicID, api.ArchiveSlot{Kind: api.KindUtterance, Seq: 1,
-        Role: api.RoleUser, Content: "user raw message", CreatedAt: userTS})
 
     // The plan comes first: a step exists because it was created here, one call
     // per step, and an event can only be attributed to a step the tree already
     // holds. The create calls hand back the ordinal that step is addressed by.
-    fix, err := db.PlanNodeAdd(topicID, 0, "locate the regression")
+    userTS := time.Now().UnixMilli()
+    fix, err := db.PlanNodeAdd(0, "locate the regression")
     if err != nil { log.Fatal(err) }
-    leaf, err := db.PlanNodeAdd(topicID, fix, "fix")
+    leaf, err := db.PlanNodeAdd(fix, "fix")
     if err != nil { log.Fatal(err) }
-    _, _ = db.AppendArchive(sceneID, topicID, api.ArchiveSlot{Kind: api.KindEvent,
+
+    // Per turn: record what happened while it ran, into the turn Search opened.
+    // What was said (input / output) is supplied when the turn closes.
+    _, _ = db.AppendArchive(api.ArchiveSlot{Kind: api.KindEvent,
         EventType: "tool_call", NodeSeq: leaf,
         Content: "grep ...", CreatedAt: userTS + 1})
-    _, _ = db.AppendArchive(sceneID, topicID, api.ArchiveSlot{Kind: api.KindUtterance, Seq: 2,
-        Role: api.RoleAgent, Content: "agent reply", CreatedAt: time.Now().UnixMilli()})
-    _ = db.PlanNodeUpdate(topicID, api.PlanStep{Seq: leaf, Status: api.PlanStatusDone,
+    _ = db.PlanNodeUpdate(api.PlanStep{Seq: leaf, Status: api.PlanStatusDone,
         Summary: "…"})
 
-    // Per turn: end — distill that topic's utterances into its keywords.
-    if _, err := db.Settle(sceneID, topicID); err != nil { log.Fatal(err) }
+    // Per turn: end — Update writes the turn's input and output onto the dialogue
+    // slots, records the outcome as one event, and distills the turn into its keywords.
+    if _, err := db.Update(api.TurnEnd{Input: "user raw message", Output: "agent reply",
+        CreatedAt: time.Now().UnixMilli()}); err != nil { log.Fatal(err) }
 
-    // Idle / scheduled (usually unnecessary: Settle schedules consolidation
+    // Idle / scheduled (usually unnecessary: Update schedules consolidation
     // once a scene's topic count passes the threshold).
     if _, err := db.Dream(context.Background(), ""); err != nil {
         log.Fatal(err)
@@ -640,10 +708,11 @@ func main() {
 
 ## 12. Pitfalls
 
-1. **The LLM only affects `Settle` and `Dream`**: `Search` and `AppendArchive` make
-   zero LLM calls, so recording and reading can never be blocked by it. `Settle`
+1. **The LLM only affects `Update` and `Dream`**: `Search` and `AppendArchive` make
+   zero LLM calls, so recording and reading can never be blocked by it. `Update`
    distils once per turn and, on failure, returns an error having written no topic —
-   the records you appended earlier stay. Hosts should retry a failed settle.
+   the records already on the turn stay. A failed `Update` leaves the turn open, so the
+   host can close it again.
 2. **No embedding service, no dimension to declare**: the two header bytes at
    offset 6 are reserved. The format version is `0x0012`: the L3 knowledge
    graph lives in the reserved shared domain (`core.SharedPoolAgentID`), a
@@ -668,8 +737,8 @@ func main() {
    scene's turn counter) and creates no topic record, so an abandoned
    turn leaves nothing behind. To read originals use `SceneContext` /
    `SearchL4`.
-   Replaying an append with the same `(TopicID, Seq)` is idempotent: the record
-   hashes from that pair, so a retry rewrites it instead of duplicating — and a
+   Replaying an append to the same slot is idempotent: the record
+   hashes from the open turn and its `Seq`, so a retry rewrites it instead of duplicating — and a
    slot the replay stops filling is not reclaimed.
 6. **One file, many agent domains**: all tenants live inside one `.meh` file —
    `api.Open` settles the domain the file was opened on, and `DB.SubAgent(llm,
@@ -684,20 +753,23 @@ func main() {
    `Seq` — a legal end state, not a failed read. A fused group's summary ages from
    the pass that wrote it, not from the turns it replaced, so it can outlive their
    originals: a parent may still carry Dream's own text after its children's have
-   been swept. Everything is keyed by the turn's
-   topic id, so append before `Settle` closes the turn (the id is already in hand
-   from `Search`) and never invent one.
-8. **The library owns the turn id**: `Settle` accepts only an existing scene
-   (`Search` → `Scene.SceneID`) and a topic id that read issued — a turn cannot
-   be settled without first being opened. The library never creates a scene
-   behind a settle, and Dream never merges scenes — merging is the explicit
+   been swept. Everything is keyed by the turn the library holds
+   open, so append during the turn and let `Update` close it — there is no id to invent
+   or carry.
+8. **The library holds the scene and the open turn**: `Search` continues the domain's
+   scene and opens the next turn; the write calls (`Update`, `AppendArchive`, the plan
+   family) act on that turn and name no ids. With no turn open — never `Search`ed, or the
+   turn or its scene was deleted (`DeleteTopic`/`DeleteScene`) or merged away
+   (`MergeScenes`) — they return `ErrInvalidQuery` with a message containing
+   `no turn is open`. The library never creates a scene behind a write, and Dream never
+   merges scenes — merging is the explicit
    `MergeScenes`, which deletes the merged-away records and thereby invalidates
-   any scene id the host still holds. Settle before merging: a turn `Search`
-   opened and `Settle` never settled has no topic record yet, so there is nothing
+   any scene id the host still holds. Close the turn before merging: a turn `Search`
+   opened and `Update` never closed has no topic record yet, so there is nothing
    for the merge to retarget — its id names a scene that is gone, and the turn can
-   never be settled afterwards.
+   never be closed afterwards.
    Each `Search` opens exactly one turn: a host that reads a scene twice and
-   settles once simply skips a turn number — gaps cost nothing, and no read
+   updates once simply skips a turn number — gaps cost nothing, and no read
    ever reissues an id already given out.
 9. **`SceneDreamTopicThreshold` defaults to 24**: a partial `MemHopDefaults`
     literal leaves it 0, which **disables** automatic consolidation — assign

@@ -27,19 +27,18 @@ func mustSub(t *testing.T, m *memhop.DB, llmURL, name string) *memhop.Session {
 	return sess
 }
 
-// settleOneTurn opens a session in a domain and settles one turn into it, so
+// settleOneTurn opens a session in a domain and closes one turn into it, so
 // the domain holds memory a test can look for.
 func settleOneTurn(t *testing.T, sess *memhop.Session, user, agent string) string {
 	t.Helper()
-	res, err := sess.Search(memhop.SearchQuery{})
+	res, err := sess.Search(memhop.SearchQuery{NewScene: true})
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
-	sceneID := res.Scene.SceneID
-	if err := turn(sess, sceneID, res.NewTopicID, user, agent); err != nil {
+	if _, err := turn(sess, user, agent); err != nil {
 		t.Fatalf("turn: %v", err)
 	}
-	return sceneID
+	return res.Scene.SceneID
 }
 
 // queryFor is an L4 lookup by keyword — what a host uses to ask "where did we

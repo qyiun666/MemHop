@@ -16,12 +16,14 @@ func TestSurfaceL2Scenes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("search scene one: %v", err)
 	}
-	second, err := db.Search(SearchQuery{})
+	// A second conversation is asked for, not inferred: an un-named read continues
+	// the domain's current scene.
+	second, err := db.Search(SearchQuery{NewScene: true})
 	if err != nil {
 		t.Fatalf("search scene two: %v", err)
 	}
 	// A scene with content, so the context view has something to render.
-	if _, err := settleTurn(db, first.Scene.SceneID, first.NewTopicID, "scene one topic", "noted"); err != nil {
+	if _, err := settleTurn(db, "scene one topic", "noted"); err != nil {
 		t.Fatalf("settle: %v", err)
 	}
 
@@ -69,7 +71,7 @@ func TestSurfaceRenameTopicIsVisibleOnTheReadPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("search: %v", err)
 	}
-	if _, err := settleTurn(db, res.Scene.SceneID, res.NewTopicID, "把 L5 让给计划树", "好"); err != nil {
+	if _, err := settleTurn(db, "把 L5 让给计划树", "好"); err != nil {
 		t.Fatalf("settle turn: %v", err)
 	}
 

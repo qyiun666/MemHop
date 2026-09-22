@@ -78,7 +78,7 @@ func (db *DB) RunDream(ctx context.Context, agentID uint64, sceneID uint64) (*Dr
 }
 
 // triggerSceneDream schedules one scene's Dream in the background so the
-// caller (the Settle-time consolidation check) returns immediately instead of
+// caller (the close-time consolidation check) returns immediately instead of
 // blocking on the LLM-heavy pipeline. The goroutine acquires the domain lock
 // itself and exits when RunDream returns or the DB is closed; the per-agent
 // in-flight set prevents stacking multiple Dreams for the same scene. Failures

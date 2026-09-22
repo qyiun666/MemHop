@@ -120,21 +120,12 @@ func (h *Handle) OpenTurn(sceneID string) (string, string, error) {
 	return res.Scene.SceneID, res.NewTopicID, nil
 }
 
-// SettleTurn runs one finished turn the way a host does: the two originals land
-// in the slots dialogue owns under turnID, then Settle distills them into that
-// topic's keyword track. Every scenario here needs all three steps to have
-// happened, and Settle no longer carries the texts.
-func (h *Handle) SettleTurn(sceneID, turnID, user, agent string, ts int64) error {
-	utterances := []memhop.ArchiveSlot{
-		{Kind: memhop.KindUtterance, Seq: 1, Role: memhop.RoleUser, Content: user, CreatedAt: ts},
-		{Kind: memhop.KindUtterance, Seq: 2, Role: memhop.RoleAgent, Content: agent, CreatedAt: ts + 500},
-	}
-	for _, u := range utterances {
-		if _, err := h.AppendArchive(sceneID, turnID, u); err != nil {
-			return err
-		}
-	}
-	_, err := h.Settle(sceneID, turnID)
+// CloseTurn closes one finished turn the way the task face does: Update lands the
+// two originals on the slots the turn's dialogue owns and distills them into that
+// topic's keyword track. OpenTurn has to come first — the turn this closes is the one
+// Search opened, and neither id travels into the call.
+func (h *Handle) CloseTurn(user, agent string, ts int64) error {
+	_, err := h.Update(memhop.TurnEnd{Input: user, Output: agent, CreatedAt: ts})
 	return err
 }
 

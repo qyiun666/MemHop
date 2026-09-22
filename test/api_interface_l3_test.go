@@ -77,9 +77,11 @@ func TestInterfaceL3(t *testing.T) {
 	}
 	assertImportedNode(t, subgraph.Nodes[0], graphID, res.CreatedIDs[0])
 
-	// L2↔L3 lives on the scene: opening a session with an L3 id anchors it,
-	// and the domain listing finds that session back.
-	anchored, err := db.Search(memhop.SearchQuery{L3ID: graphs[0].ID})
+	// L2↔L3 lives on the scene: opening a new session with an L3 id anchors it,
+	// and the domain listing finds that session back. NewScene is what asks for a
+	// session here — an unnamed read continues the one the domain is on, and naming
+	// an anchor onto a scene that already exists is refused.
+	anchored, err := db.Search(memhop.SearchQuery{NewScene: true, L3ID: graphs[0].ID})
 	if err != nil {
 		t.Fatalf("Search with l3 id: %v", err)
 	}

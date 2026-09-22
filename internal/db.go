@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/qyiun666/MemHop/internal/common"
-	"github.com/qyiun666/MemHop/internal/content"
 	"github.com/qyiun666/MemHop/internal/domain"
 	"github.com/qyiun666/MemHop/internal/llm"
 	"github.com/qyiun666/MemHop/internal/repo/core"
@@ -149,22 +148,21 @@ func (db *DB) lockOpen(ac *domain.Context) error {
 	return nil
 }
 
-// lockSession is the shared prologue of the turn-keyed operations: take the
-// domain lock, then parse the turn's topic id with content.ParseTopicID. On a
-// parse failure the lock is released before returning, so callers add
-// `defer ac.Mu.Unlock()` only after the error check. A reserved all-zero key
-// is refused the same way wherever a host can hand one in.
-func (db *DB) lockSession(agentID uint64, sessionID string) (*domain.Context, uint64, error) {
+// lockTurn is the prologue of every call that closes or extends the turn Search
+// opened: the domain lock, then a refusal when the domain holds no open turn.
+// Guessing one — the newest scene's next turn — would write a closing line onto a
+// turn nobody opened, so the host hears that it has to read first.
+func (db *DB) lockTurn(agentID uint64) (*domain.Context, error) {
 	ac, err := db.lockAgent(agentID)
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
-	parsed, err := content.ParseTopicID(sessionID)
-	if err != nil {
+	if ac.Turn == 0 {
 		ac.Mu.Unlock()
-		return nil, 0, err
+		return nil, common.NewError(common.ErrInvalidQuery,
+			"no turn is open: Search opens the turn a call like this one closes")
 	}
-	return ac, parsed, nil
+	return ac, nil
 }
 
 // lockSharedPool is the prologue of every L3 operation: the caller's own

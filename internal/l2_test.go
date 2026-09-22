@@ -434,7 +434,7 @@ func TestUpdateSceneNameSurvivesLaterTurns(t *testing.T) {
 		t.Fatalf("open scene: %v", err)
 	}
 	sceneHex := common.FormatHash(res.Scene.SceneID)
-	appendTurn(t, db, res.Scene.SceneID, res.NewTopicID, 1000)
+	appendTurn(t, db, 1000)
 	if err := settle(db, res.Scene.SceneID, res.NewTopicID); err != nil {
 		t.Fatalf("settle turn: %v", err)
 	}
@@ -479,7 +479,7 @@ func TestSceneContextAfterContentRetentionIsEmptyNotAnError(t *testing.T) {
 	db := newSearchTestDB(t, srv.URL)
 	sceneID, topicID := openTurn(t, db)
 
-	appendTurn(t, db, sceneID, topicID, 1000)
+	appendTurn(t, db, 1000)
 	if err := settle(db, sceneID, topicID); err != nil {
 		t.Fatalf("update: %v", err)
 	}

@@ -81,15 +81,14 @@ func TestCoreCycleUpdateDream(t *testing.T) {
 		t.Fatalf("open session: %v", err)
 	}
 
-	// Phase 1: one Settle per turn (the real host pattern), checking
+	// Phase 1: one Update per turn (the real host pattern), checking
 	// L0/L2/L4 consistency every few turns.
 	for i, f := range facts {
 		ts := base + int64(i)*1000
-		_, turnID, err := db.OpenTurn(sceneID)
-		if err != nil {
+		if _, _, err := db.OpenTurn(sceneID); err != nil {
 			t.Fatalf("open turn %d: %v", i, err)
 		}
-		if err := db.SettleTurn(sceneID, turnID, f, "Agent: 明白了，已记录。", ts); err != nil {
+		if err := db.CloseTurn(f, "Agent: 明白了，已记录。", ts); err != nil {
 			t.Fatalf("turn ingest %d: %v", i, err)
 		}
 		if (i+1)%8 == 0 {

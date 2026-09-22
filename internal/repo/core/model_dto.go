@@ -7,14 +7,18 @@
 
 package core
 
-// SearchQuery is one scene-scoped read. An empty SceneID asks for a fresh scene;
-// a non-empty one must already exist. L3ID anchors a scene to a project domain and
-// is a creation-time field: naming an existing scene together with one is refused
+// SearchQuery is one scene-scoped read. An empty SceneID continues the domain's
+// current scene — the one whose turn counter ran furthest, restored at the first
+// read after an open or a sweep — so a host running one agent over one library
+// names no scene at all. NewScene asks for a fresh one instead. L3ID anchors a
+// scene to an L3 project domain and only a read that creates a scene takes it:
+// handed in along with a scene this read continues, named or not, it is refused
 // rather than ignored, because a dropped anchor makes an anchoring attempt look
 // like it worked. UpdateScene moves the anchor of a scene that exists.
 type SearchQuery struct {
-	SceneID string `json:"scene_id,omitempty"`
-	L3ID    string `json:"l3_id,omitempty"`
+	SceneID  string `json:"scene_id,omitempty"`
+	L3ID     string `json:"l3_id,omitempty"`
+	NewScene bool   `json:"new_scene,omitempty"`
 }
 
 // SearchResult carries the L0 profile plus the read surface of one scene: the
@@ -25,6 +29,19 @@ type SearchResult struct {
 	Scene        SceneSlot   `json:"scene"`
 	Topics       []TopicSlot `json:"topics"`
 	NewTopicID   uint64      `json:"new_topic_id"`
+}
+
+// TurnEnd is what one turn leaves behind when its host closes it. Input and Output
+// are the turn's dialogue originals and land on Seq 1 and Seq 2; Outcome is the
+// host's own word for the arm that ended the turn (a decision-loop kernel's status
+// name), which the engine stores verbatim and never branches on — the same posture
+// an event's EventType has. CreatedAt is milliseconds, like every other timestamp on
+// this surface.
+type TurnEnd struct {
+	Input     string
+	Output    string
+	Outcome   string
+	CreatedAt int64
 }
 
 // SceneMessage is one L4 utterance inside a scene context topic. Type says

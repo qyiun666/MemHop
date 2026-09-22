@@ -14,7 +14,6 @@ import (
 	"github.com/qyiun666/MemHop/internal/content"
 	"github.com/qyiun666/MemHop/internal/repo"
 	"github.com/qyiun666/MemHop/internal/repo/core"
-	"github.com/qyiun666/MemHop/internal/turn"
 )
 
 // SearchL4 reads the content records matching every condition of q; the
@@ -74,47 +73,31 @@ func (db *DB) SearchL4(agentID uint64, q L4Query) ([]core.ArchiveSlot, error) {
 	return out, nil
 }
 
-// AppendArchive writes one piece of a turn's content under topicID — the key
-// Search issued for that turn — and returns the slot it took. Kind says which
-// track it belongs to: what somebody said, or what happened while they said it.
+// AppendArchive writes one piece of the open turn's content and returns the slot it
+// took. Kind says which track it belongs to: what somebody said, or what happened
+// while they said it. The turn is the one Search opened for this domain, so a host
+// recording the work of its own round names no ids — and the pair it would have
+// named cannot then disagree with the library's own record of which turn is open.
 //
-// The (sceneID, topicID) pair is checked together: topicID must be a turn key
-// the named scene opened — one of hash("turn:"+scene:seq) for a seq the
-// scene's counter has reached — so a mistyped or invented id is refused before
-// anything is stored instead of landing content under a key no read ever
-// lists. An unknown scene is ErrNotFound; a key outside the scene's turns is
-// ErrInvalidQuery. Both checks read the scene record under the write's own
-// lock, so a scene merged away mid-flight is caught here too.
-//
-// Seq 0 allocates a slot above everything the topic holds; the slot taken is
-// what this call returns, and naming that slot again is an overwrite, not an
-// error — that is what lets a replayed append converge instead of accumulating
-// versions. An event may name the plan step it belongs to (NodeSeq), which has
-// to exist already: the tree is what the plan write face creates, and naming a
-// step nobody created is refused, not grown. A record that does not satisfy the
-// write contract is refused before anything is stored.
-func (db *DB) AppendArchive(agentID uint64, sceneID, topicID string, slot core.ArchiveSlot) (uint64, error) {
-	ac, th, err := db.lockSession(agentID, topicID)
+// Seq 0 allocates a slot above everything the topic holds, above Seq 1 and 2 which
+// belong to the turn's dialogue; the slot taken is what this call returns, and
+// naming that slot again is an overwrite, not an error — that is what lets a
+// replayed append converge instead of accumulating versions. An event may name the
+// plan step it belongs to (NodeSeq), which has to exist already: the tree is what
+// the plan write face creates, so an ordinal nobody created is refused, not grown.
+// A record that does not satisfy the write contract is refused before anything is
+// stored.
+func (db *DB) AppendArchive(agentID uint64, slot core.ArchiveSlot) (uint64, error) {
+	ac, err := db.lockTurn(agentID)
 	if err != nil {
 		return 0, err
 	}
 	defer ac.Mu.Unlock()
-	parsedScene, err := common.ParseID(sceneID)
-	if err != nil {
-		return 0, common.NewError(common.ErrInvalidQuery, "parse scene id", err)
-	}
-	sceneSlot, err := core.ReadSceneSlot(db.engine, agentID, parsedScene)
-	if err != nil {
-		return 0, err
-	}
-	if err := turn.SettleTarget(parsedScene, th, sceneSlot.TurnSeq); err != nil {
-		return 0, err
-	}
 	if slot.Kind == core.KindEvent && slot.NodeSeq != 0 &&
-		!ac.Plans.HasSeq(th, slot.NodeSeq) {
+		!ac.Plans.HasSeq(ac.Turn, slot.NodeSeq) {
 		return 0, common.NewError(common.ErrInvalidQuery,
 			fmt.Sprintf("the event names step %d, which is not on this turn's plan tree",
 				slot.NodeSeq))
 	}
-	return content.Append(ac, agentID, th, slot)
+	return content.Append(ac, agentID, ac.Turn, slot)
 }

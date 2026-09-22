@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -77,10 +78,11 @@ func openTestDB(t *testing.T) (*testDB, *mockLLM) {
 }
 
 // openSession asks the library for a fresh host session (scene) and returns
-// its hex id.
+// its hex id. NewScene is what asks: an empty query now continues the domain's
+// current scene, which is how a host running one agent over one library reads.
 func openSession(t *testing.T, db *testDB) string {
 	t.Helper()
-	res, err := db.Search(memhop.SearchQuery{})
+	res, err := db.Search(memhop.SearchQuery{NewScene: true})
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
@@ -88,7 +90,9 @@ func openSession(t *testing.T, db *testDB) string {
 }
 
 // openTurn opens the next turn of a session and returns the topic id the
-// library issued for it — the id the turn must settle into.
+// library issued for it — the id that turn's content, plan tree and distillation
+// are keyed by, and the one this file reads back. The writes of that turn take no
+// id: the library holds which turn is open.
 func openTurn(t *testing.T, db *testDB, sceneID string) string {
 	t.Helper()
 	res, err := db.Search(memhop.SearchQuery{SceneID: sceneID})
@@ -98,23 +102,20 @@ func openTurn(t *testing.T, db *testDB, sceneID string) string {
 	return res.NewTopicID
 }
 
-// turn runs one finished turn the way a host does: the two originals land in the
-// slots dialogue owns under the topic id Search opened, and the turn is then
-// settled into it. The error is whichever step refused, so a caller can pin a
-// rejection by naming the step it expects to fail on.
-func turn(db *memhop.Session, sceneID, topicID, user, agent string) error {
-	ts := time.Now().UnixMilli()
-	utterances := []memhop.ArchiveSlot{
-		{Kind: memhop.KindUtterance, Seq: 1, Role: memhop.RoleUser, Content: user, CreatedAt: ts},
-		{Kind: memhop.KindUtterance, Seq: 2, Role: memhop.RoleAgent, Content: agent, CreatedAt: ts + 1},
+// turn closes the turn the last Search opened, the way a host ends one round: one
+// Update carries the stimulus, the answer and the timestamp, and the library lands
+// them on the slots dialogue owns and distills them into that turn's topic. It
+// returns the topic the turn settled into — which turn that was is the library's to
+// remember, so a caller that wants proof compares this id with the one Search
+// handed back. The error is the close's own, so a caller can pin a rejection.
+func turn(db *memhop.Session, user, agent string) (string, error) {
+	topic, err := db.Update(memhop.TurnEnd{
+		Input: user, Output: agent, CreatedAt: time.Now().UnixMilli(),
+	})
+	if err != nil {
+		return "", err
 	}
-	for _, u := range utterances {
-		if _, err := db.AppendArchive(sceneID, topicID, u); err != nil {
-			return err
-		}
-	}
-	_, err := db.Settle(sceneID, topicID)
-	return err
+	return topic.ID, nil
 }
 
 func TestInterfaceOpenClose(t *testing.T) {
@@ -131,7 +132,7 @@ func TestInterfaceOpenClose(t *testing.T) {
 }
 
 // The memory loop contract offline: an empty-id Search mints a session, one
-// Settle closes one turn (topic + two originals + exactly one distillation),
+// Update closes one turn (topic + two originals + exactly one distillation),
 // and the same session read hands it back.
 func TestInterfaceSearchUpdateL2L4(t *testing.T) {
 	db, llm := openTestDB(t)
@@ -151,18 +152,24 @@ func TestInterfaceSearchUpdateL2L4(t *testing.T) {
 
 	before := llm.calls["keywords"]
 	topicID := openTurn(t, db, sceneID)
-	if err := turn(db.Session, sceneID, topicID, "用户要求重构代码", "好的,我来重构这段代码"); err != nil {
+	closedID, err := turn(db.Session, "用户要求重构代码", "好的,我来重构这段代码")
+	if err != nil {
 		t.Fatalf("turn: %v", err)
 	}
+	// The turn's writes name no id, so this is where the loop closes: the topic
+	// Update settled into is the one Search minted for this turn.
+	if closedID != topicID {
+		t.Fatalf("Update closed topic %s, want the turn Search opened (%s)", closedID, topicID)
+	}
 	if calls := llm.calls["keywords"]; calls != before+1 {
-		t.Fatalf("Settle distilled %d times, want exactly one per turn", calls-before)
+		t.Fatalf("Update distilled %d times, want exactly one per turn", calls-before)
 	}
 
 	// The turn is now the session's read surface, with the content it appended
 	// held under its own id.
 	after, err := db.Search(memhop.SearchQuery{SceneID: sceneID})
 	if err != nil {
-		t.Fatalf("Search after Settle: %v", err)
+		t.Fatalf("Search after Update: %v", err)
 	}
 	if len(after.Topics) != 1 || after.Topics[0].ID != topicID {
 		t.Fatalf("surface = %+v, want the one turn topic %s", after.Topics, topicID)
@@ -179,22 +186,30 @@ func TestInterfaceSearchUpdateL2L4(t *testing.T) {
 		t.Fatalf("the turn topic carries %q, want the three words distilled from it", after.Topics[0].FusedKeywords)
 	}
 
-	// A turn id belongs to the scene that opened it: handing one to another scene
-	// is the mix-up a host with several sessions can really make. The settle is
-	// what refuses it — content is addressed by topic alone, so running the whole
-	// host loop here would rewrite the turn under test before failing.
-	other := openSession(t, db)
-	if _, err := db.Settle(other, topicID); err == nil {
-		t.Fatal("settling another scene's turn should fail")
-	}
-	if surface, err := db.Search(memhop.SearchQuery{SceneID: other}); err != nil || len(surface.Topics) != 0 {
-		t.Fatalf("the refused cross-scene turn landed somewhere: %d topics, err %v", len(surface.Topics), err)
-	}
-	// An empty record is refused where it is written, not where it is distilled.
-	if _, err := db.AppendArchive(sceneID, topicID, memhop.ArchiveSlot{
+	// One turn stays the library's turn until the next read: a record still lands
+	// on it, and an empty one is refused where it is written, not where it is
+	// distilled. (A turn cannot be pointed at from elsewhere: with no turn open
+	// every write refuses, which TestInterfaceWritesRefuseWhenNoTurnIsOpen pins.)
+	if _, err := db.AppendArchive(memhop.ArchiveSlot{
 		Kind: memhop.KindUtterance, Role: memhop.RoleUser, CreatedAt: 1,
 	}); err == nil {
 		t.Fatal("an utterance with no content should fail")
+	}
+
+	// A host that runs a second session and then loses it cannot close the turn
+	// that session had opened: the scene going takes its turn, and the write is
+	// refused as a missing turn rather than landing on a scene the host never named.
+	other := openSession(t, db)
+	if err := db.DeleteScene(other); err != nil {
+		t.Fatalf("DeleteScene: %v", err)
+	}
+	if _, err := db.Update(memhop.TurnEnd{
+		Input: "这轮没有开过", Output: "不该落笔", CreatedAt: time.Now().UnixMilli(),
+	}); err == nil || !strings.Contains(err.Error(), "no turn is open") {
+		t.Fatalf("closing a turn whose scene is gone = %v, want the open-turn refusal", err)
+	}
+	if survived, err := db.Search(memhop.SearchQuery{SceneID: sceneID}); err != nil || len(survived.Topics) != 1 {
+		t.Fatalf("the refused close disturbed the surviving session: %d topics, err %v", len(survived.Topics), err)
 	}
 
 	// L2: sessions opened by Search are listable.
@@ -219,6 +234,71 @@ func TestInterfaceSearchUpdateL2L4(t *testing.T) {
 	}
 }
 
+// The turn's writes name no ids, so the one mistake left to a host is writing when
+// the domain holds no open turn — never read, or a turn deleted out from under it.
+// Every one of the five writes refuses with the query code and says which fact it
+// is missing, and none of them guesses a turn to write onto.
+func TestInterfaceWritesRefuseWhenNoTurnIsOpen(t *testing.T) {
+	db, llm := openTestDB(t)
+	ts := time.Now().UnixMilli()
+
+	writes := []struct {
+		name string
+		call func() error
+	}{
+		{"Update", func() error {
+			_, err := db.Update(memhop.TurnEnd{Input: "没开轮就关", Output: "a", CreatedAt: ts})
+			return err
+		}},
+		{"AppendArchive", func() error {
+			_, err := db.AppendArchive(memhop.ArchiveSlot{
+				Kind: memhop.KindEvent, EventType: "tool_call", Content: `{"tool":"read"}`, CreatedAt: ts,
+			})
+			return err
+		}},
+		{"PlanNodeAdd", func() error { _, err := db.PlanNodeAdd(0, "第一步"); return err }},
+		{"PlanNodeUpdate", func() error {
+			return db.PlanNodeUpdate(memhop.PlanStep{Seq: 1, Status: memhop.PlanStatusDone})
+		}},
+		{"PlanState", func() error { _, err := db.PlanState(); return err }},
+	}
+	for _, w := range writes {
+		err := w.call()
+		if err == nil {
+			t.Fatalf("%s: a write with no open turn was accepted", w.name)
+		}
+		if memhop.CodeOf(err) != memhop.ErrInvalidQuery {
+			t.Fatalf("%s: code %d, want the query code %d (%v)", w.name, memhop.CodeOf(err), memhop.ErrInvalidQuery, err)
+		}
+		if !strings.Contains(err.Error(), "no turn is open") {
+			t.Fatalf("%s: %v, want the refusal to name the missing open turn", w.name, err)
+		}
+	}
+	if calls := llm.calls["keywords"]; calls != 0 {
+		t.Fatalf("a refused close asked the model %d times, want 0", calls)
+	}
+
+	// The same refusal when the turn is gone rather than never opened: a scene that
+	// goes takes the turn opened on it, and the library does not move that close to
+	// a scene the host never named.
+	sceneID := openSession(t, db)
+	if err := db.DeleteScene(sceneID); err != nil {
+		t.Fatalf("DeleteScene: %v", err)
+	}
+	if _, err := db.Update(memhop.TurnEnd{Input: "轮没了", Output: "a", CreatedAt: ts}); err == nil ||
+		!strings.Contains(err.Error(), "no turn is open") {
+		t.Fatalf("closing a turn whose scene was deleted = %v, want the open-turn refusal", err)
+	}
+	// The refusal is about the domain's state, not about the handle: one read opens
+	// a turn again, and the same write lands.
+	openSession(t, db)
+	if topicID, err := turn(db.Session, "重新开一轮", "好了"); err != nil {
+		t.Fatalf("turn after opening a turn again: %v", err)
+	} else if topicID == "" {
+		t.Fatal("the re-opened turn closed onto no topic")
+	}
+}
+
 // One turn costs exactly one LLM round trip: the distillation of what the turn
 // appended, however many records that is.
 func TestInterfaceOneDistillationPerTurn(t *testing.T) {
@@ -227,7 +307,8 @@ func TestInterfaceOneDistillationPerTurn(t *testing.T) {
 
 	start := llm.calls["keywords"]
 	for i := range 5 {
-		if err := turn(db.Session, sceneID, openTurn(t, db, sceneID), fmt.Sprintf("问题 %d", i), "回复"); err != nil {
+		openTurn(t, db, sceneID)
+		if _, err := turn(db.Session, fmt.Sprintf("问题 %d", i), "回复"); err != nil {
 			t.Fatalf("turn %d: %v", i, err)
 		}
 	}
@@ -262,43 +343,52 @@ func TestInterfaceL0(t *testing.T) {
 }
 
 // A model that answers off contract costs the host that turn's distillation and
-// nothing else: the settle is refused rather than storing a topic with no keyword
-// track, and the originals the host already wrote stay exactly as they were.
+// nothing else: the close is refused rather than storing a topic with no keyword
+// track, and the originals the closing call writes itself stay exactly as they
+// were. The turn is still open afterwards, so the host can close it again.
 func TestInterfaceUpdateRefusesAnOffContractReply(t *testing.T) {
 	db, llm := openTestDB(t)
 	sceneID := openSession(t, db)
 	topicID := openTurn(t, db, sceneID)
 	ts := time.Now().UnixMilli()
-	for _, u := range []memhop.ArchiveSlot{
-		{Kind: memhop.KindUtterance, Seq: 1, Role: memhop.RoleUser, Content: "用户要求重构代码", CreatedAt: ts},
-		{Kind: memhop.KindUtterance, Seq: 2, Role: memhop.RoleAgent, Content: "好的,我来重构这段代码", CreatedAt: ts + 1},
-	} {
-		if _, err := db.AppendArchive(sceneID, topicID, u); err != nil {
-			t.Fatalf("AppendArchive: %v", err)
-		}
-	}
 
 	llm.offContract = "这不是契约里的回包"
-	_, err := db.Settle(sceneID, topicID)
+	_, err := db.Update(memhop.TurnEnd{
+		Input: "用户要求重构代码", Output: "好的,我来重构这段代码", CreatedAt: ts,
+	})
 	if memhop.CodeOf(err) != memhop.ErrLLM {
-		t.Fatalf("Settle over an off-contract reply = %v (code %d), want the LLM code %d",
+		t.Fatalf("Update over an off-contract reply = %v (code %d), want the LLM code %d",
 			err, memhop.CodeOf(err), memhop.ErrLLM)
 	}
 	if llm.calls["keywords"] == 0 {
 		t.Fatal("the refusal came without ever asking the model")
 	}
 
-	surface, err := db.Search(memhop.SearchQuery{SceneID: sceneID})
-	if err != nil {
-		t.Fatalf("Search after the refused settle: %v", err)
-	}
-	for _, topic := range surface.Topics {
-		if topic.ID == topicID {
-			t.Fatalf("the refused settle left a topic behind: %+v", topic)
-		}
-	}
 	owned, err := db.SearchL4(memhop.L4Query{TopicID: &topicID})
 	if err != nil || len(owned) != 2 {
-		t.Fatalf("the refused settle cost the turn its originals: %d records, err %v", len(owned), err)
+		t.Fatalf("the refused close cost the turn its originals: %d records, err %v", len(owned), err)
+	}
+	if owned[0].Content != "用户要求重构代码" || owned[1].Content != "好的,我来重构这段代码" {
+		t.Fatalf("the refused close rewrote what it had written: %+v", owned)
+	}
+	// SceneContext is the read that opens no turn, and that is why the check that
+	// nothing settled goes through it: a Search here would replace the very turn the
+	// retry below is meant to close.
+	ctx, err := db.SceneContext(sceneID)
+	if err != nil {
+		t.Fatalf("SceneContext after the refused close: %v", err)
+	}
+	for _, topic := range ctx.Topics {
+		if topic.TopicID == topicID {
+			t.Fatalf("the refused close left a topic behind: %+v", topic)
+		}
+	}
+	// The turn the refused close did not settle is still the domain's open one: the
+	// same call, with the model back on contract, lands it.
+	llm.offContract = ""
+	if closed, err := turn(db.Session, "用户要求重构代码", "好的,我来重构这段代码"); err != nil {
+		t.Fatalf("retrying the refused close: %v", err)
+	} else if closed != topicID {
+		t.Fatalf("the retry closed topic %s, want the turn the refused call left open (%s)", closed, topicID)
 	}
 }

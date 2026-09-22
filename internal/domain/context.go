@@ -30,9 +30,17 @@ type Context struct {
 	LLM      llmops.Chat
 	Defaults *config.MemHopDefaults
 
-	L2Meta        *index.L2MetaIndex  // L2 topic metadata cache
-	L4            *index.L4Index      // content each topic owns: utterances AND events
-	Plans         *PlanCache          // L5 plan tree per topic
+	L2Meta *index.L2MetaIndex // L2 topic metadata cache
+	L4     *index.L4Index     // content each topic owns: utterances AND events
+	Plans  *PlanCache         // L5 plan tree per topic
+	// Scene and Turn are the two ids a host would otherwise carry across every call.
+	// Scene restores from the records at the domain's first read; Turn has no record
+	// to restore from, so a process that died between opening a turn and closing it
+	// leaves that turn unclosed and the next read reports as much. Both are read and
+	// written under Mu, the domain lock.
+	Scene uint64
+	Turn  uint64
+
 	DreamInFlight map[uint64]struct{} // scenes with a scheduled background Dream
 
 	LastActiveAt atomic.Int64 // Unix ms of the last context access (idle sweep)

@@ -117,7 +117,7 @@ func TestSurfaceL3DeleteDropsSceneAnchor(t *testing.T) {
 	if sr.Scene.L3ID != proj.GraphIDs[0] {
 		t.Fatalf("scene not anchored on create: %q", sr.Scene.L3ID)
 	}
-	if _, err := db.Search(SearchQuery{L3ID: other.GraphIDs[0]}); err != nil {
+	if _, err := db.Search(SearchQuery{NewScene: true, L3ID: other.GraphIDs[0]}); err != nil {
 		t.Fatalf("search second scene: %v", err)
 	}
 

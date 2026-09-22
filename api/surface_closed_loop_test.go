@@ -220,8 +220,9 @@ func TestSceneAnchorAgreesWithTheGraphSurface(t *testing.T) {
 	if _, err := sess.Search(SearchQuery{SceneID: sr.Scene.SceneID, L3ID: gid}); CodeOf(err) != ErrInvalidQuery {
 		t.Fatalf("Search must refuse an L3ID for an existing scene instead of ignoring it, got %v", err)
 	}
-	// an anchor naming a graph that does not exist is refused on creation too
-	if _, err := sess.Search(SearchQuery{L3ID: "ffffffffffffffff"}); err == nil {
+	// an anchor naming a graph that does not exist is refused on creation too — the
+	// anchor is read on the creating path, so this read asks for its own scene
+	if _, err := sess.Search(SearchQuery{L3ID: "ffffffffffffffff", NewScene: true}); err == nil {
 		t.Fatal("Search must refuse an unknown anchor graph")
 	}
 	if got, err := sess.ListScenes(gid); err != nil || len(got) != 1 {
@@ -251,16 +252,16 @@ func TestSceneAnchorAgreesWithTheGraphSurface(t *testing.T) {
 // tree it reads back afterwards is the tree it had before.
 func TestPlanWritesRejectedLeaveTreeUntouched(t *testing.T) {
 	sess := openSurfaceDB(t)
-	sceneID, pid := mustTurnKey(t, sess)
-	root, err := sess.PlanNodeAdd(pid, 0, "root")
+	turn := mustTurnKey(t, sess)
+	root, err := sess.PlanNodeAdd(0, "root")
 	if err != nil {
 		t.Fatal(err)
 	}
-	leaf, err := sess.PlanNodeAdd(pid, root, "leaf")
+	leaf, err := sess.PlanNodeAdd(root, "leaf")
 	if err != nil {
 		t.Fatal(err)
 	}
-	before, err := sess.PlanState(pid)
+	before, err := sess.PlanState()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,18 +274,18 @@ func TestPlanWritesRejectedLeaveTreeUntouched(t *testing.T) {
 		call func() error
 	}{
 		{"unknown status", func() error {
-			return sess.PlanNodeUpdate(pid, PlanStep{Seq: leaf, Status: "finished", Summary: "越权摘要"})
+			return sess.PlanNodeUpdate(PlanStep{Seq: leaf, Status: "finished", Summary: "越权摘要"})
 		}},
 		// Status has no blank meaning (unlike Title/Summary): a restatement that
 		// omits it is refused rather than silently read as "leave it as it was".
 		{"blank status", func() error {
-			return sess.PlanNodeUpdate(pid, PlanStep{Seq: leaf, Summary: "s"})
+			return sess.PlanNodeUpdate(PlanStep{Seq: leaf, Summary: "s"})
 		}},
 		{"updating a step nobody created", func() error {
-			return sess.PlanNodeUpdate(pid, PlanStep{Seq: 77, Status: "done"})
+			return sess.PlanNodeUpdate(PlanStep{Seq: 77, Status: "done"})
 		}},
 		{"a step under a parent that does not exist", func() error {
-			_, err := sess.PlanNodeAdd(pid, 77, "orphan")
+			_, err := sess.PlanNodeAdd(77, "orphan")
 			return err
 		}},
 	}
@@ -296,7 +297,7 @@ func TestPlanWritesRejectedLeaveTreeUntouched(t *testing.T) {
 		if code := CodeOf(err); code != ErrInvalidQuery && code != ErrNotFound {
 			t.Fatalf("%s: want a refusal, got %v", tc.name, err)
 		}
-		after, err := sess.PlanState(pid)
+		after, err := sess.PlanState()
 		if err != nil {
 			t.Fatalf("%s: PlanState: %v", tc.name, err)
 		}
@@ -306,33 +307,32 @@ func TestPlanWritesRejectedLeaveTreeUntouched(t *testing.T) {
 		}
 	}
 
-	if err := sess.PlanNodeUpdate(pid, PlanStep{Seq: leaf, Status: "done", Summary: "leaf done"}); err != nil {
+	if err := sess.PlanNodeUpdate(PlanStep{Seq: leaf, Status: "done", Summary: "leaf done"}); err != nil {
 		t.Fatalf("valid update: %v", err)
 	}
-	after, _ := sess.PlanState(pid)
+	after, _ := sess.PlanState()
 	if after.DoneCount != before.DoneCount+1 {
 		t.Fatalf("a valid update must advance the tree: %d → %d", before.DoneCount, after.DoneCount)
 	}
 	// The step's own work is content, written on the content surface and read
 	// back attributed to the step it names.
-	if _, err := sess.AppendArchive(sceneID, pid, onStep(event("tool_call", "ran", 7), leaf)); err != nil {
+	if _, err := sess.AppendArchive(onStep(event("tool_call", "ran", 7), leaf)); err != nil {
 		t.Fatalf("append step event: %v", err)
 	}
-	evs := eventsOf(t, sess, pid)
+	evs := eventsOf(t, sess, turn)
 	if len(evs) != 1 {
 		t.Fatalf("want 1 event, got %d", len(evs))
 	}
-	if last := evs[0]; last.NodeSeq != leaf || last.TopicID != pid {
+	if last := evs[0]; last.NodeSeq != leaf || last.TopicID != turn {
 		t.Fatalf("event not attributed to its step: %+v", last)
 	}
 }
 
 func TestAppendArchiveRefusesAndStoresNothing(t *testing.T) {
 	sess := openSurfaceDB(t)
-	turnScene, turn := mustTurnKey(t, sess)
-	keyScene, key := mustTurnKey(t, sess) // a second turn carries the plan-bound step below
+	turn := mustTurnKey(t, sess)
 	over := strings.Repeat("字", 3000)
-	if _, err := sess.AppendArchive(turnScene, turn, event("x", over, 1)); err == nil {
+	if _, err := sess.AppendArchive(event("x", over, 1)); err == nil {
 		t.Fatal("an over-budget event payload must be refused")
 	}
 	if evs := eventsOf(t, sess, turn); len(evs) != 0 {
@@ -340,37 +340,42 @@ func TestAppendArchiveRefusesAndStoresNothing(t *testing.T) {
 	}
 	// exactly at the budget is accepted — the budget is the whole record, so the
 	// one-byte name leaves the rest to the body
-	if _, err := sess.AppendArchive(turnScene, turn, event("x", strings.Repeat("a", 4*1024-1), 1)); err != nil {
+	if _, err := sess.AppendArchive(event("x", strings.Repeat("a", 4*1024-1), 1)); err != nil {
 		t.Fatalf("event at the budget limit: %v", err)
 	}
 	// A name is part of the record too: putting the bulk there is the same
 	// oversized event, refused the same way, and it stores nothing.
-	if _, err := sess.AppendArchive(turnScene, turn, event(strings.Repeat("n", 4*1024), "a", 1)); err == nil {
+	if _, err := sess.AppendArchive(event(strings.Repeat("n", 4*1024), "a", 1)); err == nil {
 		t.Fatal("an over-budget event name must be refused")
 	}
 	if evs := eventsOf(t, sess, turn); len(evs) != 1 {
 		t.Fatalf("a refused append stored %d events", len(evs))
 	}
-	// A step-bound event answers to the same content contract as a bare one: the
-	// step being real does not excuse a record missing its own name.
-	keyStep, err := sess.PlanNodeAdd(key, 0, "一步")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := sess.AppendArchive(keyScene, key, onStep(ArchiveSlot{Kind: KindEvent, CreatedAt: 1}, keyStep)); err == nil {
-		t.Fatal("a plan-bound event must satisfy the same write contract")
-	}
 	// A dialogue original gets its own budget, and the same refuse-don't-truncate
 	// rule: 64 KiB is accepted, one rune more is not.
-	if _, err := sess.AppendArchive(turnScene, turn, ArchiveSlot{
+	if _, err := sess.AppendArchive(ArchiveSlot{
 		Kind: KindUtterance, Role: RoleUser, Content: strings.Repeat("a", 64*1024), CreatedAt: 2,
 	}); err != nil {
 		t.Fatalf("utterance at the budget limit: %v", err)
 	}
-	if _, err := sess.AppendArchive(turnScene, turn, ArchiveSlot{
+	if _, err := sess.AppendArchive(ArchiveSlot{
 		Kind: KindUtterance, Role: RoleUser, Content: strings.Repeat("a", 64*1024+1), CreatedAt: 3,
 	}); err == nil {
 		t.Fatal("an over-budget utterance must be refused, not truncated")
+	}
+	// A step-bound event answers to the same content contract as a bare one: the
+	// step being real does not excuse a record missing its own name. It lands on the
+	// next turn, because that is the only turn a write can reach.
+	key := mustTurnKey(t, sess)
+	keyStep, err := sess.PlanNodeAdd(0, "一步")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sess.AppendArchive(onStep(ArchiveSlot{Kind: KindEvent, CreatedAt: 1}, keyStep)); err == nil {
+		t.Fatal("a plan-bound event must satisfy the same write contract")
+	}
+	if evs := eventsOf(t, sess, key); len(evs) != 0 {
+		t.Fatalf("a refused append stored %d events on the plan turn", len(evs))
 	}
 }
 
@@ -382,18 +387,10 @@ func TestUpdateFailsLoudlyWhenTheLLMCannotExtract(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
-	if _, err := sess.AppendArchive(sr.Scene.SceneID, sr.NewTopicID, ArchiveSlot{
-		Kind: KindUtterance, Seq: 1, Role: RoleUser, Content: "我们聊聊 Rust 的所有权", CreatedAt: 1,
-	}); err != nil {
-		t.Fatalf("append user side: %v", err)
-	}
-	if _, err := sess.AppendArchive(sr.Scene.SceneID, sr.NewTopicID, ArchiveSlot{
-		Kind: KindUtterance, Seq: 2, Role: RoleAgent, Content: "所有权规则保证了内存安全", CreatedAt: 2,
-	}); err != nil {
-		t.Fatalf("append agent side: %v", err)
-	}
-	if _, err := sess.Settle(sr.Scene.SceneID, sr.NewTopicID); err == nil {
-		t.Fatal("Settle must fail when keyword extraction degrades, not settle a turn with fake keywords")
+	if _, err := sess.Update(TurnEnd{
+		Input: "我们聊聊 Rust 的所有权", Output: "所有权规则保证了内存安全", CreatedAt: turnStamp,
+	}); err == nil {
+		t.Fatal("Update must fail when keyword extraction degrades, not settle a turn with fake keywords")
 	}
 	// nothing settled: the scene still has no topics
 	again, err := sess.Search(SearchQuery{SceneID: sr.Scene.SceneID})
@@ -403,8 +400,9 @@ func TestUpdateFailsLoudlyWhenTheLLMCannotExtract(t *testing.T) {
 	if len(again.Topics) != 0 {
 		t.Fatalf("a failed Update settled %d topics", len(again.Topics))
 	}
-	// The content the host appended survives: Settle never owned it and has no
-	// business undoing it, so the retry distills what is still there.
+	// The dialogue Update wrote survives the failed distillation: the close owns the
+	// records it stored and has no business undoing them, so the retry rewrites the
+	// same two slots and distills what is still there.
 	if arcs, err := sess.SearchL4(L4Query{}); err != nil || len(arcs) != 2 {
 		t.Fatalf("a failed Update disturbed the turn's content: %d (err=%v)", len(arcs), err)
 	}
@@ -423,15 +421,94 @@ func scenesOf(t *testing.T, sess *Session) int {
 	return len(scenes)
 }
 
-// mustTurnKey opens a scene and hands back the pair every turn-keyed write now
-// takes: the scene id and the topic id Search minted for the coming turn.
-func mustTurnKey(t *testing.T, sess *Session) (string, string) {
+// mustTurnKey opens a turn on the domain's current scene and returns the topic id
+// Search minted for it — the key a read of that turn's content asks for. Every write
+// on the turn takes no key at all: this call is what tells the library which turn is
+// open.
+func mustTurnKey(t *testing.T, sess *Session) string {
 	t.Helper()
 	sr, err := sess.Search(SearchQuery{})
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
-	return sr.Scene.SceneID, sr.NewTopicID
+	return sr.NewTopicID
+}
+
+// noTurnWrites lists the five calls that write the turn the library holds, so a
+// scenario can refuse all of them at once. None of them carries an id to be wrong
+// about, so the one state a missing turn shows up as is the refusal they all share.
+func noTurnWrites(sess *Session) map[string]func() error {
+	return map[string]func() error{
+		"Update": func() error {
+			_, err := sess.Update(TurnEnd{Input: "in", Output: "out", CreatedAt: turnStamp})
+			return err
+		},
+		"AppendArchive":  func() error { _, err := sess.AppendArchive(event("llm_request", "asked", turnStamp)); return err },
+		"PlanNodeAdd":    func() error { _, err := sess.PlanNodeAdd(0, "一步"); return err },
+		"PlanNodeUpdate": func() error { return sess.PlanNodeUpdate(PlanStep{Seq: 1, Status: PlanStatusDone}) },
+		"PlanState":      func() error { _, err := sess.PlanState(); return err },
+	}
+}
+
+// A domain that has never read holds no turn, and each of the five writes says so
+// instead of inventing one — picking the newest scene's next turn would write onto a
+// turn nobody opened. One read flips all five back to working, which is what makes the
+// refusal above about the missing turn rather than about the calls themselves.
+func TestTurnWritesRefuseWhenNoTurnIsOpen(t *testing.T) {
+	sess := openSurfaceDB(t)
+	for name, write := range noTurnWrites(sess) {
+		if err := write(); CodeOf(err) != ErrInvalidQuery || !strings.Contains(err.Error(), "no turn is open") {
+			t.Fatalf("%s before any Search: err=%v, want ErrInvalidQuery naming the missing turn", name, err)
+		}
+	}
+	if _, err := sess.Search(SearchQuery{}); err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	for _, name := range []string{"AppendArchive", "PlanNodeAdd", "PlanState"} {
+		if err := noTurnWrites(sess)[name](); err != nil {
+			t.Fatalf("%s with a turn open: %v", name, err)
+		}
+	}
+}
+
+// A turn's ending is one call: the two originals and the host's word for how it ended
+// land on the open turn, and the empty form is refused instead of settling nothing.
+func TestUpdateWritesTheTurnEndItIsGiven(t *testing.T) {
+	sess := openSurfaceDB(t)
+	turn := mustTurnKey(t, sess)
+	topic, err := sess.Update(TurnEnd{
+		Input: "要不要用 mmap", Output: "用，读路径零拷贝", Outcome: "decided", CreatedAt: turnStamp,
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if len(topic.FusedKeywords) == 0 {
+		t.Fatalf("the closed turn carries no keyword track: %+v", topic)
+	}
+	utterances, err := sess.SearchL4(L4Query{TopicID: &turn, Kind: ptr(KindUtterance)})
+	if err != nil || len(utterances) != 2 {
+		t.Fatalf("the turn's dialogue = %+v err=%v, want the input and the output", utterances, err)
+	}
+	for i, want := range []struct {
+		seq  uint64
+		role uint8
+		text string
+	}{{1, RoleUser, "要不要用 mmap"}, {2, RoleAgent, "用，读路径零拷贝"}} {
+		got := utterances[i]
+		if got.Seq != want.seq || got.Role != want.role || got.Content != want.text || got.CreatedAt != turnStamp {
+			t.Fatalf("dialogue[%d] = %+v, want seq %d role %d %q at %d",
+				i, got, want.seq, want.role, want.text, turnStamp)
+		}
+	}
+	// The outcome is one event on the same turn, named by the library.
+	events, err := sess.SearchL4(L4Query{TopicID: &turn, Kind: ptr(KindEvent)})
+	if err != nil || len(events) != 1 || events[0].EventType != "turn_outcome" || events[0].Content != "decided" {
+		t.Fatalf("the turn's events = %+v err=%v, want one turn_outcome", events, err)
+	}
+	// An ending with nothing in it is refused rather than settled.
+	if _, err := sess.Update(TurnEnd{CreatedAt: turnStamp}); CodeOf(err) != ErrInvalidQuery {
+		t.Fatalf("empty TurnEnd: want ErrInvalidQuery, got %v", err)
+	}
 }
 
 func render(ns []PlanNodeView) string {

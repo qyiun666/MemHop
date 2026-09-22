@@ -37,8 +37,8 @@ func (s *Session) Search(q SearchQuery) (*SearchResult, error) {
 	return s.db.Search(s.agentID, q)
 }
 
-func (s *Session) Settle(sceneID, topicID string) (*TopicSlot, error) {
-	return s.db.Settle(s.agentID, sceneID, topicID)
+func (s *Session) Update(end TurnEnd) (*TopicSlot, error) {
+	return s.db.Update(s.agentID, end)
 }
 
 // ---- Dream ----
@@ -137,20 +137,20 @@ func (s *Session) SearchL4(q L4Query) ([]ArchiveSlot, error) {
 	return s.db.SearchL4(s.agentID, q)
 }
 
-func (s *Session) AppendArchive(sceneID, topicID string, slot ArchiveSlot) (uint64, error) {
-	return s.db.AppendArchive(s.agentID, sceneID, topicID, slot)
+func (s *Session) AppendArchive(slot ArchiveSlot) (uint64, error) {
+	return s.db.AppendArchive(s.agentID, slot)
 }
 
 // ---- L5 plan tree ----
 
-func (s *Session) PlanNodeAdd(topicID string, parentSeq uint32, title string) (uint32, error) {
-	return s.db.PlanNodeAdd(s.agentID, topicID, parentSeq, title)
+func (s *Session) PlanNodeAdd(parentSeq uint32, title string) (uint32, error) {
+	return s.db.PlanNodeAdd(s.agentID, parentSeq, title)
 }
 
-func (s *Session) PlanNodeUpdate(topicID string, step PlanStep) error {
-	return s.db.PlanNodeUpdate(s.agentID, topicID, step)
+func (s *Session) PlanNodeUpdate(step PlanStep) error {
+	return s.db.PlanNodeUpdate(s.agentID, step)
 }
 
-func (s *Session) PlanState(topicID string) (*PlanTree, error) {
-	return s.db.PlanState(s.agentID, topicID)
+func (s *Session) PlanState() (*PlanTree, error) {
+	return s.db.PlanState(s.agentID)
 }

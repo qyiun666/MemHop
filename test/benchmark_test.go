@@ -46,27 +46,27 @@ func loadLocomoSmoke(tb testing.TB) *locomoFixture {
 	return &fx
 }
 
-// benchTurn runs one host turn the way a host runs it: the opening read that
-// mints the turn's topic id, then the Settle that closes it.
+// benchTurn runs one host turn the way a host runs it: the read that opens the
+// turn, then the one Update that closes it. Neither names the turn.
 func benchTurn(tb testing.TB, db *testsupport.Handle, sceneID, user, agent string, ts int64) {
 	tb.Helper()
-	_, turnID, err := db.OpenTurn(sceneID)
-	if err != nil {
+	if _, _, err := db.OpenTurn(sceneID); err != nil {
 		tb.Fatalf("OpenTurn: %v", err)
 	}
-	if err := db.SettleTurn(sceneID, turnID, user, agent, ts); err != nil {
-		tb.Fatalf("settle turn: %v", err)
+	if err := db.CloseTurn(user, agent, ts); err != nil {
+		tb.Fatalf("close turn: %v", err)
 	}
 }
 
-// benchSession opens a host session (scene) and returns its id.
+// benchSession opens a host session (scene) and returns its id. NewScene is what
+// asks for one: an unnamed read continues the session the domain is already on.
 func benchSession(tb testing.TB, db *testsupport.Handle) string {
 	tb.Helper()
-	sceneID, _, err := db.OpenTurn("")
+	res, err := db.Search(memhop.SearchQuery{NewScene: true})
 	if err != nil {
 		tb.Fatalf("open session: %v", err)
 	}
-	return sceneID
+	return res.Scene.SceneID
 }
 
 // BenchmarkUpdateTurn measures the hot write path: one finished turn costs a
@@ -158,7 +158,7 @@ func BenchmarkDreamConsolidation(b *testing.B) {
 	}
 }
 
-// BenchmarkMemoryLoop measures the real host memory loop: Settle-only turns
+// BenchmarkMemoryLoop measures the real host memory loop: one-Update turns
 // in one session with the automatic Dream the engine schedules once the
 // session surface passes the threshold, plus periodic L0/L2 verification.
 func BenchmarkMemoryLoop(b *testing.B) {
@@ -166,7 +166,7 @@ func BenchmarkMemoryLoop(b *testing.B) {
 	defer db.Close()
 
 	// Same-topic turns: once the session surface exceeds
-	// SceneDreamTopicThreshold(24), Settle schedules a Dream on its own.
+	// SceneDreamTopicThreshold(24), closing a turn schedules a Dream on its own.
 	related := []string{
 		"我喜欢早上六点去公园慢跑", "跑步的时候我习惯听播客", "我每周跑步大概三次，每次五公里",
 		"跑完步我会喝一杯蛋白粉", "我早上六点出门跑步", "慢跑时我听健身播客",

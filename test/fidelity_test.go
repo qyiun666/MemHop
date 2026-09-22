@@ -104,7 +104,7 @@ func surfaceKeywords(res *memhop.SearchResult) []string {
 	return out
 }
 
-// TestKeywordFidelity verifies point 1: the keywords Settle distills from a
+// TestKeywordFidelity verifies point 1: the keywords Update distills from a
 // finished turn faithfully carry that turn's meaning — the keywords ARE the
 // host's context, so this is the quality bar of the whole design.
 func TestKeywordFidelity(t *testing.T) {
@@ -131,7 +131,7 @@ func TestKeywordFidelity(t *testing.T) {
 			t.Fatalf("OpenTurn %d: %v", i, err)
 		}
 		topicID := turnID
-		if err := db.SettleTurn(sceneID, turnID, c[0], c[1], ts); err != nil {
+		if err := db.CloseTurn(c[0], c[1], ts); err != nil {
 			t.Fatalf("settle turn: %v", err)
 		}
 		res, err := db.Search(memhop.SearchQuery{SceneID: sceneID})
@@ -168,11 +168,11 @@ func TestKeywordPersistence(t *testing.T) {
 	defer db.Close()
 
 	base := time.Now().UnixMilli()
-	sceneID, anchorTurn, err := db.OpenTurn("")
+	sceneID, _, err := db.OpenTurn("")
 	if err != nil {
 		t.Fatalf("OpenTurn: %v", err)
 	}
-	if err := db.SettleTurn(sceneID, anchorTurn, "我的狗叫旺财，是一只金毛，今年五岁了", "旺财这个名字很顺口", base); err != nil {
+	if err := db.CloseTurn("我的狗叫旺财，是一只金毛，今年五岁了", "旺财这个名字很顺口", base); err != nil {
 		t.Fatalf("anchor turn: %v", err)
 	}
 
@@ -184,11 +184,10 @@ func TestKeywordPersistence(t *testing.T) {
 	}
 	for i, ntext := range noise {
 		ts := base + int64(i+1)*1000
-		_, turnID, err := db.OpenTurn(sceneID)
-		if err != nil {
+		if _, _, err := db.OpenTurn(sceneID); err != nil {
 			t.Fatalf("noise OpenTurn %d: %v", i, err)
 		}
-		if err := db.SettleTurn(sceneID, turnID, ntext, "好的，记下了", ts); err != nil {
+		if err := db.CloseTurn(ntext, "好的，记下了", ts); err != nil {
 			t.Fatalf("noise turn: %v", err)
 		}
 	}
@@ -208,21 +207,21 @@ func TestKeywordPersistence(t *testing.T) {
 	t.Logf("persistence OK: anchor keyword survived 4 noise turns: %v", kws)
 }
 
-// ingestSession feeds a group of related turns into one host session, each
+// ingestSession feeds a group of related turns into one fresh host session, each
 // closed with an agent reply. Returns the session id.
 func ingestSession(t *testing.T, db *testsupport.Handle, texts []string, base int64) string {
 	t.Helper()
-	sceneID, _, err := db.OpenTurn("")
+	res, err := db.Search(memhop.SearchQuery{NewScene: true})
 	if err != nil {
-		t.Fatalf("OpenTurn: %v", err)
+		t.Fatalf("open session: %v", err)
 	}
+	sceneID := res.Scene.SceneID
 	for i, text := range texts {
 		ts := base + int64(i)*1000
-		_, turnID, err := db.OpenTurn(sceneID)
-		if err != nil {
+		if _, _, err := db.OpenTurn(sceneID); err != nil {
 			t.Fatalf("OpenTurn[%d]: %v", i, err)
 		}
-		if err := db.SettleTurn(sceneID, turnID, text, "好的，我记下了。", ts); err != nil {
+		if err := db.CloseTurn(text, "好的，我记下了。", ts); err != nil {
 			t.Fatalf("ingest turn %d: %v", i, err)
 		}
 	}

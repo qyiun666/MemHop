@@ -10,20 +10,18 @@ import (
 	"testing"
 )
 
-// settleTurn runs a whole turn the way a host does: the two originals land in
-// the slots dialogue owns, then the turn is settled into the topic Search opened,
-// whose distilled track comes back.
-func settleTurn(sess *Session, sceneID, topicID, userText, agentText string) (*TopicSlot, error) {
-	utterances := []ArchiveSlot{
-		{Kind: KindUtterance, Seq: 1, Role: RoleUser, Content: userText, CreatedAt: 1_700_000_060_000},
-		{Kind: KindUtterance, Seq: 2, Role: RoleAgent, Content: agentText, CreatedAt: 1_700_000_060_500},
-	}
-	for _, u := range utterances {
-		if _, err := sess.AppendArchive(sceneID, topicID, u); err != nil {
-			return nil, err
-		}
-	}
-	return sess.Settle(sceneID, topicID)
+// turnStamp is one turn's closing time in milliseconds — the unit every timestamp here
+// carries. Update records the stimulus and the answer with the one timestamp a host
+// hands it, so both dialogue lines carry this value.
+const turnStamp = 1_700_000_060_000
+
+// settleTurn closes the turn the way a host does: Update writes the two originals onto
+// the slots dialogue owns and distills them into the topic Search opened, whose
+// distilled track comes back. A closing call names no ids: which turn is open is the
+// library's own memory of the last Search, so a scenario that wants a particular turn
+// closed has to do the read that opens it.
+func settleTurn(sess *Session, userText, agentText string) (*TopicSlot, error) {
+	return sess.Update(TurnEnd{Input: userText, Output: agentText, CreatedAt: turnStamp})
 }
 
 // TestSurfaceSessionMethods exercises the full Session surface of one domain
@@ -41,24 +39,31 @@ func TestSurfaceSessionMethods(t *testing.T) {
 		t.Fatalf("session getL0: %v", err)
 	}
 
-	// Search opens the host session; Settle closes one turn into it.
+	// Search opens the host session; Update closes one turn into it.
 	res, err := s.Search(SearchQuery{})
 	if err != nil {
 		t.Fatalf("session search: %v", err)
 	}
 	sceneID := res.Scene.SceneID
 	topicID := res.NewTopicID
-	if _, err := settleTurn(s, sceneID, topicID, "session boot memory", "session reply"); err != nil {
+	if _, err := settleTurn(s, "session boot memory", "session reply"); err != nil {
 		t.Fatalf("session update: %v", err)
 	}
-	// Settle writes no content: the turn's records are the ones the host appended,
-	// and a keyword search finds them under the key Search issued.
+	// What the turn holds is found by keyword under the key Search issued — the
+	// dialogue lines Update wrote, and the event appended below while this turn is
+	// still the one the library holds.
 	hits, err := s.SearchL4(L4Query{Keyword: "session boot"})
 	if err != nil || len(hits) != 1 || hits[0].TopicID != topicID {
 		t.Fatalf("settled turn content = %+v err=%v", hits, err)
 	}
 	if _, err := s.SearchL4(L4Query{Keyword: "session"}); err != nil {
 		t.Fatalf("session searchL4: %v", err)
+	}
+	if _, err := s.AppendArchive(event("tool_call", "p", 1_700_000_061_000)); err != nil {
+		t.Fatalf("session appendArchive: %v", err)
+	}
+	if evs := eventsOf(t, s, topicID); len(evs) != 1 {
+		t.Fatalf("session events of %s: %d", topicID, len(evs))
 	}
 	scenes, err := s.ListScenes("")
 	if err != nil || len(scenes) == 0 {
@@ -67,7 +72,8 @@ func TestSurfaceSessionMethods(t *testing.T) {
 	if _, err := s.SceneContext(sceneID); err != nil {
 		t.Fatalf("session sceneContext: %v", err)
 	}
-	// The turn just written is what the host reads back for this session.
+	// The turn just written is what the host reads back for this session. This read
+	// opens the next turn, so everything above had to be written on the first one.
 	reread, err := s.Search(SearchQuery{SceneID: sceneID})
 	if err != nil {
 		t.Fatalf("session reread: %v", err)
@@ -76,12 +82,13 @@ func TestSurfaceSessionMethods(t *testing.T) {
 		t.Fatalf("scene surface = %+v, want the one turn", reread.Topics)
 	}
 
-	// Second session scene, then merge + archive fetch to cover the rest.
-	res2, err := s.Search(SearchQuery{})
+	// A second scene — asked for by name, since an un-named read continues the
+	// current one — then merge + archive fetch to cover the rest.
+	res2, err := s.Search(SearchQuery{NewScene: true})
 	if err != nil {
 		t.Fatalf("session search2: %v", err)
 	}
-	if _, err := settleTurn(s, res2.Scene.SceneID, res2.NewTopicID, "second session scene", "second reply"); err != nil {
+	if _, err := settleTurn(s, "second session scene", "second reply"); err != nil {
 		t.Fatalf("session update2: %v", err)
 	}
 	scenes, err = s.ListScenes("")
@@ -123,13 +130,6 @@ func TestSurfaceSessionMethods(t *testing.T) {
 	}
 	if _, err := s.QueryL3Subgraph(gid, nodes[0].ID, 1, nil); err != nil {
 		t.Fatalf("session querySubgraph: %v", err)
-	}
-	// Turn events via session, under the turn key Search already handed back.
-	if _, err := s.AppendArchive(sceneID, topicID, event("tool_call", "p", 1_700_000_061_000)); err != nil {
-		t.Fatalf("session appendArchive: %v", err)
-	}
-	if evs := eventsOf(t, s, topicID); len(evs) != 1 {
-		t.Fatalf("session events of %s: %d", topicID, len(evs))
 	}
 	// Deletion lifecycle: topic, scene, graph.
 	if err := s.DeleteTopic(topicID); err != nil {

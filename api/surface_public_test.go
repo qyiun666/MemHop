@@ -54,7 +54,7 @@ func TestSessionPublicSurface(t *testing.T) {
 		// runtime/task face — the host drives these every turn and LLM tools
 		// bind to them
 		// core cycle (host-driven)
-		"Search", "Settle", "Dream", "AppendArchive",
+		"Search", "Update", "Dream", "AppendArchive",
 		// L0 profile
 		"GetL0", "UpdateL0",
 		// L1 scene hypergraph (read-only; Dream is the only writer)
@@ -147,6 +147,31 @@ func TestPublicSignaturesCarryNoNumericIds(t *testing.T) {
 					}
 				}
 			}
+		}
+	}
+}
+
+// TestTurnWritesCarryNoId pins what this round took out of the host's hands: the five
+// writes that work on the turn now open address that turn through the library's own
+// memory of which one it is, so none of them names a scene or a topic. A method
+// growing an id parameter here is a host carrying a key it should never have held.
+func TestTurnWritesCarryNoId(t *testing.T) {
+	want := map[string]int{
+		"Update":         1, // one TurnEnd
+		"AppendArchive":  1, // one ArchiveSlot
+		"PlanNodeAdd":    2, // parentSeq and title
+		"PlanNodeUpdate": 1, // one PlanStep
+		"PlanState":      0, // nothing at all: the turn is the library's to know
+	}
+	typ := reflect.TypeOf(&Session{})
+	for name, in := range want {
+		m, ok := typ.MethodByName(name)
+		if !ok {
+			t.Fatalf("Session.%s is gone: writing the open turn without naming it is this surface's contract", name)
+		}
+		if got := len(inTypes(m.Type)); got != in {
+			t.Errorf("Session.%s takes %d arguments, want %d — an id has crept back into the host's hands",
+				name, got, in)
 		}
 	}
 }

@@ -18,28 +18,16 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
-// runTurn drives one full turn on a domain-bound handle: open it, record both
-// originals, settle. Settling is the one call that reaches the LLM, so a counting
-// stub sees exactly one hit per turn.
+// runTurn drives one full turn on a domain-bound handle: open it, then close it with
+// both originals. The close is the one call that reaches the LLM, so a counting stub
+// sees exactly one hit per turn.
 func runTurn(t *testing.T, sess *Session) {
 	t.Helper()
-	res, err := sess.Search(SearchQuery{})
-	if err != nil {
+	if _, err := sess.Search(SearchQuery{}); err != nil {
 		t.Fatalf("search: %v", err)
 	}
-	sceneID := common.FormatHash(res.Scene.SceneID)
-	topicID := common.FormatHash(res.NewTopicID)
-	utterances := []core.ArchiveSlot{
-		{Kind: core.KindUtterance, Seq: core.SeqUser, Role: core.RoleUser, Content: "跑一下测试", CreatedAt: 1000},
-		{Kind: core.KindUtterance, Seq: core.SeqAgent, Role: core.RoleAgent, Content: "全绿", CreatedAt: 2000},
-	}
-	for _, slot := range utterances {
-		if _, err := sess.AppendArchive(sceneID, topicID, slot); err != nil {
-			t.Fatalf("append: %v", err)
-		}
-	}
-	if _, err := sess.Settle(sceneID, topicID); err != nil {
-		t.Fatalf("settle: %v", err)
+	if _, err := sess.Update(TurnEnd{Input: "跑一下测试", Output: "全绿", CreatedAt: 1000}); err != nil {
+		t.Fatalf("update: %v", err)
 	}
 }
 
@@ -137,7 +125,11 @@ func TestSubAgentEndpointSurvivesIdleReclaim(t *testing.T) {
 	subSrv, subCalls := countingLLMServer(t, turnKeywords)
 
 	defaults := DefaultMemHopDefaults
-	defaults.AgentIdleTTLMs = 1 // reclaim on the next access after any pause at all
+	// A turn is two accesses now — the read that opens it and the close that spends
+	// it — and the read holds the turn, so a TTL shorter than one turn takes would
+	// reclaim the context out from under the turn itself. What this test needs is a
+	// reclaim between two turns: a TTL the pause overshoots and a single turn does not.
+	defaults.AgentIdleTTLMs = 100
 	db, err := OpenDB(filepath.Join(t.TempDir(), "idle.meh"),
 		LlmConfig{APIURL: primarySrv.URL, APIKey: "test", Model: "mock"},
 		defaults, primaryProfile("primary"))
@@ -156,7 +148,7 @@ func TestSubAgentEndpointSurvivesIdleReclaim(t *testing.T) {
 		t.Fatalf("the first turn took %d distillations on the sub endpoint, want 1", got)
 	}
 
-	time.Sleep(10 * time.Millisecond) // long enough for the 1ms TTL to have passed
+	time.Sleep(300 * time.Millisecond) // long enough for the 100ms TTL to have passed
 	runTurn(t, sub)
 
 	if got := subCalls.Load(); got != 2 {

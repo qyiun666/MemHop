@@ -22,8 +22,8 @@ func newSearchTestDB(t *testing.T, llmURL string) *DB {
 	return db
 }
 
-// An empty SceneID asks for a fresh scene: the record lands on disk under a
-// library-generated name, and the optional L3 anchor applies.
+// A domain with no scene yet gets its first one on an empty SceneID: the record
+// lands on disk under a library-generated name, and the optional L3 anchor applies.
 func TestSearchCreatesSceneWhenIDEmpty(t *testing.T) {
 	srv := mockLLMServer(t, `{"keywords":["unused"]}`)
 	db := newSearchTestDB(t, srv.URL)
@@ -57,8 +57,11 @@ func TestSearchCreatesSceneWhenIDEmpty(t *testing.T) {
 	}
 }
 
-// Two empty-id Search calls are two sessions: each gets its own scene id.
-func TestSearchFreshScenesDoNotCollide(t *testing.T) {
+// An empty SceneID continues the domain's own session — the read that starts one is
+// the one that opens it — and NewScene is the only way to start another. When the
+// domain no longer remembers which scene it was on, the records answer: the scene
+// whose turn counter ran furthest, not the one created last.
+func TestSearchContinuesItsSceneUnlessAskedForANewOne(t *testing.T) {
 	srv := mockLLMServer(t, `{"keywords":["x"]}`)
 	db := newSearchTestDB(t, srv.URL)
 
@@ -66,15 +69,47 @@ func TestSearchFreshScenesDoNotCollide(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first Search: %v", err)
 	}
-	second, err := db.Search(core.DefaultAgentID, SearchQuery{})
+	again, err := db.Search(core.DefaultAgentID, SearchQuery{})
 	if err != nil {
 		t.Fatalf("second Search: %v", err)
 	}
-	if first.Scene.SceneID == second.Scene.SceneID {
-		t.Fatalf("both calls returned scene %d", first.Scene.SceneID)
+	if again.Scene.SceneID != first.Scene.SceneID {
+		t.Fatalf("an empty SceneID opened a new session: %d, want the domain's own %d",
+			again.Scene.SceneID, first.Scene.SceneID)
+	}
+	if again.NewTopicID == first.NewTopicID {
+		t.Fatal("continuing a session reopened the same turn")
+	}
+
+	second, err := db.Search(core.DefaultAgentID, SearchQuery{NewScene: true})
+	if err != nil {
+		t.Fatalf("NewScene Search: %v", err)
+	}
+	if second.Scene.SceneID == first.Scene.SceneID {
+		t.Fatalf("NewScene returned the scene already in use: %d", second.Scene.SceneID)
 	}
 	if !strings.HasPrefix(second.Scene.SceneName, "session:") {
-		t.Errorf("an unnamed scene falls back to session:<id>, got %q", second.Scene.SceneName)
+		t.Errorf("a created scene falls back to session:<id>, got %q", second.Scene.SceneName)
+	}
+
+	// Bring the first session's counter ahead of the new one's, then drop the
+	// context: the read that follows has nothing to continue from but the records,
+	// and it must not pick the scene that was created last.
+	if _, err := db.Search(core.DefaultAgentID, SearchQuery{SceneID: common.FormatHash(first.Scene.SceneID)}); err != nil {
+		t.Fatalf("named Search: %v", err)
+	}
+	delete(db.agents, core.DefaultAgentID)
+	resumed, err := db.Search(core.DefaultAgentID, SearchQuery{})
+	if err != nil {
+		t.Fatalf("Search after the context was dropped: %v", err)
+	}
+	if resumed.Scene.SceneID != first.Scene.SceneID {
+		t.Fatalf("the read resumed scene %d, want the one whose counter ran furthest (%d)",
+			resumed.Scene.SceneID, first.Scene.SceneID)
+	}
+	if want := core.ComputeTurnTopicID(first.Scene.SceneID, 4); resumed.NewTopicID != want {
+		t.Fatalf("the resumed read issued %d, want the scene's next turn (%d): turns 1, 2 and 3 "+
+			"were opened above", resumed.NewTopicID, want)
 	}
 }
 
@@ -180,9 +215,9 @@ func TestSearchOpensOneTurnPerRead(t *testing.T) {
 		t.Fatalf("opening a turn must not create a topic, got %+v", second)
 	}
 
-	// Another scene counts its own turns from one; reopening the first scene
+	// Another session counts its own turns from one; reopening the first scene
 	// continues where it left off.
-	other, err := db.Search(core.DefaultAgentID, SearchQuery{})
+	other, err := db.Search(core.DefaultAgentID, SearchQuery{NewScene: true})
 	if err != nil {
 		t.Fatalf("other scene: %v", err)
 	}
@@ -266,5 +301,40 @@ func TestSearchRefusesAnAnchorOnAnExistingSceneWithoutLookingItUp(t *testing.T) 
 	}
 	if !strings.Contains(err.Error(), common.FormatHash(opened.Scene.SceneID)) {
 		t.Fatalf("the refusal must name the scene the host held: %v", err)
+	}
+}
+
+// The same rule on the path where the host names no scene: an anchor handed in
+// while the domain is already mid-conversation is refused on the argument alone,
+// and the message says what to do instead. The anchor here does not resolve, so a
+// lookup-first implementation would report a missing graph (3001) about a record
+// the host never asked to read. The refusal must also not be the continue path
+// breaking: the same read without an anchor stays on this scene.
+func TestSearchRefusesAnAnchorWhileContinuingItsScene(t *testing.T) {
+	srv := mockLLMServer(t, `{"keywords":["unused"]}`)
+	db := newSearchTestDB(t, srv.URL)
+
+	first, err := db.Search(core.DefaultAgentID, SearchQuery{})
+	if err != nil {
+		t.Fatalf("open a scene: %v", err)
+	}
+	dangling := common.FormatHash(common.HashID("proj-never-created"))
+	_, err = db.Search(core.DefaultAgentID, SearchQuery{L3ID: dangling})
+	if common.CodeOf(err) != common.ErrInvalidQuery {
+		t.Fatalf("an anchor on a continued scene must be refused as a bad query, got %v", err)
+	}
+	if strings.Contains(err.Error(), dangling) {
+		t.Fatalf("the refusal must not report the anchor as an unreadable record: %v", err)
+	}
+	if strings.Contains(err.Error(), common.FormatHash(first.Scene.SceneID)) {
+		t.Fatalf("the refusal must not name a scene the host never handed in: %v", err)
+	}
+	again, err := db.Search(core.DefaultAgentID, SearchQuery{})
+	if err != nil {
+		t.Fatalf("continue the domain's scene: %v", err)
+	}
+	if again.Scene.SceneID != first.Scene.SceneID {
+		t.Fatalf("refused reads must leave the domain on its scene: want %x got %x",
+			first.Scene.SceneID, again.Scene.SceneID)
 	}
 }

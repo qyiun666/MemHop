@@ -19,37 +19,40 @@ func TestInterfaceTurnEvents(t *testing.T) {
 	db, _ := openTestDB(t)
 	sceneID := openSession(t, db)
 	// The content key is a turn's topic id — minted by Search and never typed by
-	// hand.
+	// hand. It is also the only turn these writes can reach: AppendArchive names
+	// nothing, it goes where the open turn is.
 	session := openTurn(t, db, sceneID)
-	if err := turn(db.Session, sceneID, session, "读一下 a.go 并改掉拼写", "已读取 a.go 并改掉拼写"); err != nil {
-		t.Fatalf("turn: %v", err)
-	}
 	ts := time.Now().UnixMilli()
 
-	if _, err := db.AppendArchive(sceneID, session, api.ArchiveSlot{
+	if _, err := db.AppendArchive(api.ArchiveSlot{
 		Kind: api.KindEvent, EventType: "tool_call", Content: `{"tool":"read_file","file":"a.go"}`, CreatedAt: ts,
 	}); err != nil {
 		t.Fatalf("AppendArchive: %v", err)
 	}
-	// The key has to be a turn the library actually opened, or the rest of this
-	// test would only prove that a made-up id round-trips.
-	if surface, err := db.Search(api.SearchQuery{SceneID: sceneID}); err != nil ||
-		!slices.ContainsFunc(surface.Topics, func(topic api.TopicSlot) bool { return topic.ID == session }) {
-		t.Fatalf("key %s is not a topic of scene %s: %+v err %v", session, sceneID, surface.Topics, err)
-	}
-	if _, err := db.AppendArchive(sceneID, session, api.ArchiveSlot{
+	if _, err := db.AppendArchive(api.ArchiveSlot{
 		Kind: api.KindEvent, EventType: "tool_result", Content: "file content", CreatedAt: ts + 500,
 	}); err != nil {
 		t.Fatalf("AppendArchive #2: %v", err)
+	}
+	if _, err := turn(db.Session, "读一下 a.go 并改掉拼写", "已读取 a.go 并改掉拼写"); err != nil {
+		t.Fatalf("turn: %v", err)
+	}
+	// The key has to be a turn the library actually opened, or the rest of this
+	// test would only prove that a made-up id round-trips. Read after the close:
+	// this Search opens the next turn, and every write of this one is already in.
+	if surface, err := db.Search(api.SearchQuery{SceneID: sceneID}); err != nil ||
+		!slices.ContainsFunc(surface.Topics, func(topic api.TopicSlot) bool { return topic.ID == session }) {
+		t.Fatalf("key %s is not a topic of scene %s: %+v err %v", session, sceneID, surface.Topics, err)
 	}
 	kind := api.KindEvent
 	events, err := db.SearchL4(api.L4Query{TopicID: &session, Kind: &kind})
 	if err != nil {
 		t.Fatalf("read events: %v", err)
 	}
-	// Slots 1 and 2 are reserved for the turn's dialogue, so the library allocates
-	// a topic's first event at 3. Each one comes back as it went in: its own type,
-	// its own payload, and the timestamp the host stamped it with.
+	// Slots 1 and 2 are reserved for the turn's dialogue — allocation skips them even
+	// while they are still empty, which is what puts these two events at 3 and 4 even
+	// though the dialogue was written after them. Each event comes back as it went in:
+	// its own type, its own payload, and the timestamp the host stamped it with.
 	if len(events) != 2 || events[0].Seq != 3 || events[1].Seq != 4 {
 		t.Fatalf("want 2 events with seq 3,4: %+v", events)
 	}
@@ -72,16 +75,16 @@ func TestInterfaceTurnContentSharesOneKey(t *testing.T) {
 	ts := time.Now().UnixMilli()
 
 	// The step is created first, then the event logged against it: a plan node is
-	// only ever created by the plan write surface.
-	step := mustCreate(t, db, turnID, 0, "")
-	if _, err := db.AppendArchive(sceneID, turnID, api.ArchiveSlot{
+	// only ever created by the plan write surface. Both belong to the open turn.
+	step := mustCreate(t, db, 0, "")
+	if _, err := db.AppendArchive(api.ArchiveSlot{
 		Kind: api.KindEvent, EventType: "tool_call", NodeSeq: step,
 		Content: `{"tool":"bash","cmd":"go test"}`, CreatedAt: ts,
 	}); err != nil {
 		t.Fatalf("append event: %v", err)
 	}
 	before := llm.calls["keywords"]
-	if err := turn(db.Session, sceneID, turnID, "跑一下测试", "go test ./... 全绿"); err != nil {
+	if _, err := turn(db.Session, "跑一下测试", "go test ./... 全绿"); err != nil {
 		t.Fatalf("settle turn: %v", err)
 	}
 	if got := llm.calls["keywords"] - before; got != 1 {
@@ -112,7 +115,8 @@ func TestInterfaceTurnContentSharesOneKey(t *testing.T) {
 	if err != nil || len(evs) != 1 {
 		t.Fatalf("event read = %+v err=%v", evs, err)
 	}
-	// Dialogue took slots 1 and 2, so the event logged before them landed at 3.
+	// Dialogue owns slots 1 and 2 whoever writes them first, so the event logged
+	// before the close still landed at 3.
 	if evs[0].Seq != 3 || evs[0].NodeSeq != step || evs[0].EventType != "tool_call" {
 		t.Fatalf("event = %+v, want seq 3 bound to step %d", evs[0], step)
 	}
@@ -123,7 +127,9 @@ func TestInterfaceTurnContentSharesOneKey(t *testing.T) {
 		t.Fatalf("unfiltered topic read = %+v err=%v, want all three records", all, err)
 	}
 
-	tree, err := db.PlanState(turnID)
+	// The turn this closed is still the domain's open one, so the plan read reaches
+	// its tree without naming it.
+	tree, err := db.PlanState()
 	if err != nil {
 		t.Fatalf("plan state: %v", err)
 	}

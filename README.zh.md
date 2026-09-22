@@ -36,11 +36,11 @@ MemHop 是 **Agent 专用**记忆数据库：每个 Agent 绑定唯一的 `.meh`
 ## 核心特性
 
 - **六层认知架构** — L0 画像 → L1 纠缠图 → L2 上下文 → L3 知识 → L4 归档 → L5 计划，配合 Dream 巩固管线
-- **场景即会话的记忆循环** — 一个 L2 场景 = 宿主的一个会话。`Search` 按场景 id 直取该会话的 depth-1 话题集（纯内存读，零 LLM、零 embedding），并**顺手开启本轮**：返回本轮要落进去的话题 id。随后由宿主自己记录这一轮——`AppendArchive` 写下说了什么与做了什么（对话原文与操作事件同为 L4 内容、只差一个 `Kind`），`Update` 再把这一轮的原文一次提炼成该话题的关键词收口。一轮拥有的东西全在这个 id 下，该轮开出的任务树才是 L5。话题的 `FusedKeywords` 集合就是宿主每轮注入的上下文
+- **场景即会话的记忆循环** — 一个 L2 场景 = 宿主的一个会话。`Search` 直取该域当前会话的 depth-1 话题集（纯内存读，零 LLM、零 embedding），并**顺手开启本轮**——此后场景与轮次这两个 id 都由库自持，写入侧不点名任何 id。宿主自己记录这一轮：`AppendArchive` 写下轮中做了什么（对话原文与操作事件同为 L4 内容、只差一个 `Kind`），`Update` 在轮末记下这一轮怎么开、怎么收，并把该轮原文一次提炼成该话题的关键词收口。一轮拥有的东西全在这个 id 下，该轮开出的任务树才是 L5。话题的 `FusedKeywords` 集合就是宿主每轮注入的上下文
 - **V2 追加写入存储** — `.meh` 格式（`FormatVersion=0x0012`），A/B 双头 + 记录级 CRC32 + 撕裂尾帧截断恢复，mmap 零拷贝读取，快照/检查点。记录帧携带 8 字节 `agent_id`（26 字节帧头），引擎按 `(agent, idHash)` 域索引全部记录。L3 知识图记录驻留文件级保留公共域，该域不再承载别的东西。**仅认 `0x0012`**——`0x0011` 及更早的 `.meh` 数据文件 Open 时显式拒绝、无迁移路径：那批文件的画像上没有 `agent_type`，解码回来每个域都读作主 agent——错的不是某一个值而是每个域同时错，而当前规则要求一个文件恰好一个主
 - **多 Agent 域** — `Open(path, llm, defaults, profile)` 返回库句柄，域一律以句柄形式取、不以 id 取：`Primary()` 是文件被打开所依据的那个域，`SubAgent(llm, profile)` 是按名字建/取的子域。多个 agent 共享一个 `.meh` 文件，各自拥有完全隔离的域（话题缓存、Dream 管线、域级锁）；同 agent 串行、跨 agent 并行；空闲域按访问节奏回收内存（`Defaults.AgentIdleTTLMs`），记录仍在文件。例外是 L3（见下）：知识图是文件级公共池
 - **L1 场景超图** — Dream 在关键词集合重叠的场景间创建共现超边（Jaccard ≥ 0.15，这个下限由引擎固定，不是可调项）并按时间衰减剪枝；一条边以建边时那个相似度定重，此后只淡出——只有某一端名下的轮次清单变了才会重新加权（少一轮与多一轮同算），把两份清单都没变的场景再测一遍（哪怕同一批轮次被重新蒸馏成了别的措辞）不算重新经历。L1 由 Dream 维护，供显式图查询与后续关联消费——读取路径不打分、不扩散
-- **Dream 巩固管线** — 作用于 L0–L2，另对内容与计划树各做一次保留期清理：`l4_prune`（丢弃超出保留窗的话题内容——默认 7 天，`Defaults.ContentRetentionMs`）与 `l5_prune`（丢弃超窗的计划节点，仍在途的树豁免）排在最前，随后 L2 压缩 → L2Meta 缓存重建 → L1 节点/超边重建 → L1 衰减 → L0 蒸馏（情绪/MBTI）；某场景 depth-1 话题数超过 `Defaults.SceneDreamTopicThreshold` 时由 `Settle` 后台调度该场景巩固，返回逐阶段 `DreamReport`
+- **Dream 巩固管线** — 作用于 L0–L2，另对内容与计划树各做一次保留期清理：`l4_prune`（丢弃超出保留窗的话题内容——默认 7 天，`Defaults.ContentRetentionMs`）与 `l5_prune`（丢弃超窗的计划节点，仍在途的树豁免）排在最前，随后 L2 压缩 → L2Meta 缓存重建 → L1 节点/超边重建 → L1 衰减 → L0 蒸馏（情绪/MBTI）；某场景 depth-1 话题数超过 `Defaults.SceneDreamTopicThreshold` 时由 `Update` 后台调度该场景巩固，返回逐阶段 `DreamReport`
 - **L3 知识图谱** — 多独立超图，节点导入支持位置引用（source_ref）与关系边（related；边的身份是「成员节点 + kind」，同一对节点可并存多种关系），整图删除，关键词/类型/ID 条件按 AND 组合，BFS 子图查询。图池是**文件级**的：文件内所有 agent 域共享一份 L3（项目知识导一次全家可见），公共池的寿命跟文件走、不跟任何单个域走
 - **设计层面单实例** — 一个 `.meh` 文件只有一个持有者：全平台文件排他锁强制（linux/darwin/windows），第二次 `Open` 直接失败；内嵌形态无服务进程、无后台守护
 - **极简依赖、可内嵌** — 3 个直接 Go 依赖（xxhash、go-openai、golang.org/x/sys）；关键词提炼没有本地兜底，LLM 返回不可解析就直接报错；**引擎不联系任何 embedding / 向量服务**，配置里也没有维度要声明，`sync.RWMutex` + `atomic.Pointer`，零基础设施
@@ -86,59 +86,52 @@ if err != nil {
 }
 
 // 读记忆 = 读一个场景（场景就是宿主的一个会话），同时开启即将进行的这一轮。
-// SceneID 为空 → 库新建场景（名字由库生成）并返回其 id（L3ID 可选：挂到某个 L3 项目域）；
-// SceneID 非空 → 该场景必须已存在，否则 ErrNotFound。
-// 纯内存读：不调 LLM、不做向量编码、不打分；NewTopicID = 本轮要落进去的话题。
+// SceneID 留空即续用该域当前的场景（重开文件后从记录里恢复「轮次计数器跑得最远」
+// 的那个），所以一个 agent 对一个库的宿主根本不点名场景；NewScene: true 才是另开
+// 一条会话。点名某个 SceneID 的读只对那个场景生效，且它必须已存在，否则
+// ErrNotFound（L3ID 只由「会建场景」的那次读取受理）。纯内存读：不调 LLM、不做向量
+// 编码、不打分；NewTopicID = 本轮要落进去的话题。
 res, err := sess.Search(memhop.SearchQuery{})
 if err != nil {
     log.Fatal(err)
 }
-sceneID := res.Scene.SceneID
 for _, topic := range res.Topics { // 该会话的 depth-1 话题集 = 本轮上下文
     _ = topic.FusedKeywords
 }
 
-// 一轮进行中：宿主把这一轮的所见所行写进 Search 开出的那个话题，键带上
-// 这轮所属的场景——写入前先验这对键。对话与事件是同一类记录，只差一个
+// 一轮进行中：宿主把轮中做过的事写进 Search 开着的这一轮——是哪一轮由库记着，这个
+// 调用不点名 id，域上没有开着的轮时它直接被拒。对话与事件是同一类记录，只差一个
 // Kind；每次调用返回这条记录占用的槽位。
-topicID := res.NewTopicID
-_, _ = sess.AppendArchive(sceneID, topicID, memhop.ArchiveSlot{
-    Kind:      memhop.KindUtterance,
-    Seq:       1, // 槽位 1 与 2 属于对话
-    Role:      memhop.RoleUser,
-    Content:   "昨天我们讨论了什么？",
-    CreatedAt: time.Now().UnixMilli(),
-})
-_, _ = sess.AppendArchive(sceneID, topicID, memhop.ArchiveSlot{
-    Kind:      memhop.KindUtterance,
-    Seq:       2,
-    Role:      memhop.RoleAgent,
-    Content:   "Agent：...",
-    CreatedAt: time.Now().UnixMilli(),
-})
-_, _ = sess.AppendArchive(sceneID, topicID, memhop.ArchiveSlot{
+_, _ = sess.AppendArchive(memhop.ArchiveSlot{
     Kind:      memhop.KindEvent,
     EventType: "tool_call",
     Content:   `{"tool":"grep"}`,
     CreatedAt: time.Now().UnixMilli(),
 })
 
-// 一轮结束：Settle 把这些原文一次提炼成该轮话题的关键词轨，随话题一起返回。
-// 显式重写同一个 Seq 是覆盖而不是新增，超时后整轮可安全重放。
-topic, err := sess.Settle(sceneID, topicID)
+// 一轮结束：Input 与 Output 落在读者会去找的那两个对话槽（Seq 1 / Seq 2），所以重收
+// 同一轮是原地覆写这两行而不是叠加版本；Outcome 是宿主自己的话，说这一轮从哪条路收
+// 的，按调用次数追加成一条 turn_outcome 事件（引擎从不按它分支）。随后把该轮原文一次
+// 提炼成它的关键词轨，随话题一起返回。
+topic, err := sess.Update(memhop.TurnEnd{
+    Input:     "昨天我们讨论了什么？",
+    Output:    "Agent：...",
+    Outcome:   "resolved",
+    CreatedAt: time.Now().UnixMilli(),
+})
 if err != nil {
     log.Fatal(err)
 }
 _ = topic.FusedKeywords
 
 // Dream 巩固（L0-L2）；sceneID 传空串 = 遍历域内全部场景。
-// 场景话题数超阈值时 Settle 已会自行后台调度，通常无需手动调用。
+// 场景话题数超阈值时 Update 已会自行后台调度，通常无需手动调用。
 report, err := sess.Dream(context.Background(), "")
 ```
 
 
 
-> **并发契约。** 同一 agent 的操作（Search / Settle / Dream / 写 API）由库内域级锁串行，跨 agent 在 `*DB` 上并行，宿主无需自行排队。`*memhop.Session` 除绑定的域外不携带任何跨域状态。文件排他锁仍保证一个 `.meh` 文件只能被一个进程打开；`*DB` 不暴露任何锁接口——域锁是库的，宿主自己的临界区请自行加锁。
+> **并发契约。** 同一 agent 的操作（Search / Update / Dream / 写 API）由库内域级锁串行，跨 agent 在 `*DB` 上并行，宿主无需自行排队。`*memhop.Session` 除绑定的域外不携带任何跨域状态，开着的场景与轮次同样由域自持、不在调用间携带。文件排他锁仍保证一个 `.meh` 文件只能被一个进程打开；`*DB` 不暴露任何锁接口——域锁是库的，宿主自己的临界区请自行加锁。
 
 前置条件：Go 1.27+，OpenAI 兼容的 LLM 接口（经 `api.LlmConfig` 配置，由 `api.Open` 收取）；无需任何 embedding / 向量服务
 
@@ -146,14 +139,14 @@ report, err := sess.Dream(context.Background(), "")
 
 | 分组 | 方法 |
 |------|------|
-| 核心循环 | `Search(q) → topicID` · `PlanNodeAdd(topicID, parentSeq, title) → seq`（parentSeq 0 即开出本轮的树）/ `PlanNodeUpdate(topicID, PlanStep{Seq, Status, …})`（计划先于步骤，一次一步） · `AppendArchive(sceneID, topicID, ArchiveSlot{...}) → seq` · `Settle(sceneID, topicID) → topic` · `Dream(ctx, sceneID)` |
+| 核心循环 | `Search(q) → 开启本轮` · `PlanNodeAdd(parentSeq, title) → seq`（parentSeq 0 即开出本轮的树）/ `PlanNodeUpdate(PlanStep{Seq, Status, …})`（计划先于步骤，一次一步） · `AppendArchive(ArchiveSlot{...}) → seq` · `Update(TurnEnd{Input, Output, Outcome, CreatedAt}) → topic` · `Dream(ctx, sceneID)` —— 轮中这几个写入都不点名场景 id 与轮次 id：它们落在 `Search` 开着的这一轮上 |
 | L0 画像 | `GetL0` · `UpdateL0` |
 | L1 纠缠图（只读） | `ListL1() → []SceneNodeView` —— 本域全部场景节点，顺序稳定、id 为 hex。节点与它们之间的共现边都由 Dream 建立，Dream 是唯一写入方，所以没有 L1 写接口。`Importance` / `Valence` / `Arousal` 是巩固算出来的值，`EmotionSet` 标记有没有哪一趟真的盖过那两个信号（0 是合法读数，光看值分不出）；`EdgeIDs` 本身没有读取口——两个节点共享同一个 id 就意味着 Dream 判定它们相关 |
 | L2 上下文 | `ListScenes([l3ID])` · `UpdateScene(id, {Name, L3ID, Force})` · `RenameTopic(topicID, name)` · `SceneContext` · `MergeScenes` · `DeleteTopic` · `DeleteScene` |
 | L3 知识 | `GetL3` · `ListL3` · `ImportL3`（报出本批把每个 domain 解析进了哪张图，含什么都没新写的那张） · `UpdateL3` · `DeleteL3` · `QueryL3Nodes` · `QueryL3Subgraph`（`edgeKinds` 收窄走的边，未定义的边种类是拒绝，不是回一个空子图） |
-| L4 归档 | `AppendArchive(sceneID, topicID, ArchiveSlot{Kind, Seq, Role, ContentType, EventType, NodeSeq, Content, CreatedAt}) → seq` 是一条记录进入话题的唯一途径：场景与轮次键成对校验（话题必须是该场景已开出的轮次，拼错或自造的键直接拒），`Seq: 0` 由库分配、占到的槽位随调用返回，写一个已被占用的槽位就是覆写。事件的 `NodeSeq` 必须指向本轮计划里已创建的那一步（`0` 即不绑任何步骤）。`SearchL4(q)` 是唯一读取面，两类内容都在里面；关键词（忽略大小写）/ 时间段 / id / 话题 / `Kind`（原文 or 事件）/ `NodeSeq`（**某一步及其全部子步**归因的记录，步骤只在它那一轮内成立；`0` 即不加这条约束）/ 内容类型都是条件而不是模式，`Kind` 不填即两种都要，`Limit` 保留该次读取排序后的末尾 N 条（单话题按槽位序，跨话题按记录自己的时间序） |
+| L4 归档 | `AppendArchive(ArchiveSlot{Kind, Seq, Role, ContentType, EventType, NodeSeq, Content, CreatedAt}) → seq` 是一条记录进入话题的唯一途径：它写的就是 `Search` 开着的这一轮——是哪一轮由库记着，这个调用不点名 id，因此拼错或自造的键根本传不进来，而域上没有开着的轮时直接 `ErrInvalidQuery`，`Seq: 0` 由库分配、占到的槽位随调用返回，写一个已被占用的槽位就是覆写。事件的 `NodeSeq` 必须指向本轮计划里已创建的那一步（`0` 即不绑任何步骤）。`SearchL4(q)` 是唯一读取面，两类内容都在里面；关键词（忽略大小写）/ 时间段 / id / 话题 / `Kind`（原文 or 事件）/ `NodeSeq`（**某一步及其全部子步**归因的记录，步骤只在它那一轮内成立；`0` 即不加这条约束）/ 内容类型都是条件而不是模式，`Kind` 不填即两种都要，`Limit` 保留该次读取排序后的末尾 N 条（单话题按槽位序，跨话题按记录自己的时间序） |
 | 轮内事件（L4 的 `Kind=event`） | 一轮一个键：Search 为该轮开出的话题 id；事件本身住在 L4（`Kind=event`），超出保留窗自动清理（默认 7 天，可配）、无删除接口，读它用 `SearchL4(L4Query{TopicID, Kind: &KindEvent})`，写它用 `AppendArchive`。一个话题的首条事件是 `Seq=3`，因为槽位 1 与 2 属于对话 |
-| L5 计划树 | `PlanNodeAdd(topicID, parentSeq, title) → seq` · `PlanNodeUpdate(topicID, PlanStep{Seq, Status, Title, Summary})` · `PlanState(topicID)` —— 计划树是 L5 唯一自己的记录：一节点一条，一个步骤由「开出它的那一轮 + 该轮内库顺序发号的序号」说清（`ParentSeq` 指它挂在谁下面，0 即根、也即开出本轮的树；序号只保证**同时活着的两步**不共用一个，不保证永久唯一——保留窗扫掉哪一步就腾出它的序号，而事件按自己的时间老化、可以活过它所标注的那一步，回到一个被扫空的旧轮次时，手里的旧序号要按新步骤的地址对待），所以 `PlanState(topic)` 与 `SearchL4{TopicID, Kind}` 是同一个键、两层存储，而 `SearchL4{TopicID, NodeSeq}` 能单独读回某一步及其全部子步做过的事。节点**只因被创建而存在**：`parentSeq` 指向树上没有的步骤是拒绝，而不是顺手补出一个父节点（因此打错一个序号不会长出第二棵树）。`PlanNodeUpdate` 只重述已在树上的那一步——`Status` 每次必须给（没有「保持不变」这种写法），`Title`/`Summary` 留空继承现值。新建的步骤就是 `in_progress`，模型里没有「已计划未开始」这一档；撤回一步没有接口，也不需要一个：手段就是不在此后的轮里再创建它。计划写面不落任何内容：一步的轨迹是宿主自己 append 的 L4 记录 |
+| L5 计划树 | `PlanNodeAdd(parentSeq, title) → seq` · `PlanNodeUpdate(PlanStep{Seq, Status, Title, Summary})` · `PlanState()` —— 计划树是 L5 唯一自己的记录：一节点一条，一个步骤由「开出它的那一轮 + 该轮内库顺序发号的序号」说清（`ParentSeq` 指它挂在谁下面，0 即根、也即开出本轮的树；序号只保证**同时活着的两步**不共用一个，不保证永久唯一——保留窗扫掉哪一步就腾出它的序号，而事件按自己的时间老化、可以活过它所标注的那一步，回到一个被扫空的旧轮次时，手里的旧序号要按新步骤的地址对待），所以 `PlanState()` 与 `SearchL4{TopicID, Kind}` 是同一个键、两层存储，而 `SearchL4{TopicID, NodeSeq}` 能单独读回某一步及其全部子步做过的事。节点**只因被创建而存在**：`parentSeq` 指向树上没有的步骤是拒绝，而不是顺手补出一个父节点（因此打错一个序号不会长出第二棵树）。`PlanNodeUpdate` 只重述已在树上的那一步——`Status` 每次必须给（没有「保持不变」这种写法），`Title`/`Summary` 留空继承现值。新建的步骤就是 `in_progress`，模型里没有「已计划未开始」这一档；撤回一步没有接口，也不需要一个：手段就是不在此后的轮里再创建它。这三个计划写入口都不点名轮次 id——`Search` 开着的这一轮就是它们的键——也不落任何内容：一步的轨迹是宿主自己 append 的 L4 记录 |
 | DB 句柄 | `Open(path, llm, defaults, profile)` · `Primary()` · `SubAgent(llm, profile)` · `Checkpoint` · `CompactTo(newPath)`（写出整理后的副本，目的地路径由调用方自行约束） · `Stats`（文件字节数与全文件可达记录数——判断是否该压缩的两个读数） · `Close` · `IsClosed` |
 
 ## 架构
@@ -178,7 +171,7 @@ Dream 周期是一个自动记忆巩固过程，受人脑睡眠中处理经历�
 3. **L1 衰减** — 衰减场景重要性与边权，剪枝弱节点
 4. **L0 蒸馏** — 从排序后的 L1 样本蒸馏情绪/MBTI 与一份人格摘要，合入存量画像：`Name`、`Role`、`Preferences` 原样保留，而 `Personality` 是宿主写过、Dream 也会重写的唯一一项，所以一次省略它的宿主写入会清掉蒸出的那句，直到下一趟重新演化。同一份回包带回的逐节点情感回填到**从没被盖过章**的 L1 节点上——已经带着读数的节点原样保留，合法的 (0,0) 也算已定读数；没有样本可读时整段跳过
 
-触发方式：某场景的 depth-1 话题数超过 `Defaults.SceneDreamTopicThreshold`（默认 24）时，`Settle` 在后台调度该场景的 Dream；宿主也可显式调用。`Dream(ctx, sceneID) (*DreamReport, error)` 整个周期持有域锁，`sceneID` 传空 = 遍历域内全部场景（话题数不足 `DreamCompressMinTopics` 的场景自动跳过），并在阶段间响应 `ctx` 取消。
+触发方式：某场景的 depth-1 话题数超过 `Defaults.SceneDreamTopicThreshold`（默认 24）时，`Update` 在后台调度该场景的 Dream；宿主也可显式调用。`Dream(ctx, sceneID) (*DreamReport, error)` 整个周期持有域锁，`sceneID` 传空 = 遍历域内全部场景（话题数不足 `DreamCompressMinTopics` 的场景自动跳过），并在阶段间响应 `ctx` 取消。
 
 ### 读取与写入路径
 
@@ -186,9 +179,9 @@ Dream 周期是一个自动记忆巩固过程，受人脑睡眠中处理经历�
 
 | 路径 | 做什么 | 代价 |
 |------|--------|------|
-| `Search(SearchQuery{SceneID, L3ID})` | 空 `SceneID` → 新建场景（名字由库生成）并返回其 id；非空 → 返回该场景的 depth-1 话题集（按用户消息时间升序）+ L0 画像，外加 `NewTopicID`：本次读取为即将进行的这一轮开出的话题 | 纯内存读（L2Meta 缓存），零 LLM、零 embedding、零打分；唯一写是场景记录（轮次计数） |
-| `AppendArchive(sceneID, topicID, ArchiveSlot{Kind, ...}) → seq` | 一轮内容的唯一写入面，键带上这轮所属的场景——写入前先验这对键，拼错或自造的话题 id 被拒，而不是把内容写进一个任何读取都列不出的孤儿键。原文声明谁说的、是什么媒介；事件自己命名，并可挂在某个计划步骤上。`Seq: 0` 在两个对话槽之上分配，占到的槽位随调用返回 | 零 LLM；被拒的记录一字节不留（含顺路要建的节点）。事件整条 4 KiB（名字与正文合计）、原文 64 KiB，超预算是拒写不是截断 |
-| `Settle(sceneID, topicID) → topic` | 把该话题已有的原文蒸馏成它的关键词轨，并随落盘后的话题一起返回——蒸出的 `FusedKeywords` 就在里面；它自己不写任何内容 | 每轮恰好 1 次 LLM 调用，且排在该轮话题落盘之前，失败不留半成品话题。内容已被保留窗裁光的轮次直接 `ErrInvalidQuery`，一次 LLM 也不调用 |
+| `Search(SearchQuery{SceneID, L3ID, NewScene})` | 空 `SceneID` → 续用该域当前的场景（重开文件后从记录里恢复「轮次计数器跑得最远」的那个），域内一个都没有时才新建（名字由库生成）；`NewScene: true` → 另开一条会话，这是同一个域上开第二场会话的唯一路子；点名 `SceneID` → 返回该场景的 depth-1 话题集（按用户消息时间升序）+ L0 画像，外加 `NewTopicID`：本次读取为即将进行的这一轮开出的话题 | 纯内存读（L2Meta 缓存），零 LLM、零 embedding、零打分；唯一写是场景记录（轮次计数） |
+| `AppendArchive(ArchiveSlot{Kind, ...}) → seq` | 一轮内容的唯一写入面，写的就是 `Search` 开着的这一轮——是哪一轮由库记着，这个调用不点名 id，因此拼错或自造的话题 id 传不进来；域上没有开着的轮时它被拒（`ErrInvalidQuery`），而不是把内容写进一个任何读取都列不出的孤儿键。原文声明谁说的、是什么媒介；事件自己命名，并可挂在某个计划步骤上。`Seq: 0` 在两个对话槽之上分配，占到的槽位随调用返回 | 零 LLM；被拒的记录一字节不留（含顺路要建的节点）。事件整条 4 KiB（名字与正文合计）、原文 64 KiB，超预算是拒写不是截断 |
+| `Update(TurnEnd{Input, Output, Outcome, CreatedAt}) → topic` | 收口那一轮：`Input` 与 `Output` 落到该话题的两个对话槽（Seq 1 / Seq 2），所以重收同一轮是原地覆写这两行而不是叠加版本；`Outcome` 是宿主自己的说法——它说这一轮是从哪条路收的，引擎从不按它分支——按调用次数追加成一条 `turn_outcome` 事件（一次挂起加一次恢复是两条事实，不是一行写两遍）。随后把该话题已有的原文蒸馏成它的关键词轨，并随落盘后的话题一起返回——蒸出的 `FusedKeywords` 就在里面 | 每轮恰好 1 次 LLM 调用，且排在该轮话题落盘之前，失败不留半成品话题。内容已被保留窗裁光的轮次直接 `ErrInvalidQuery`，一次 LLM 也不调用；域上没有开着的轮时同样 `ErrInvalidQuery`（消息含 `no turn is open`） |
 
 宿主注入的上下文就是该场景 depth-1 话题的关键词集合；要看某轮原文，用那一轮的话题 id 去寻址 L4——`SearchL4(L4Query{TopicID})`——或直接用已经带回消息的 `SceneContext`。注入规模靠 Dream 向 `DreamCompressMinTopics`（默认 20）收敛来控住——那是巩固这一趟瞄准的目标数，不是场景被牢牢按住的上限，所以让自动巩固照常开着，才是让注入不至于无界增长的那件事。
 
@@ -210,9 +203,8 @@ MemHop 的测试套件只驱动公开 `api` 表面——即宿主（如 MeowAgen
 | 基准 | 测量 |
 |------|------|
 | `BenchmarkMemoryLoop` | 稳态 Search+Update 记忆循环，含引擎**自动调度的 Dream**（场景 depth-1 话题数超过阈值）与周期性 L0/L2 验证 |
-| `BenchmarkUpdateTurn` | 一轮沉淀延迟（一次提炼 + 话题与两条 L4 写入） |
+| `BenchmarkUpdateTurn` | 走完一轮：开轮那次读，再加收束（两条对话写入、一次提炼、话题落盘） |
 | `BenchmarkSceneRead` / `BenchmarkSceneReadLatency` | 场景读回吞吐与延迟分布（min/p50/p95/max） |
-| `BenchmarkAppendL4` | 纯存储追加延迟（不调 LLM） |
 | `BenchmarkDreamConsolidation` | 完整 Dream 流水线延迟 |
 
 ### 为什么不跑外部数据集基准？

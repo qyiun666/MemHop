@@ -17,6 +17,7 @@ import (
 type (
 	SearchQuery       = core.SearchQuery
 	SearchResult      = core.SearchResult
+	TurnEnd           = core.TurnEnd
 	SceneMessage      = core.SceneMessage
 	SceneContextTopic = core.SceneContextTopic
 	SceneContext      = core.SceneContext

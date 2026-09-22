@@ -27,8 +27,8 @@ internal/{domain,scene,turn,dream,graph,plan,content}
 
 | 包 | 职责 |
 |---|---|
-| `domain` | 域状态容器 `Context`（Mu/L2Meta/L4/Plans/DreamInFlight/OpCtx，持 Engine/LLM/Defaults 注入）+ PlanCache + L2Meta 缓存维护（SyncL2Meta/RemoveTopicsFromIndices/RetargetL2Meta）；`L4` 是「话题 → 它名下的内容槽位（原文 + 事件）」的镜像 |
-| `scene` | L2 场景读写面：Create（没有场景可读时就在内部新建）/ResolveExisting（宿主点名一个场景时定位它）/SurfaceTopics/ContextTopic/DeleteCascade/DetachGraph；交回的都是场景 id，入参只收解好的数值 id |
+| `domain` | 域状态容器 `Context`（Mu/L2Meta/L4/Plans/DreamInFlight/OpCtx，持 Engine/LLM/Defaults 注入）+ PlanCache + L2Meta 缓存维护（SyncL2Meta/RemoveTopicsFromIndices/RetargetL2Meta）；`L4` 是「话题 → 它名下的内容槽位（原文 + 事件）」的镜像。另有两个**自持字段** `Scene`/`Turn`（该域当前的场景与开着的那一轮），宿主因此不必持有也不必回传这两个 id；它们只在域锁内读写，维护口是 `ForgetScene`/`MoveScene`/`ForgetTurn` |
+| `scene` | L2 场景读写面：Create（没有场景可读时就在内部新建）/ResolveExisting（宿主点名一个场景时定位它）/CurrentScene（该域没有自持场景时，从记录里恢复轮次计数器跑得最远的那个）/SurfaceTopics/ContextTopic/DeleteCascade/DetachGraph；交回的都是场景 id，入参只收解好的数值 id |
 | `turn` | 轮次归属：SettleTarget（可沉淀的轮次范围）、ReadProfile（Search 的 L0 读面）；进来的 hex 键已在根上解析完，本包不碰内容 |
 | `dream` | 巩固阶段：SceneSet、PruneContentStage(`l4_prune`) 与 PrunePlanStage(`l5_prune`)（共用 `ContentRetention` 窗口、各读自己的时间戳）、CompressScenes(+组回滚)、StructureStages、L1 各阶段、distillL0Stage（私有）；调参常量随阶段在此 |
 | `graph` | L3 导入/查询：`ImportBatch`（一次批次的 mode + result + 缓存：domain→图、图→标题集、图→边键，外加两份图集「访问过」/「写过内容」；方法 ImportNode/ImportRelations/GraphIDs/StampChanged）、NodeFilter.Matches/CheckSubgraphStart/SubgraphAdjacency/BfsWithinDepth/AllNodesVisited |
@@ -42,12 +42,14 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    标记），再调小方法；引擎自带的锁在内层，顺序不可颠倒。同 agent 串行、跨 agent 并行。
    `contextFor` 对非默认域校验注册表：未注册的 agentID 直接
    `ErrAgentNotFound`。
-   轮次键的写读面（`AppendArchive`、计划族、`Update` 的结算）统一走
-   `db.lockSession(agentID, turnID)`（lockAgent +
-   `content.ParseTopicID`，解析失败先解锁）——根上只有这一处解析轮次键：一轮的
-   内容（L4 的原文与事件，`SearchL4{TopicID, Kind}` 按 Kind 取）与它开出的
-   计划树（L5 节点，`PlanState(topic)` 给树）共用同一个键。`SearchL4` 不在这一族里：
-   它的话题条件可选，没有键要先解析。
+   开着一轮的写面（`AppendArchive`、计划族、`Update`）统一走
+   `db.lockTurn(agentID)`：lockAgent，然后**该域没有开着轮就先拒**
+   （`ErrInvalidQuery`，消息含 "no turn is open"）——为它猜一个（当前场景的下一轮）
+   等于把收束的话写到一个没人开过的轮上。轮次键由 `Search` 铸、由 `ac.Turn` 自持，
+   所以这一族里根本没有一个宿主给的键要解析：一轮的内容（L4 的原文与事件）与它开出的
+   计划树（L5 节点）共用同一个键，而这个键只有一个来源。
+   仍按宿主给的键工作的只有读侧与改侧：`SearchL4` 的话题条件可选、
+   `RenameTopic`/`DeleteTopic` 点名一个话题，它们各自经 `content.ParseTopicID`。
    门面侧的会话准入策略在 `CheckSession`。L3 的方法是唯一例外：走
    `db.lockSharedPool(callerID)`——先 `CheckSession` 校验调用方域活着，再锁
    保留公共域 `core.SharedPoolAgentID`（L3 记录全部住该域，跨 agent
@@ -92,12 +94,13 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    （`DeleteTopicArchives` / `DropExpiredArchives`）在**磁盘删成功后**摘。
    漏摘 `Plans` 与漏摘 `L4` 的代价不对称：后者让该话题每次读都报 `ErrIO`
    直到重启重建索引，前者留下一条陈旧的 `LastActiveAt` 让死树长期豁免清扫。
-6. **L5 键全零保留**：`0` 是每条记录未赋键时的值，故 `0000000000000000` 不是
-   合法的 L5 键。读写两侧一律经 `content.ParseTopicID` 拒它——写侧
-   `AppendArchive`/`PlanNodeAdd`/`PlanNodeUpdate`/`PlanState`，读与改侧
-   `SearchL4` 的话题过滤、`RenameTopic`、`DeleteTopic`。两侧都要拒，各有一半代价：
-   写侧放过它，全零键下就会攒出永远读不出的记录；读侧放过它，一个根本没拿到键的
-   查询会收到空清单，与一轮真的没内容分不清。
+6. **轮次键全零保留**：`0` 是每条记录未赋键时的值，故 `0000000000000000` 不是
+   合法的轮次键。宿主能递进来的那几处一律经 `content.ParseTopicID` 拒它：
+   `SearchL4` 的话题过滤、`RenameTopic`、`DeleteTopic`——放过它，一个根本没拿到键的
+   查询会收到空清单，与一轮真的没内容分不清。写侧的键不再由宿主递，于是同一档保留值
+   换了两个落点：`ac.Turn == 0` 是「没有开着轮」的哨兵（`lockTurn` 据此拒），
+   而 `Search` 铸出的键若真撞上 0 就报 `ErrCorruption`——那一轮既无法自持也无法
+   被读出，静默收下就是让宿主接下来写到别人的轮上。
 7. **计划清理有界**：dream 的 `l5_prune` 只豁免「持非 done 节点 **且** 窗口内
    仍有节点活动」的计划，其中活动只看节点自己的 `UpdatedAt`；宿主中断或放弃而
    静默超 `ContentRetention` 的计划照常清理。豁免保住的是**整棵活树**（含早已
@@ -190,36 +193,50 @@ internal/{domain,scene,turn,dream,graph,plan,content}
 
 ## 读写路径契约
 
-1. **一次 `Search` = 读场景 + 开一轮**：`scene_id` 为空 → `scene` 在自己内部铸一个未被
-   占用的 ID（`0` 跳过；只有 `ErrNotFound` 才算可用，其他读错误原样上抛）并落一条场景记录
-   （名字一律库生成 `session:<id>`，锚点与它同批写入，交回的是这条记录的 id）；非空且不存在 →
-   `ErrNotFound`；非空、已存在、且带了 `L3ID` 一律拒——锚点是创建期字段，改锚只走
-   `UpdateScene`，静默丢弃会让一次没生效的锚定看起来生效了。这道拒绝不看那张图在不在，
-   否则一张已删的图会把「场景已在这里」报成「记录不存在」。同一批调用还经
-   `repo.OpenSceneTurn` 把
-   场景的 `TurnSeq` 推到下一轮，返回值 `NewTopicID = hash("turn:" +
-   场景:TurnSeq)` 就是本轮要沉淀进去的话题。`Update` 一律拒绝未知场景，
-   库内不再猜场景。画像读取失败同样使本次读取失败（仅"画像尚未建立"按空
+1. **一次 `Search` = 定场景 + 开一轮**：`SceneID` 为空 → 续用该域自持的 `ac.Scene`；
+   自持为空（首次访问、或空闲回收后重建、或当前场景被删）时经 `scene.CurrentScene`
+   从记录里恢复「`TurnSeq` 跑得最远」的那个，平手取 id 小的，所以同一份记录两次恢复
+   得到同一个场景；一个场景都没有才新建——`scene` 在自己内部铸一个未被占用的 ID
+   （`0` 跳过；只有 `ErrNotFound` 才算可用，其他读错误原样上抛）并落一条场景记录
+   （名字一律库生成 `session:<id>`，锚点与它同批写入）。`NewScene:true` 跳过这一切
+   直接新建，那是宿主唯一「另开一条会话」的写法。`L3ID` 只被**这一读会新建场景**的两条
+   路径采纳（`NewScene:true`、该域还没有场景的第一读）；续用一条会话时递来锚点一律拒，
+   点名的那条还要在消息里带上那个 id——锚点是创建期字段，改锚只走 `UpdateScene`，
+   静默丢弃会让一次没生效的锚定看起来生效了。两道拒绝都只看入参、不看那张图在不在，
+   否则一张已删的图会把「场景已在这里」报成「记录不存在」（宿主去找一条自己从没要读的
+   记录）。`SceneID` 非空且不存在 → `ErrNotFound`；自持的那条不再重复审存在性——紧接着
+   `repo.OpenSceneTurn` 读的就是同一条记录，它同时把场景的 `TurnSeq` 推到下一轮，`NewTopicID = hash("turn:" +
+   场景:TurnSeq)` 就是本轮的话题，根把它与场景一起装进 `ac.Scene`/`ac.Turn`。
+   铸出的键撞上保留的 0 时报 `ErrCorruption` 而不是收下（见第 6 条）。
+   画像读取失败同样使本次读取失败（仅"画像尚未建立"按空
    画像继续），不再静默返回缺 L0 的上下文。
 2. **`Search` 零 LLM、零话题写入**：唯一写是那一行场景记录（轮次计数，
    写失败即报错——轮次号是铸 ID 的依据，不能吞），话题从 `ac.L2Meta` 取
    depth-1。**`Search` 自己这一侧不留残渣**：开了没沉淀的轮次没有话题记录，读两次只沉淀
    一次就是跳号。宿主在那把键下自己写下的内容与计划树另算——它们是真实的记录，只是没有
    话题记录可依附，`DeleteTopic` 认不到，收走它们的只有 Dream 的保留窗清扫。
-3. **`Update` 每轮一次提炼，且排在话题写入前**：它读该话题已有的
-   `Kind=utterance` 记录（几种都行，一轮不再恒两条），渲染成带说话者标签的转录
-   交 `llmops.ExtractKeywords`；提炼失败或空结果直接报错，此时话题与 L2Meta
-   一个字都没动，而**宿主先前 append 的内容原样留着**——Update 不拥有它，
-   失败回滚它就要把「本轮写了哪几条」再记一份。一条内容都没读到
-   （被保留窗裁光）时以 `ErrInvalidQuery` 拒绝且**不碰 LLM**：给一个说不出
-   话的轮次写空关键词轨，读回来像是真提炼过。
+3. **`Update` 先收束这一轮，再每轮一次提炼，且提炼排在话题写入前**：它把入参里非空的
+   那几条记录落到开着的那一轮上（三条全空即拒——收束总得留下点什么）——`Input` 占
+   `Seq=SeqUser`、`Output` 占 `Seq=SeqAgent`
+   （对话主干的两个预留格，所以重关一轮是原地覆写而不是累积两份收束）、`Outcome` 作一条
+   `turn_outcome` 事件追加（一次挂起加一次恢复是两条事实，故按调用次数累积）——
+   这几条都在任何落盘之前整批过 `content.ValidateAppend`，一条被拒就一条都不写。
+   然后读该话题已有的 `Kind=utterance` 记录（几种都行，一轮不再恒两条），渲染成带
+   说话者标签的转录交 `llmops.ExtractKeywords`；提炼失败或空结果直接报错，此时话题与
+   L2Meta 一个字都没动，而**已落下的那几条与宿主先前 append 的内容原样留着**——回滚它们
+   要把「本轮写了哪几条」再记一份，而重放一次 `Update` 会自己把那两个槽覆写回新值。
+   一条内容都没读到（被保留窗裁光）时以 `ErrInvalidQuery` 拒绝且**不碰 LLM**：给一个
+   说不出话的轮次写空关键词轨，读回来像是真提炼过。
    覆写的边界在 append 这一侧：写一个已被占用的 Seq 是原地覆写而非报错，
    本轮没写到的槽位也不会被回收，所以改一轮的文本可能让一句已撤回的回复继续
    出现在转录里，直到话题被删或过保留窗（这条写进 `AppendArchive` 的门面注释）。
-   `turn.SettleTarget` 另外钉住可沉淀的范围：`TopicID` 必须是
+   `turn.SettleTarget` 另外钉住可沉淀的范围：自持的 `Turn` 必须是
    `hash("turn:" + 场景:k)` 且 `k <= 场景.TurnSeq`，即该场景真开出过的某一轮
-   ——写 Dream 融合节点（同 depth、同场景，但由时间戳派生）、跨场景 id、宿主
-   自造 id 都在 LLM 调用之前被拒，零留痕。这道闸不拦「往别的话题写内容」——内容记录
+   ——写 Dream 融合节点（同 depth、同场景，但由时间戳派生）与跨场景的旧键都在 LLM
+   调用之前被拒，零留痕。这道闸挡的是**自持字段过期**那一类：三条会毁掉一轮的写口各自
+   摘掉自持字段（见第 13 条），而一次在飞的 `Update` 若跨过了别的写口留下的窗口，
+   这里就是最后一道。宿主自造 id 那一类
+   已经不存在——它不再有机会递一个键进来。这道闸不拦「往别的话题写内容」——内容记录
    只被它的**话题**寻址，而话题里推不出场景，那是键本身的语义，不是归属闸的活。
    重放当前轮与"先开两轮再乱序结算"
    仍然合法（`TestUpdateSettlesEachScenesTurnsInOrder`）；重放重写的是引擎那半
@@ -253,7 +270,8 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    只有「已经不在」的成员从组里退出——吞掉一次读失败会留下父摘要与那一条自己的
    原文同时在场景里，正是一个半成品父节点（`TestCompressTopicsL2RefusesUnreadableMember`、
    `TestRestoreSunkTopicsL2BringsBackOnlyThisGroupsMembers`）。
-5. **内容类型与说话者在 `AppendArchive` 逐条声明并在其边界校验**：原文侧照收
+5. **内容类型与说话者在 `AppendArchive` 逐条声明并在其边界校验**（`Update` 自己那三条
+   走同一道 `content.ValidateAppend`，它不给自己开后门）：原文侧照收
    `Role`（user/agent/system）与 `ContentType`（零值 `ContentText`，非文本侧存
    路径/URL），未定义值以 `ErrInvalidQuery` 拒绝；`RoleDream` 是库给融合摘要
    自己盖的标记，公开常量里没有它、append 也拒它，否则宿主能伪造巩固产物。
@@ -314,8 +332,8 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    一个图一次写而不是每条记录一次），改名走同一个偏更新原语（`name=nil`），
    只读到没写过的图不动它——skip 模式重导同一批节点因此不会让这张图看起来变新。
 10. **内容只有两个写入口，且都落到同一个原语**：宿主侧的内容一律经
-   `content.Append`（`AppendArchive` 是它唯一的调用者，对话原文与事件都走这一条，
-   `NodeSeq` 就写在记录上）；巩固组那份摘要是唯一不经该边界的写入——
+   `content.Append`（调用者两个：`AppendArchive` 逐条写，`Update` 写它自己那三条
+   收束记录——对话原文与事件都走这一条，`NodeSeq` 就写在记录上）；巩固组那份摘要是唯一不经该边界的写入——
    `dream.applyOneGroup` 直接落 `repo.AppendArchiveL4`，因为它要占 `Seq=SeqUser`
    那一格与库自有的 `RoleDream`，而 `ValidateAppend` 恰恰拒调用方给 `RoleDream`
    （否则宿主能伪造巩固产物）。`RoleDream` 只由巩固那一处戳写，两入口之下的原语只有
@@ -352,7 +370,11 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    的 secondary id 就能带走存活主场景自己的记录，而调用还返回成功。
    删除面其余各口同此：`DeleteScene`/`DeleteTopic`/`DeleteL3` 都先回读确认目标
    存在（不认识的 id 正是 `CheckSession` 拒的那类 id）——没有一处把「记录不在」
-   当成成功返回。
+   当成成功返回。这三条路径还各自带走域自持的那一半：`DeleteScene` 清 `ac.Scene`/`ac.Turn`
+   （`ForgetScene`），`DeleteTopic` 沿**整条话题闭包** `ForgetTurn`（被删的是融合父时，它吞掉
+   的那一轮也在闭包里），`MergeScenes` 经 `MoveScene` 把自持场景改挂到主场景上、轮次清空
+   （轮次 id 由场景派生，跨合并活不下来）。漏一处的后果与漏验 id 不是一个量级：下一次
+   `Update` 会把收束写进一条已毁的轮，那批记录在读路径上谁也看不见，只能等保留窗收走。
    **一个场景结束它的两种写法都要带走它的 L1 节点**：`DeleteScene` 删完记录就
    `repo.DeleteSceneNodeL1`，`MergeScenes` 在验完 id 之后、写之前先删掉每个次场景的
    节点（先删才谈得上可重试：合并被拒时场景还活着，下一次 Dream 会把节点建回来）。
@@ -374,4 +396,6 @@ internal/{domain,scene,turn,dream,graph,plan,content}
 - 关键词提炼无本地兜底：LLM 输出不可解析即 `ErrLLM`（这一轮不产生话题），`internal` 根不初始化任何分词器。一轮的提炼与 Dream 的融合提炼共用 `llmops.ExtractKeywords`——它只吃一段文本，不认识记录结构。
 - L0 蒸馏同样无兜底，且**「答非所问」与「答得少」分开判**：回包里 `emotion`/`mbti` 缺整块即 `ErrLLM`（这一轮不动画像），解码出的零值不去盖库里已蒸馏的那半；`per_node` 只认本次样本集里的 id，认不出的行在 `llmops` 内丢掉——带下去只会让一次抄错的 hex 被 L1 回填报成「一条记录读不回」，从此每次 Dream 都停在最后一步。三类调用（关键词、巩固、蒸馏）要多少输出都不越 `LlmConfig.MaxOutputTokens` 声明的端点上限（越过去是一次被端点直接拒掉的请求），截断升级花的是「端点上限减去 `llmops.ConsolidationMaxTokens`」那一段——宿主没抬过 `MaxOutputTokens` 时那一段是零，此时一条装不下的融合摘要就是该场景这次巩固的 `ErrLLM`（上限与升级路径写在 `llmops` 那一条上）；巩固 prompt 里的目标条数就是 `Defaults.DreamCompressMinTopics`，并且任何数字都排在「不同主题禁并」这条规则之后。
 - `ImportL3` 的批校验：Title/Domain 必填在 composition root 判，导入模式在批次构造处判（`core.L3ImportMode.Valid()` 是唯一列词表的地方）——两者都排在任何读与写之前，拒批即一字节不写。批次创建时又把整池的三张索引一次读全（图槽 name→id、每图标题集、每图边键）——三者中任何一条记录读不回都让**整批**在第一个写入之前被拒、错误带着那条记录的 id。一个派生地址已被别的记录占着的条目（标签正好拼出某节点 id 那一类）是**单条**拒绝，走 `result.Errors`，同批其余照旧落地。
-- 宿主面测试覆盖 25 个会话方法 + 7 个 `DB` 方法，按层分文件：`test/api_interface_scene_test.go`（L2 场景生命周期）、`api_interface_plan_test.go`（L5 按步骤逐个建的树、Model A 折叠与节点字段回读、事件键到自己那一轮、重开后读回）、`api_interface_turn_test.go`（一轮之下原文与事件各归各的读法）、`api_interface_multi_test.go`（租户隔离与 `CompactTo`）。这些用例只使用库铸造并回传给宿主的 id。
+- 宿主面测试覆盖 25 个会话方法 + 7 个 `DB` 方法，按层分文件：`test/api_interface_scene_test.go`（L2 场景生命周期）、`api_interface_plan_test.go`（L5 按步骤逐个建的树、Model A 折叠与节点字段回读、事件键到自己那一轮、重开后读回）、`api_interface_turn_test.go`（一轮之下原文与事件各归各的读法）、`api_interface_multi_test.go`（租户隔离与 `CompactTo`）。这些用例里轮次与场景一律不回传——写入开着的轮靠的是 `Search` 之后库的自持字段，
+只有读侧与改侧（`SearchL4{TopicID}`、`RenameTopic`、`DeleteTopic`、`SceneContext`）
+还拿着库铸给宿主的 id。

@@ -34,3 +34,30 @@ func (c *Context) RetargetL2Meta(primaryHash uint64, removed map[uint64]struct{}
 		c.L2Meta.RetargetScene(sid, primaryHash)
 	}
 }
+
+// ForgetScene drops the domain's memory of its current scene, and with it the turn
+// opened on it: the next read then restores from the records instead of resuming a
+// scene that no longer exists. Callers hold c.Mu.
+func (c *Context) ForgetScene(sceneID uint64) {
+	if c.Scene == sceneID {
+		c.Scene, c.Turn = 0, 0
+	}
+}
+
+// MoveScene retargets the domain's current scene when a merge swallows it. The turn
+// opened on the scene that went under does not travel with it: a turn id derives
+// from its scene, so the host reads again to work on the merged one. Callers hold
+// c.Mu.
+func (c *Context) MoveScene(from, to uint64) {
+	if c.Scene == from {
+		c.Scene, c.Turn = to, 0
+	}
+}
+
+// ForgetTurn clears the open turn when the topic that held it is deleted, so a later
+// close is refused rather than written onto a turn that is gone. Callers hold c.Mu.
+func (c *Context) ForgetTurn(topicID uint64) {
+	if c.Turn == topicID {
+		c.Turn = 0
+	}
+}

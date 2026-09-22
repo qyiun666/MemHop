@@ -98,17 +98,18 @@ func TestAgentDomainIsolation(t *testing.T) {
 		t.Fatalf("GetL0(b) = %+v err=%v, want agent-b", pb, err)
 	}
 
-	// One turn key per domain: each domain's own scene mints its own topic id,
-	// and the events under them stay per-agent.
-	sessionA, turnA, _ := newTurnKeyFor(t, db, a)
-	sessionB, turnB, _ := newTurnKeyFor(t, db, b)
-	if _, err := db.AppendArchive(a, sessionA, turnA, core.ArchiveSlot{Kind: core.KindEvent, EventType: "tool_call", Content: "a", CreatedAt: 1}); err != nil {
+	// One open turn per domain: each domain's own scene mints its own topic id and
+	// keeps it, so writing to a after b opened a later turn still lands on a's turn —
+	// and the events under them stay per-agent. A host names neither id on the way in.
+	_, turnA, _ := newTurnKeyFor(t, db, a)
+	_, turnB, _ := newTurnKeyFor(t, db, b)
+	if _, err := db.AppendArchive(a, core.ArchiveSlot{Kind: core.KindEvent, EventType: "tool_call", Content: "a", CreatedAt: 1}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.AppendArchive(b, sessionB, turnB, core.ArchiveSlot{Kind: core.KindEvent, EventType: "tool_call", Content: "b1", CreatedAt: 1}); err != nil {
+	if _, err := db.AppendArchive(b, core.ArchiveSlot{Kind: core.KindEvent, EventType: "tool_call", Content: "b1", CreatedAt: 1}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.AppendArchive(b, sessionB, turnB, core.ArchiveSlot{Kind: core.KindEvent, EventType: "tool_call", Content: "b2", CreatedAt: 2}); err != nil {
+	if _, err := db.AppendArchive(b, core.ArchiveSlot{Kind: core.KindEvent, EventType: "tool_call", Content: "b2", CreatedAt: 2}); err != nil {
 		t.Fatal(err)
 	}
 	ea, err := db.eventsOf(a, turnA)

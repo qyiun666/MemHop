@@ -27,9 +27,9 @@ func utterance(seq uint64, role uint8, text string, ts int64) core.ArchiveSlot {
 // change it, and write it to the slot it came from.
 func TestAppendArchiveAdoptsDeclaredUtteranceFields(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
-	sceneHex, hex, topicID := newTurnKey(t, db)
+	_, _, topicID := newTurnKey(t, db)
 
-	if _, err := db.AppendArchive(core.DefaultAgentID, sceneHex, hex, core.ArchiveSlot{
+	if _, err := db.AppendArchive(core.DefaultAgentID, core.ArchiveSlot{
 		Kind: core.KindUtterance, Seq: core.SeqUser, Role: core.RoleSystem,
 		ContentType: core.ContentImage, IDHash: 4242, TopicID: 4242,
 		Content: "img://cat.png", CreatedAt: 1000,
@@ -45,7 +45,7 @@ func TestAppendArchiveAdoptsDeclaredUtteranceFields(t *testing.T) {
 		t.Fatalf("declared axes lost: %+v", got)
 	}
 	if got.TopicID != topicID || got.IDHash != core.HashContent(topicID, core.SeqUser) {
-		t.Fatalf("an append must be addressed by the topic it named, not by what it passed: %+v", got)
+		t.Fatalf("an append must be addressed by the turn the library holds open, not by what it passed: %+v", got)
 	}
 }
 
@@ -54,9 +54,9 @@ func TestAppendArchiveAdoptsDeclaredUtteranceFields(t *testing.T) {
 // across kind: naming an event's slot replaces the event.
 func TestAppendArchiveOverwritesAcrossKinds(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
-	sceneHex, hex, topicID := newTurnKey(t, db)
+	_, hex, topicID := newTurnKey(t, db)
 
-	if _, err := db.AppendArchive(core.DefaultAgentID, sceneHex, hex, ev("tool_call", 1000)); err != nil {
+	if _, err := db.AppendArchive(core.DefaultAgentID, ev("tool_call", 1000)); err != nil {
 		t.Fatalf("append event: %v", err)
 	}
 	landed, err := db.eventsOf(core.DefaultAgentID, hex)
@@ -68,7 +68,7 @@ func TestAppendArchiveOverwritesAcrossKinds(t *testing.T) {
 	}
 	taken := landed[0].Seq
 
-	if _, err := db.AppendArchive(core.DefaultAgentID, sceneHex, hex, utterance(taken, core.RoleUser, "改口了", 1500)); err != nil {
+	if _, err := db.AppendArchive(core.DefaultAgentID, utterance(taken, core.RoleUser, "改口了", 1500)); err != nil {
 		t.Fatalf("overwrite an event slot with an utterance: %v", err)
 	}
 	if still, _ := db.eventsOf(core.DefaultAgentID, hex); len(still) != 0 {
@@ -85,17 +85,17 @@ func TestAppendArchiveOverwritesAcrossKinds(t *testing.T) {
 // its events have landed.
 func TestAppendArchiveAllocatesAboveHeldSlots(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
-	sceneHex, hex, topicID := newTurnKey(t, db)
+	_, _, topicID := newTurnKey(t, db)
 
 	for i := 1; i <= 3; i++ {
-		if _, err := db.AppendArchive(core.DefaultAgentID, sceneHex, hex, ev("tool_call", int64(100*i))); err != nil {
+		if _, err := db.AppendArchive(core.DefaultAgentID, ev("tool_call", int64(100*i))); err != nil {
 			t.Fatalf("append event %d: %v", i, err)
 		}
 	}
-	if _, err := db.AppendArchive(core.DefaultAgentID, sceneHex, hex, utterance(0, core.RoleUser, "问答", 500)); err != nil {
+	if _, err := db.AppendArchive(core.DefaultAgentID, utterance(0, core.RoleUser, "问答", 500)); err != nil {
 		t.Fatalf("append an auto-allocated utterance: %v", err)
 	}
-	if _, err := db.AppendArchive(core.DefaultAgentID, sceneHex, hex, utterance(core.SeqUser, core.RoleUser, "命名槽位", 400)); err != nil {
+	if _, err := db.AppendArchive(core.DefaultAgentID, utterance(core.SeqUser, core.RoleUser, "命名槽位", 400)); err != nil {
 		t.Fatalf("append into a reserved slot: %v", err)
 	}
 	var seqs []uint64
@@ -113,19 +113,19 @@ func TestAppendArchiveAllocatesAboveHeldSlots(t *testing.T) {
 // whole text.
 func TestAppendArchiveBudgets(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
-	sceneHex, hex, topicID := newTurnKey(t, db)
+	_, _, topicID := newTurnKey(t, db)
 
-	if _, err := db.AppendArchive(core.DefaultAgentID, sceneHex, hex, core.ArchiveSlot{
+	if _, err := db.AppendArchive(core.DefaultAgentID, core.ArchiveSlot{
 		Kind: core.KindEvent, EventType: "tool_result", Content: strings.Repeat("a", content.MaxEventPayload+1), CreatedAt: 1,
 	}); err == nil {
 		t.Fatal("an over-budget event must be refused")
 	}
-	if _, err := db.AppendArchive(core.DefaultAgentID, sceneHex, hex, core.ArchiveSlot{
+	if _, err := db.AppendArchive(core.DefaultAgentID, core.ArchiveSlot{
 		Kind: core.KindUtterance, Role: core.RoleUser, Content: strings.Repeat("a", content.MaxUtterancePayload+1), CreatedAt: 1,
 	}); err == nil {
 		t.Fatal("an over-budget utterance must be refused, not truncated")
 	}
-	if _, err := db.AppendArchive(core.DefaultAgentID, sceneHex, hex, core.ArchiveSlot{
+	if _, err := db.AppendArchive(core.DefaultAgentID, core.ArchiveSlot{
 		Kind: core.KindUtterance, Role: core.RoleAgent, Content: strings.Repeat("a", content.MaxUtterancePayload), CreatedAt: 1,
 	}); err != nil {
 		t.Fatalf("an utterance at the budget limit: %v", err)
@@ -143,7 +143,7 @@ func TestAppendArchiveBudgets(t *testing.T) {
 // by a millisecond window.
 func TestAppendArchiveRefusesATimestampInTheWrongUnit(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
-	sceneHex, hex, topicID := newTurnKey(t, db)
+	_, hex, topicID := newTurnKey(t, db)
 	now := time.Now()
 	for _, tc := range []struct {
 		name string
@@ -152,7 +152,7 @@ func TestAppendArchiveRefusesATimestampInTheWrongUnit(t *testing.T) {
 		{"seconds since the epoch", now.Unix()},
 		{"microseconds since the epoch", now.UnixMicro()},
 	} {
-		_, err := db.AppendArchive(core.DefaultAgentID, sceneHex, hex, core.ArchiveSlot{
+		_, err := db.AppendArchive(core.DefaultAgentID, core.ArchiveSlot{
 			Kind: core.KindUtterance, Role: core.RoleUser, Content: "a turn", CreatedAt: tc.ts,
 		})
 		if common.CodeOf(err) != common.ErrInvalidQuery {
@@ -164,7 +164,7 @@ func TestAppendArchiveRefusesATimestampInTheWrongUnit(t *testing.T) {
 	}
 
 	ms := now.UnixMilli()
-	if _, err := db.AppendArchive(core.DefaultAgentID, sceneHex, hex, core.ArchiveSlot{
+	if _, err := db.AppendArchive(core.DefaultAgentID, core.ArchiveSlot{
 		Kind: core.KindUtterance, Role: core.RoleUser, Content: "a turn", CreatedAt: ms,
 	}); err != nil {
 		t.Fatalf("a millisecond timestamp must be accepted: %v", err)
