@@ -348,11 +348,13 @@ What is left for the host is five facts to know, not five adapters to write:
   surface (`Search` and `SceneContext` hand them over in turn order), while
   `SearchL4{Limit}` caps *records*. A recall window of N turns therefore takes those N
   topics and then reads each one's content; no L4 query on this surface counts turns.
-- **Loops stay apart.** The open turn belongs to an agent domain, so a second file — or a
-  second domain of the same file — cannot write onto the first one's turn
-  (`api/surface_turn_test.go` pins it). Sub-agent domains are the separate facility for
-  several domains sharing one file and one L3 knowledge graph; a second decision loop does
-  not need one, it needs a second `Open`.
+- **Loops stay apart, including one started mid-round.** The open turn belongs to an agent
+  domain and nothing about it is process-wide, so a second file — or a second domain of the
+  same file — cannot write onto the first one's turn, and opening that second file *between*
+  the first round's start and its close is ordinary: each close still settles the turn its
+  own read opened (`api/surface_turn_test.go` pins both). Sub-agent domains are the separate
+  facility for several domains sharing one file and one L3 knowledge graph; a second decision
+  loop does not need one, it needs a second `Open`.
 
 ---
 

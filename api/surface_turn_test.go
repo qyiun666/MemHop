@@ -439,3 +439,68 @@ func TestEachDomainHoldsItsOwnTurn(t *testing.T) {
 		}
 	}
 }
+
+// The host's own decision to run a second agent lands here: mid-round — after the first
+// library opened its turn and while that turn is still open — a second file is opened and a
+// whole round is run through it. Nothing about that disturbs the first round: the turn the
+// first library opened is still the one its close settles, its own events stay its own, and
+// the read that follows continues its own scene. This is the shape of "one library per
+// agent" being safe to grow at runtime rather than only at start-up.
+func TestSecondLibraryOpenedMidRound(t *testing.T) {
+	llm := stubLLM()
+	t.Cleanup(llm.Close)
+	db1, first := openSurfaceSession(t, llm.URL)
+	t.Cleanup(func() { _ = db1.Close() })
+
+	opened, err := first.Search(SearchQuery{})
+	if err != nil {
+		t.Fatalf("first round's Search: %v", err)
+	}
+	if _, err := first.AppendArchive(event("subagent_spawn", "go look at the second repo", turnStamp)); err != nil {
+		t.Fatalf("spawn event: %v", err)
+	}
+
+	db2, second := openSurfaceSession(t, llm.URL)
+	t.Cleanup(func() { _ = db2.Close() })
+	if _, err := second.Search(SearchQuery{}); err != nil {
+		t.Fatalf("second library's Search: %v", err)
+	}
+	if _, err := second.Update(TurnEnd{
+		Input: "what does the second repo do", Output: "it stores memory", CreatedAt: turnStamp,
+	}); err != nil {
+		t.Fatalf("second library's Update: %v", err)
+	}
+
+	if _, err := first.AppendArchive(event("subagent_done", "it reported back", turnStamp)); err != nil {
+		t.Fatalf("done event: %v", err)
+	}
+	closed, err := first.Update(TurnEnd{
+		Input: "spawn an agent to look", Output: "it looked", CreatedAt: turnStamp,
+	})
+	if err != nil {
+		t.Fatalf("first round's Update: %v", err)
+	}
+	if closed.ID != opened.NewTopicID {
+		t.Fatalf("the first round closed topic %s, want the turn its own Search opened (%s)",
+			closed.ID, opened.NewTopicID)
+	}
+	evs := eventsOf(t, first, opened.NewTopicID)
+	if len(evs) != 2 || evs[0].Content != "go look at the second repo" || evs[1].Content != "it reported back" {
+		t.Fatalf("the first turn's event track: %+v", evs)
+	}
+	if got := utterancesOf(t, first, opened.NewTopicID); !slices.Equal(got,
+		[]string{"spawn an agent to look", "it looked"}) {
+		t.Fatalf("the first turn's dialogue: %q", got)
+	}
+	next, err := first.Search(SearchQuery{})
+	if err != nil {
+		t.Fatalf("third Search: %v", err)
+	}
+	if next.Scene.SceneID != opened.Scene.SceneID {
+		t.Fatalf("the first library left its conversation: scene %s, want the one it was on (%s)",
+			next.Scene.SceneID, opened.Scene.SceneID)
+	}
+	if next.NewTopicID == opened.NewTopicID {
+		t.Fatalf("the read after the close reopened the turn it just settled: %s", next.NewTopicID)
+	}
+}

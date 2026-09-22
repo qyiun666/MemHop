@@ -136,7 +136,7 @@ report, err := sess.Dream(context.Background(), "")
 ```
 
 
-> **Concurrency contract.** Same-agent operations (Search / Update / Dream / write APIs) are serialized by the library's per-agent domain lock; different agents run in parallel on a `*DB`, so the host needs no external queue. `*memhop.Session` carries no cross-domain state beyond its bound domain — the scene and turn it is working are held by the domain, not by the caller. The file's exclusive lock still allows only one process per `.meh` file; `DB` exposes no locking API: the domain lock is the library's, and a host critical section needs its own.
+> **Concurrency contract.** Same-agent operations (Search / Update / Dream / write APIs) are serialized by the library's per-agent domain lock; different agents run in parallel on a `*DB`, so the host needs no external queue. `*memhop.Session` carries no cross-domain state beyond its bound domain — the scene and turn it is working are held by the domain, not by the caller. The file's exclusive lock still allows only one process per `.meh` file; `DB` exposes no locking API: the domain lock is the library's, and a host critical section needs its own. Nothing about the open turn is process-wide, so one more agent is one more `Open` — including one made between another round's start and its close, which leaves each round's keys and content apart.
 
 Prerequisites: Go 1.27+ and an OpenAI-compatible LLM endpoint (configured through `api.LlmConfig`, which `api.Open` takes) — no embedding / vector service needed
 
