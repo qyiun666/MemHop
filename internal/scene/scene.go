@@ -17,39 +17,34 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
-// ResolveForRead answers which scene a read is scoped to, creating one when the
-// query names none. It returns the id, not the record: opening the turn is the step
-// that reads the scene back to bump its counter. Record-layer errors pass through
-// unchanged, so an unknown scene stays ErrNotFound and a closing database ErrClosed.
-func ResolveForRead(engine *core.StorageEngine, agentID uint64, q core.SearchQuery) (uint64, error) {
-	if q.SceneID == "" {
-		return create(engine, agentID, q.L3ID)
-	}
-	id, err := common.ParseID(q.SceneID)
-	if err != nil {
-		return 0, common.NewError(common.ErrInvalidQuery, "parse scene id", err)
-	}
-	slot, err := core.ReadSceneSlot(engine, agentID, id)
+// ResolveExisting answers which scene a read is scoped to when the host named one,
+// and refuses the combination where the host also handed over an anchor: it returns
+// the id, not the record — opening the turn is the step that reads the scene back to
+// bump its counter. Record-layer errors pass through unchanged, so an unknown scene
+// stays ErrNotFound and a closing database ErrClosed.
+//
+// The anchor is creation-time only: a scene that already exists keeps its anchor
+// until UpdateScene moves it, so this refusal needs no lookup of the named graph.
+func ResolveExisting(engine *core.StorageEngine, agentID uint64, sceneID uint64, anchored bool) (uint64, error) {
+	slot, err := core.ReadSceneSlot(engine, agentID, sceneID)
 	if err != nil {
 		return 0, err
 	}
-	// The anchor is creation-time only: a scene that already exists keeps its anchor
-	// until UpdateScene moves it, so this refusal needs no lookup of the named graph.
-	if q.L3ID != "" {
+	if anchored {
 		return 0, common.NewError(common.ErrInvalidQuery,
-			"scene "+q.SceneID+" already exists; its L3 anchor is set at creation only (use UpdateScene)")
+			"scene "+common.FormatHash(sceneID)+" already exists; its L3 anchor is set at creation only (use UpdateScene)")
 	}
 	return slot.SceneID, nil
 }
 
-// create allocates a free scene id and persists the scene under a library-generated
-// name, anchored on the named L3 domain when one is given. The domain is resolved
-// before anything is written: a refusal has to leave no scene behind. Nothing is read
-// back afterwards — freshID proved the id free under the caller's domain lock.
-func create(engine *core.StorageEngine, agentID uint64, l3ID string) (uint64, error) {
-	var anchor uint64
-	if l3ID != "" {
-		g, err := repo.ReadSharedGraphL3(engine, l3ID)
+// Create allocates a free scene id and persists the scene under a library-generated
+// name, anchored on the given L3 graph when one is named (0 anchors nothing). The
+// anchor graph is resolved before anything is written: a refusal has to leave no
+// scene behind. Nothing is read back afterwards — freshID proved the id free under
+// the caller's domain lock.
+func Create(engine *core.StorageEngine, agentID uint64, anchor uint64) (uint64, error) {
+	if anchor != 0 {
+		g, err := repo.ReadSharedGraphL3(engine, anchor)
 		if err != nil {
 			return 0, err
 		}

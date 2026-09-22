@@ -122,6 +122,46 @@ func TestSurfaceLifecycle(t *testing.T) {
 	if rep, err := db.Dream(context.Background(), "nothex"); CodeOf(err) != ErrInvalidQuery || rep != nil {
 		t.Fatalf("dream on malformed scene id: rep=%v err=%v", rep, err)
 	}
+
+	// A host's hex id has one crossing — the composition root reads it back into the
+	// numeric form, so nothing below it holds an id string. Every entry that names one
+	// therefore refuses a malformed spelling, whichever call now performs the read.
+	const bad = "nothex"
+	ghost := common.FormatHash(common.HashID("ghost-scene"))
+	opened, err := db.Search(SearchQuery{})
+	if err != nil {
+		t.Fatalf("open a session for the boundary checks: %v", err)
+	}
+	sceneID := opened.Scene.SceneID
+	gid := l3Graph(t, db, "boundary")
+	anchor := bad
+	for i, refuse := range []struct {
+		what string
+		run  func() error
+	}{
+		{"GetL3", func() error { _, e := db.GetL3(bad); return e }},
+		{"DeleteL3", func() error { return db.DeleteL3(bad) }},
+		{"QueryL3Subgraph graph", func() error { _, e := db.QueryL3Subgraph(bad, gid, 1, nil); return e }},
+		{"QueryL3Subgraph start", func() error { _, e := db.QueryL3Subgraph(ghost, bad, 1, nil); return e }},
+		{"UpdateScene anchor", func() error { _, e := db.UpdateScene(sceneID, ScenePatch{L3ID: &anchor}); return e }},
+		{"Search scene", func() error { _, e := db.Search(SearchQuery{SceneID: bad}); return e }},
+		{"Search anchor", func() error { _, e := db.Search(SearchQuery{L3ID: bad}); return e }},
+	} {
+		if CodeOf(refuse.run()) != ErrInvalidQuery {
+			t.Fatalf("malformed id %d (%s): want ErrInvalidQuery", i, refuse.what)
+		}
+	}
+
+	// Order the root answers in: a named scene that is merely unknown reports the
+	// scene, ahead of the malformed anchor handed in beside it.
+	if _, err := db.Search(SearchQuery{SceneID: ghost, L3ID: bad}); CodeOf(err) != ErrNotFound {
+		t.Fatalf("unknown scene with malformed anchor: want ErrNotFound, got %v", err)
+	}
+	// And the anchor refusal still spells the scene the host holds.
+	_, err = db.Search(SearchQuery{SceneID: sceneID, L3ID: gid})
+	if CodeOf(err) != ErrInvalidQuery || !strings.Contains(err.Error(), sceneID) {
+		t.Fatalf("anchoring an existing scene: want ErrInvalidQuery naming %s, got %v", sceneID, err)
+	}
 }
 
 func TestSurfaceL0Profile(t *testing.T) {

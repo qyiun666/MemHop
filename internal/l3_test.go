@@ -142,7 +142,11 @@ func TestImportL3StampsGraphClock(t *testing.T) {
 	db := newL3TestDB(t)
 	rewind := func(t *testing.T, hexID string, to int64) {
 		t.Helper()
-		slot, err := repo.ReadSharedGraphL3(db.engine, hexID)
+		graphID, err := common.ParseID(hexID)
+		if err != nil {
+			t.Fatalf("parse graph id: %v", err)
+		}
+		slot, err := repo.ReadSharedGraphL3(db.engine, graphID)
 		if err != nil {
 			t.Fatalf("read graph: %v", err)
 		}
@@ -153,7 +157,11 @@ func TestImportL3StampsGraphClock(t *testing.T) {
 	}
 	stamp := func(t *testing.T, hexID string) int64 {
 		t.Helper()
-		slot, err := repo.ReadSharedGraphL3(db.engine, hexID)
+		graphID, err := common.ParseID(hexID)
+		if err != nil {
+			t.Fatalf("parse graph id: %v", err)
+		}
+		slot, err := repo.ReadSharedGraphL3(db.engine, graphID)
 		if err != nil {
 			t.Fatalf("read graph: %v", err)
 		}
@@ -924,7 +932,11 @@ func TestDeleteL3RefusesUnreadableNode(t *testing.T) {
 	if _, err := core.ReadHypergraphNode(db.engine, core.SharedPoolAgentID, survivor); err != nil {
 		t.Fatalf("a refused cascade deletes no member: %v", err)
 	}
-	if _, err := repo.ReadSharedGraphL3(db.engine, res.GraphIDs[0]); err != nil {
+	graphID, err := common.ParseID(res.GraphIDs[0])
+	if err != nil {
+		t.Fatalf("parse graph id: %v", err)
+	}
+	if _, err := repo.ReadSharedGraphL3(db.engine, graphID); err != nil {
 		t.Fatalf("nor the graph slot itself: %v", err)
 	}
 }

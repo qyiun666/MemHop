@@ -9,7 +9,7 @@
   `ImportRelations`（Related 解析建超边，未解析项记进 `result.Errors` 不中断批次）、
   `GraphIDs()`（本批把 domain 解析到的图）、`StampChanged()`（批末给「本批真写过
   内容」的每张图各推进一次槽的 `UpdatedAt`，一次批量导入一个图只写一次）。
-- 查询步：`NodeFilter.Matches`、`ResolveSubgraphStart`、`SubgraphAdjacency`、
+- 查询步：`NodeFilter.Matches`、`CheckSubgraphStart`、`SubgraphAdjacency`、
   `BfsWithinDepth`、`AllNodesVisited`。
 - 命名闸：`CheckName`——拒掉改到本域另一张图已占用的标签。
 - 本包不实现字段合并：`mergePolicy` 在批次构造时把宿主给的 mode 落成一份合并策略，
@@ -25,7 +25,7 @@
 - `result` 的每份列表在建批时就非 nil：它是交出去的报告，一份没写过的列表要答成空的
   那一种写法，而不是少一个键或者一个 null。往这份报告里加列表字段，就在
   `NewImportBatch` 那一行一起初始化。
-- `ResolveSubgraphStart` 对起点不属于该图返回 `ErrInvalidQuery` 而非 `ErrNotFound`
+- `CheckSubgraphStart` 对起点不属于该图返回 `ErrInvalidQuery` 而非 `ErrNotFound`
   ——图是查询的范围，不是被查的对象。起点记录本身读不回（`ErrNotFound` 以外的任何错误）
   原样上报：「没有这个节点」让宿主换起点，「这个节点坏了」让它知道这张图坏在这里。
 

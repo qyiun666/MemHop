@@ -28,10 +28,10 @@ internal/{domain,scene,turn,dream,graph,plan,content}
 | 包 | 职责 |
 |---|---|
 | `domain` | 域状态容器 `Context`（Mu/L2Meta/L4/Plans/DreamInFlight/OpCtx，持 Engine/LLM/Defaults 注入）+ PlanCache + L2Meta 缓存维护（SyncL2Meta/RemoveTopicsFromIndices/RetargetL2Meta）；`L4` 是「话题 → 它名下的内容槽位（原文 + 事件）」的镜像 |
-| `scene` | L2 场景读写面：ResolveForRead（没有场景可读时就在内部新建；交回的是场景 id）/SurfaceTopics/ContextTopic/DeleteCascade/DetachGraph |
+| `scene` | L2 场景读写面：Create（没有场景可读时就在内部新建）/ResolveExisting（宿主点名一个场景时定位它）/SurfaceTopics/ContextTopic/DeleteCascade/DetachGraph；交回的都是场景 id，入参只收解好的数值 id |
 | `turn` | 轮次归属：SettleTarget（可沉淀的轮次范围）、ReadProfile（Search 的 L0 读面）；进来的 hex 键已在根上解析完，本包不碰内容 |
 | `dream` | 巩固阶段：SceneSet、PruneContentStage(`l4_prune`) 与 PrunePlanStage(`l5_prune`)（共用 `ContentRetention` 窗口、各读自己的时间戳）、CompressScenes(+组回滚)、StructureStages、L1 各阶段、distillL0Stage（私有）；调参常量随阶段在此 |
-| `graph` | L3 导入/查询：`ImportBatch`（一次批次的 mode + result + 缓存：domain→图、图→标题集、图→边键，外加两份图集「访问过」/「写过内容」；方法 ImportNode/ImportRelations/GraphIDs/StampChanged）、NodeFilter.Matches/ResolveSubgraphStart/SubgraphAdjacency/BfsWithinDepth/AllNodesVisited |
+| `graph` | L3 导入/查询：`ImportBatch`（一次批次的 mode + result + 缓存：domain→图、图→标题集、图→边键，外加两份图集「访问过」/「写过内容」；方法 ImportNode/ImportRelations/GraphIDs/StampChanged）、NodeFilter.Matches/CheckSubgraphStart/SubgraphAdjacency/BfsWithinDepth/AllNodesVisited |
 | `plan` | L5 计划树机制（一棵树归属于打开它的轮次；L5 只剩节点记录）：PlanStatus 面（单张词表、双向都查它）、NodeSpec/Step 两个入参形状、CreateNode/UpdateNode/UpdateNodeSummaryLocked、BuildTree/Forest/ToNodeView/RollupTree |
 | `content` | 话题内容与键：ParseTopicID（轮次键的解析与拒零，读写两侧共用）、ValidateAppend（两种 Kind 各自的写入契约）、Append（宿主侧写一条内容的唯一入口，必要时跨 Kind 分配 Seq）、Read（按 Kind 读回）、RenderForDistill（把一个话题的原文渲染成提炼读的转录）、MaxEventPayload/MaxUtterancePayload |
 

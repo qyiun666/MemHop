@@ -35,7 +35,11 @@ func (db *DB) QueryL3Nodes(agentID uint64, q L3NodeQuery) ([]core.HypergraphNode
 	if q.GraphID == "" {
 		return nil, common.NewError(common.ErrInvalidQuery, "graph_id is required")
 	}
-	slot, err := repo.ReadSharedGraphL3(db.engine, q.GraphID)
+	slotID, err := parseID("l3", q.GraphID)
+	if err != nil {
+		return nil, err
+	}
+	slot, err := repo.ReadSharedGraphL3(db.engine, slotID)
 	if err != nil {
 		return nil, err
 	}
@@ -93,8 +97,15 @@ func (db *DB) QueryL3Subgraph(agentID uint64, graphID, startNodeID string, maxDe
 		return nil, err
 	}
 	defer ac.Mu.Unlock()
-	graphHash, startHash, err := graph.ResolveSubgraphStart(db.engine, core.SharedPoolAgentID, graphID, startNodeID)
+	graphHash, err := parseID("graph", graphID)
 	if err != nil {
+		return nil, err
+	}
+	startHash, err := parseID("start node", startNodeID)
+	if err != nil {
+		return nil, err
+	}
+	if err := graph.CheckSubgraphStart(db.engine, core.SharedPoolAgentID, graphHash, startHash); err != nil {
 		return nil, err
 	}
 	if maxDepth <= 0 {

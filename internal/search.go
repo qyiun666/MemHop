@@ -33,7 +33,7 @@ func (db *DB) Search(agentID uint64, q SearchQuery) (*SearchResult, error) {
 	}
 	defer ac.Mu.Unlock()
 
-	sceneID, err := scene.ResolveForRead(db.engine, agentID, q)
+	sceneID, err := db.resolveScene(agentID, q)
 	if err != nil {
 		return nil, err
 	}
@@ -53,4 +53,28 @@ func (db *DB) Search(agentID uint64, q SearchQuery) (*SearchResult, error) {
 		Topics:       topics,
 		NewTopicID:   core.ComputeTurnTopicID(sceneSlot.SceneID, sceneSlot.TurnSeq),
 	}, nil
+}
+
+// resolveScene reads the host's query into the scene this read is scoped to,
+// creating one when the query names none. A host's hex ids stop here: an empty
+// SceneID asks for a fresh scene, and its optional anchor is parsed only on that
+// path — naming a scene that cannot be read back reports the scene, not the anchor
+// handed in alongside it.
+func (db *DB) resolveScene(agentID uint64, q SearchQuery) (uint64, error) {
+	if q.SceneID == "" {
+		var anchor uint64
+		if q.L3ID != "" {
+			id, err := parseID("l3", q.L3ID)
+			if err != nil {
+				return 0, err
+			}
+			anchor = id
+		}
+		return scene.Create(db.engine, agentID, anchor)
+	}
+	named, err := parseID("scene", q.SceneID)
+	if err != nil {
+		return 0, err
+	}
+	return scene.ResolveExisting(db.engine, agentID, named, q.L3ID != "")
 }

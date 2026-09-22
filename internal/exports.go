@@ -124,3 +124,15 @@ const (
 // the only id shape the facade exchanges with a host, since every id is issued
 // by the library (Search mints turn ids).
 func FormatID(id uint64) string { return common.FormatHash(id) }
+
+// parseID is that boundary's other direction: it reads one host-supplied hex id
+// back into the numeric form, naming which field it came from. Every id handed in
+// by a host crosses into the library through here, so no layer below the
+// composition root parses an id string.
+func parseID(field, hexID string) (uint64, error) {
+	id, err := common.ParseID(hexID)
+	if err != nil {
+		return 0, common.NewError(common.ErrInvalidQuery, "parse "+field+" id", err)
+	}
+	return id, nil
+}

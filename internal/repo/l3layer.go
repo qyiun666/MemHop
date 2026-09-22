@@ -13,16 +13,11 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
-// ReadSharedGraphL3 resolves a caller-supplied hex graph id and confirms the
-// graph exists. Graphs live in the file-wide shared L3 domain, not in the
-// caller's own, so every read of one goes through SharedPoolAgentID whatever
-// domain asked. A malformed id is ErrInvalidQuery; an unknown one is whatever
-// the typed record read reports (ErrNotFound).
-func ReadSharedGraphL3(engine *core.StorageEngine, hexID string) (*core.HypergraphSlot, error) {
-	graphID, err := common.ParseID(hexID)
-	if err != nil {
-		return nil, common.NewError(common.ErrInvalidQuery, "parse l3 id", err)
-	}
+// ReadSharedGraphL3 reads one graph slot by its numeric id. Graphs live in the
+// file-wide shared L3 domain, not in the caller's own, so every read of one goes
+// through SharedPoolAgentID whatever domain asked. An unknown id is whatever the
+// typed record read reports (ErrNotFound).
+func ReadSharedGraphL3(engine *core.StorageEngine, graphID uint64) (*core.HypergraphSlot, error) {
 	return core.ReadGraphSlot(engine, core.SharedPoolAgentID, graphID)
 }
 

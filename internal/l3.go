@@ -34,7 +34,11 @@ func (db *DB) GetL3(agentID uint64, id string) (*L3Graph, error) {
 // getL3Graph reads one graph slot and renders the full view. Caller holds the
 // shared-pool domain lock.
 func (db *DB) getL3Graph(id string) (*L3Graph, error) {
-	slot, err := repo.ReadSharedGraphL3(db.engine, id)
+	slotID, err := parseID("l3", id)
+	if err != nil {
+		return nil, err
+	}
+	slot, err := repo.ReadSharedGraphL3(db.engine, slotID)
 	if err != nil {
 		return nil, err
 	}
@@ -190,7 +194,12 @@ func (db *DB) DeleteL3(agentID uint64, id string) error {
 	if err != nil {
 		return err
 	}
-	slot, err := repo.ReadSharedGraphL3(db.engine, id)
+	slotID, err := parseID("l3", id)
+	if err != nil {
+		ac.Mu.Unlock()
+		return err
+	}
+	slot, err := repo.ReadSharedGraphL3(db.engine, slotID)
 	if err != nil {
 		ac.Mu.Unlock()
 		return err

@@ -69,7 +69,11 @@ func (db *DB) UpdateScene(agentID uint64, sceneID string, patch ScenePatch) (cor
 	}
 	var l3Hash uint64
 	if patch.L3ID != nil && *patch.L3ID != "" {
-		g, err := repo.ReadSharedGraphL3(db.engine, *patch.L3ID)
+		anchorID, err := parseID("l3", *patch.L3ID)
+		if err != nil {
+			return core.SceneSlot{}, err
+		}
+		g, err := repo.ReadSharedGraphL3(db.engine, anchorID)
 		if err != nil {
 			return core.SceneSlot{}, err
 		}

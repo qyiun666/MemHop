@@ -55,32 +55,24 @@ func matchesKeyword(n core.HypergraphNode, kw string) bool {
 	return false
 }
 
-// ResolveSubgraphStart parses the graph/start ids and verifies the start
-// node exists and belongs to the requested graph.
-func ResolveSubgraphStart(engine *core.StorageEngine, agentID uint64, graphID, startNodeID string) (graphHash, startHash uint64, err error) {
-	graphHash, err = common.ParseID(graphID)
-	if err != nil {
-		return 0, 0, common.NewError(common.ErrInvalidQuery, "parse graph id", err)
-	}
-	startHash, err = common.ParseID(startNodeID)
-	if err != nil {
-		return 0, 0, common.NewError(common.ErrInvalidQuery, "parse start node id", err)
-	}
+// CheckSubgraphStart verifies the start node of a subgraph walk exists and belongs
+// to the graph being walked; both ids are the caller's parsed numerics.
+func CheckSubgraphStart(engine *core.StorageEngine, agentID uint64, graphHash, startHash uint64) error {
 	startNode, err := core.ReadHypergraphNode(engine, agentID, startHash)
 	if err != nil {
 		if common.CodeOf(err) != common.ErrNotFound {
 			// A start node that exists but will not read back is not a start node that
 			// is missing: the first sends the host elsewhere, the second says the graph
 			// is damaged here.
-			return 0, 0, err
+			return err
 		}
-		return 0, 0, common.NewError(common.ErrNotFound, "start node not found", err)
+		return common.NewError(common.ErrNotFound, "start node not found", err)
 	}
 	if startNode.GraphID != graphHash {
-		return 0, 0, common.NewError(common.ErrInvalidQuery,
+		return common.NewError(common.ErrInvalidQuery,
 			"start node does not belong to the requested graph")
 	}
-	return graphHash, startHash, nil
+	return nil
 }
 
 // SubgraphAdjacency builds the undirected adjacency map from the graph's edges
