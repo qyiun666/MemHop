@@ -52,9 +52,6 @@ __pycache__/
 skills/
 memhop_brains/
 
-# Test artifacts
-_test_mcp.db/
-
 # Test LLM credentials (use key_config.json.example as template,
 # or set MEMHOP_TEST_LLM_KEY env var instead)
 test/testsupport/key_config.json
@@ -67,9 +64,6 @@ test/testsupport/key_config.json
 
 # Local Go build cache (sandboxed builds)
 /.gocache/
-
-# Local build artifacts
-/memhop-mcp
 
 # ZCode workspace config (hook registrations)
 .zcode/

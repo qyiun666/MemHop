@@ -127,8 +127,9 @@ func (d *DB) Stats() (DBStats, error) {
 // exist yet, and the copy is a point-in-time snapshot: compact while the domains
 // are quiet (typically right before Close), then swap it in yourself.
 //
-// Go-side only, deliberately: an output path is an arbitrary-file-write
-// primitive, which is not something to hand a model over MCP.
+// The argument is an arbitrary-file-write path, which the library takes as
+// given: a host that exposes compaction to a model must pin the destination
+// itself rather than pass through what the model named.
 func (d *DB) CompactTo(newPath string) error { return d.db.CompactTo(newPath) }
 
 // Close checkpoints every agent domain and releases the file.

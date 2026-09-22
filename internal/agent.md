@@ -131,7 +131,7 @@ internal/{domain,scene,turn,dream,graph,plan,content}
   键：一条读不回的注册记录仍然占着一个域，此时另发一个同名域等于把宿主引到一个空域，
   真域从此既列不出也删不掉。所以损坏只挡住「建」（`ensureRegistered` 现场再扫一次注册
   表并拒掉，拒因带出那个域的 id），已解析出的名字照旧——`Open` 不因它拒绝，主域与其余
-  租户都还能用。
+  域都还能用。
 - **能力下沉**：算法与策略在 `internal/cap/<feature>` 能力包；小方法在
   `internal/{scene,turn,dream,graph,plan,content}`；根只留"取数 → 调
   能力 → 落库"的大方法编排，不做算法。LLM 传输策略（截断升级重试）在
@@ -148,7 +148,7 @@ internal/{domain,scene,turn,dream,graph,plan,content}
 - LLM 客户端由装配函数 `assemble` 用 `internal/llm.New(cfg.LLM)` 构造（`db.llm`，
   两个入口共用），经 `domain.NewContext` 注入每个域上下文的 `ac.LLM`；域不自己建
   客户端。一个域可以有自己的端点：`db.llmByAgent` 是覆盖表，`db.providers` 按
-  `LlmConfig` 值去重（上百个租户共用一个端点时只有一个 http.Client）。**两张表都
+  `LlmConfig` 值去重（上百个域共用一个端点时只有一个 http.Client）。**两张表都
   刻意比域上下文活得久**——空闲回收丢掉上下文后 `contextFor` 会重建它，覆盖若挂在
   上下文上，一个闲置超过 TTL 的域会静默退回库级端点。表只管**未来**的重建：同名再调
   `SubAgent` 换端点时，宿主手里正是一个活域，所以新 transport 由 `SubAgent` 在域锁内
@@ -302,7 +302,7 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    改名给空串也拒（`nil` 才是「不改名」），改到别的图已占用的标签同样拒。
    `ImportL3` 结果带 `GraphIDs`
    （图 id = `hash(Domain)`，没有别的公开调用能渲染它）。全部 L3 记录住保留公共域
-   `core.SharedPoolAgentID`（文件级公共池：`contextFor`/空闲回收/租户注册表
+   `core.SharedPoolAgentID`（文件级公共池：`contextFor`/空闲回收/域注册表
    三处豁免，域发号时跳过它与默认域，宿主因此拿不到也绑不上这个 id）。
    `DeleteL3` 两阶段：公共锁内删图，释放后遍历「默认域 + 注册表」逐域
    `lockAgent` 清锚（`detachGraphAnchors`），不嵌套双锁——代价是「删图后、
@@ -374,4 +374,4 @@ internal/{domain,scene,turn,dream,graph,plan,content}
 - 关键词提炼无本地兜底：LLM 输出不可解析即 `ErrLLM`（这一轮不产生话题），`internal` 根不初始化任何分词器。一轮的提炼与 Dream 的融合提炼共用 `llmops.ExtractKeywords`——它只吃一段文本，不认识记录结构。
 - L0 蒸馏同样无兜底，且**「答非所问」与「答得少」分开判**：回包里 `emotion`/`mbti` 缺整块即 `ErrLLM`（这一轮不动画像），解码出的零值不去盖库里已蒸馏的那半；`per_node` 只认本次样本集里的 id，认不出的行在 `llmops` 内丢掉——带下去只会让一次抄错的 hex 被 L1 回填报成「一条记录读不回」，从此每次 Dream 都停在最后一步。三类调用（关键词、巩固、蒸馏）要多少输出都不越 `LlmConfig.MaxOutputTokens` 声明的端点上限（越过去是一次被端点直接拒掉的请求），截断升级花的是「端点上限减去 `llmops.ConsolidationMaxTokens`」那一段——宿主没抬过 `MaxOutputTokens` 时那一段是零，此时一条装不下的融合摘要就是该场景这次巩固的 `ErrLLM`（上限与升级路径写在 `llmops` 那一条上）；巩固 prompt 里的目标条数就是 `Defaults.DreamCompressMinTopics`，并且任何数字都排在「不同主题禁并」这条规则之后。
 - `ImportL3` 的批校验：Title/Domain 必填在 composition root 判，导入模式在批次构造处判（`core.L3ImportMode.Valid()` 是唯一列词表的地方）——两者都排在任何读与写之前，拒批即一字节不写。批次创建时又把整池的三张索引一次读全（图槽 name→id、每图标题集、每图边键）——三者中任何一条记录读不回都让**整批**在第一个写入之前被拒、错误带着那条记录的 id。一个派生地址已被别的记录占着的条目（标签正好拼出某节点 id 那一类）是**单条**拒绝，走 `result.Errors`，同批其余照旧落地。
-- 宿主面测试覆盖 26 个会话方法 + 6 个 `DB` 方法，按层分文件：`test/api_interface_scene_test.go`（L2 场景生命周期）、`api_interface_plan_test.go`（L5 按步骤逐个建的树、Model A 折叠与节点字段回读、事件键到自己那一轮、重开后读回）、`api_interface_turn_test.go`（一轮之下原文与事件各归各的读法）、`api_interface_multi_test.go`（租户隔离与 `CompactTo`）。这些用例只使用库铸造并回传给宿主的 id。
+- 宿主面测试覆盖 25 个会话方法 + 7 个 `DB` 方法，按层分文件：`test/api_interface_scene_test.go`（L2 场景生命周期）、`api_interface_plan_test.go`（L5 按步骤逐个建的树、Model A 折叠与节点字段回读、事件键到自己那一轮、重开后读回）、`api_interface_turn_test.go`（一轮之下原文与事件各归各的读法）、`api_interface_multi_test.go`（租户隔离与 `CompactTo`）。这些用例只使用库铸造并回传给宿主的 id。

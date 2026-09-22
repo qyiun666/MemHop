@@ -1,7 +1,7 @@
 # MemHop 宿主集成指南（Go API 方式）
 
-> 面向直接以 **Go module 内嵌**方式集成 MemHop 的宿主程序（不经 MCP server）。
-> 适用版本：**v1.6.4**。模块路径 `github.com/qyiun666/MemHop`，只允许 import `api` 包。
+> 面向直接以 **Go module 内嵌**方式集成 MemHop 的宿主程序。
+> 适用版本：**v1.6.5**。模块路径 `github.com/qyiun666/MemHop`，只允许 import `api` 包。
 
 > 本指南描述的就是当前的面：`api.Open` → `api.DB`，域以句柄持有（`Primary` /
 > `SubAgent`，agent id 不越边界），没有能力面，也没有轮次列举——宿主读某一轮做过的事
@@ -133,7 +133,7 @@ worker, err := lib.SubAgent(workerLLM, api.ProfileInput{Name: "worker"}) // 按�
 - 两条拒绝都发生在碰文件系统之前，所以被拒的 `Open` 不在宿主的路径上留文件让下一次尝试
   走错分支。
 - 中途主动落盘：`lib.Checkpoint()`。
-- 空间回收：`lib.CompactTo(newPath)` 写出一份只含存活记录、自带重建索引的整理副本，**绝不碰正打开的文件**——`newPath` 必须还不存在。删除都是打墓碑，删过场景/图的域只在这里把字节还回来；换文件（Close → rename → Open）仍由宿主决定，这也是 `CompactTo` 本体留在 Go 侧的原因（入参就是一个输出路径）。MCP 侧另有一个 `memhop_compact`：路径锁死在 db-dir 内的固定临时名，先关库静默再压缩、换名、重开，不给模型任意写入口。
+- 空间回收：`lib.CompactTo(newPath)` 写出一份只含存活记录、自带重建索引的整理副本，**绝不碰正打开的文件**——`newPath` 必须还不存在。删除都是打墓碑，删过场景/图的域只在这里把字节还回来；换文件（Close → rename → Open）仍由宿主决定，写到哪儿也是宿主的决定（入参就是一个输出路径）。
 
 ---
 
@@ -380,13 +380,13 @@ err := db.AppendArchive(turnIDHex, api.ArchiveSlot{
 
 状态只有三个值，各一种字符串写法：`api.PlanStatusInProgress`（`in_progress`）、`api.PlanStatusDone`（`done`）、`api.PlanStatusFailed`（`failed`）。引擎不保留「已计划、未开始」这一态——一步存在是因为宿主建了它，而它一存在就在进行中。
 
-计划的写读面只在 Go 侧：任务面那 18 个方法包含它们，MCP 工具面则一个计划工具都没有——建树要由持有本轮的调用来做。
+计划的写读面在任务面那 18 个方法里——建树要由持有本轮的调用来做。
 
 `0000000000000000` 是保留值（记录未赋键时的值），L5 的读写入口一律拒绝它。
 
 ---
 
-## 9. 导出类型清单（v1.6.4）
+## 9. 导出类型清单（v1.6.5）
 
 | 类别 | 名字 | 用途 |
 |---|---|---|

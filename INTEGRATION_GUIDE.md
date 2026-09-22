@@ -1,7 +1,7 @@
 # MemHop Host Integration Guide (Go API)
 
-> How to embed MemHop **directly as a Go module** (no MCP server) from your host
-> process. Applies to **v1.6.4**. Module path `github.com/qyiun666/MemHop` — you
+> How to embed MemHop **as a Go module** from your host
+> process. Applies to **v1.6.5**. Module path `github.com/qyiun666/MemHop` — you
 > only ever import the `api` package.
 
 > This guide describes the surface as it is now: `api.Open` → `api.DB`, domains held
@@ -154,7 +154,7 @@ primary domain's profile:
   file (live records only, its own rebuilt index) and never touches the open one —
   `newPath` must not exist yet. Deletes are tombstones, so a domain that dropped
   scenes or graphs only gives bytes back here; the swap (Close → rename → Open) stays
-  yours, which is why this call is Go-side and not an MCP tool.
+  yours, and so is the destination this call writes to.
 
 ---
 
@@ -494,16 +494,15 @@ Status has three values and one string encoding each: `api.PlanStatusInProgress`
 engine keeps no "planned but not started" state — a step exists because the host created
 it, and it exists in progress.
 
-The plan write surface is Go-only: `api.Session`'s 19 task-face methods include it, but
-the MCP tool face exposes no plan call, because a tree has to be built by a caller that
-holds the turn it belongs to.
+The plan write surface sits on `api.Session`'s 18 task-face methods: a tree has to be
+built by a caller that holds the turn it belongs to.
 
 `0000000000000000` is reserved (it is the value a record leaves its key unset
 with) and every L5 entry rejects it — reads included.
 
 ---
 
-## 9. Exported types (v1.6.4)
+## 9. Exported types (v1.6.5)
 
 | Kind | Names | Use |
 |---|---|---|

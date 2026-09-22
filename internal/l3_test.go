@@ -235,13 +235,13 @@ func TestImportL3SourceRef(t *testing.T) {
 	db := newL3TestDB(t)
 	items := []L3ImportItem{{
 		Title: "main.go", Domain: "proj", NodeType: "file",
-		Content: "entrypoint", SourceRef: "cmd/memhop-mcp/main.go:1",
+		Content: "entrypoint", SourceRef: "internal/l0.go:22",
 	}}
 	if _, err := db.ImportL3(core.DefaultAgentID, items, L3ImportOverwrite); err != nil {
 		t.Fatal(err)
 	}
 	graph := l3TestGraph(t, db)
-	if got := graph.Nodes[0].SourceRef; got == nil || *got != "cmd/memhop-mcp/main.go:1" {
+	if got := graph.Nodes[0].SourceRef; got == nil || *got != "internal/l0.go:22" {
 		t.Fatalf("source ref: %v", got)
 	}
 }

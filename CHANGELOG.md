@@ -3,6 +3,14 @@
 MemHop 遵循语义化版本。本文件记录每个版本的核心改动；完整历史见
 README 的版本表与 git log。
 
+## v1.6.5 — 2026-09-22 — MCP 面整体退役：对外只剩 Go module
+
+1. **`cmd/memhop-mcp` 整包删除**（14 个文件 3109 行）：25 个工具、多租户 HTTP（SSE 与 streamable-http 双传输）、按 `/mcp/<tenant>` 建/取域的租户注册表、`--tenants` 白名单与锚定 db-dir 的读入口一起消失。仓库不再有 server 形态、不再有后台进程，对外只剩「以 Go module 使用 `api`」一种接入。
+2. **直接依赖 4 → 3**：它是全仓唯一读 `modelcontextprotocol/go-sdk` 的地方，`go mod tidy` 连带清掉它带入的 7 个间接依赖（`google/jsonschema-go`、`segmentio/asm`、`segmentio/encoding`、`yosida95/uritemplate/v3`、`x/oauth2`、`x/sync`、`x/time`）。留下 xxhash、go-openai、golang.org/x/sys。
+3. **公开 Go 面一字不动**：`Session` 25 + `DB` 7 的名单、锁范围、幂等语义与 ID 契约全部原样；`api.CodeOf` 保留为宿主把错误读成数值码的门面唯一口（退役后它在本仓零调用，留任理由见 `notes/implemented/architecture/2026-09-22-go-module-only-surface.md`）。
+4. **构建与门禁收口**：`make build-mcp` / `test-mcp` 两个 target 删除，pre-commit 与 workflow 的 vet / gofmt 包清单去掉 `cmd`——`cmd/` 已不存在，留着会让门禁直接报错退出（已实测：`go vet ./cmd/...` 退 1）。
+5. **文档按实话重写**：`AGENTS.md` 的形态、对外面、依赖、宿主接入四条改写，「不存在的能力」补上「不带 server 形态」；README 的 MCP 特性条目、分层图与双语集成指南里「仅 Go 侧」的措辞改成对调用方的约束（`CompactTo` 的入参是一条任意写路径，目的地由宿主限定）。顺带纠正一处归因错误：`SceneContextTopic.messages` 的空值例外原本记在 MCP 工具头上，实为 `omitempty` 的性质——Go 侧读回恒为非 nil 列表。磁盘格式 `0x0012` 不变，旧文件照常打开。
+
 ## v1.6.4 — 2026-09-11 — 公开面重做：入口换成 Open，域以句柄交回；随后的分包审查把功能归位、冗余清除
 
 1. **入口换成 `Open(path, llm, defaults, profile)` → `*api.DB`**，成败由「文件在不在 + 主域画像在不在」决定：文件与画像都在则成功（入参不被采纳）；文件在而画像不在，带了才成功、没带报错；文件不在，带了才建库、没带报错**且不留下任何文件**（新建以「手里有东西可播种」为前提；已存在的文件是先被打开、含撕裂尾帧修复，才查出它没有主域画像）。`OpenMulti`、`MultiAgentDB`、`MemHopConfig` 一并删除。

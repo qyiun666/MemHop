@@ -1,4 +1,4 @@
-.PHONY: build build-mcp test test-e2e test-integration test-unit test-mcp test-affected bench lint fmt clean help doctor
+.PHONY: build test test-e2e test-integration test-unit test-affected bench lint fmt clean help doctor
 
 # --- Prerequisites -------------------------------------------------------
 # `make test-unit` is fully offline: the api/internal suites plus the mock-backed
@@ -21,14 +21,6 @@ build:
 ## interface suite under test/**
 test-unit:
 	go test -race ./api/... ./internal/... ./test/...
-
-## build the MCP server binary
-build-mcp:
-	go build -o bin/memhop-mcp ./cmd/memhop-mcp
-
-## MCP server unit + SSE smoke tests (offline, no Ollama/LLM needed)
-test-mcp:
-	go test ./cmd/memhop-mcp/...
 
 ## interface tests — external black-box tests under test/**
 ## Requires Ollama daemon + the embedding model + LLM credentials.
@@ -56,7 +48,7 @@ lint:
 	go vet ./...
 
 fmt:
-	gofmt -w api internal cmd test
+	gofmt -w api internal test
 
 clean:
 	rm -rf bin/ vendor/
@@ -73,11 +65,9 @@ doctor:
 help:
 	@echo "Targets:"
 	@echo "  build             build the memhop SDK library"
-	@echo "  build-mcp         build the MCP server binary"
 	@echo "  test              run all tests (unit + interface)"
 	@echo "  test-affected     run tests for Go packages changed since HEAD"
 	@echo "  test-unit         run only internal unit tests"
-	@echo "  test-mcp          run MCP offline tests (no Ollama/LLM needed)"
 	@echo "  test-e2e          run integration tests (needs Ollama + LLM)"
 	@echo "  test-integration  run integration tests (needs Ollama + LLM)"
 	@echo "  bench             run benchmarks (needs Ollama)"
