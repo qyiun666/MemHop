@@ -190,7 +190,7 @@ func TestInterfaceSearchUpdateL2L4(t *testing.T) {
 	// on it, and an empty one is refused where it is written, not where it is
 	// distilled. (A turn cannot be pointed at from elsewhere: with no turn open
 	// every write refuses, which TestInterfaceWritesRefuseWhenNoTurnIsOpen pins.)
-	if _, err := db.AppendArchive(memhop.ArchiveSlot{
+	if _, err := db.AppendArchive(memhop.ArchiveInput{
 		Kind: memhop.KindUtterance, Role: memhop.RoleUser, CreatedAt: 1,
 	}); err == nil {
 		t.Fatal("an utterance with no content should fail")
@@ -251,7 +251,7 @@ func TestInterfaceWritesRefuseWhenNoTurnIsOpen(t *testing.T) {
 			return err
 		}},
 		{"AppendArchive", func() error {
-			_, err := db.AppendArchive(memhop.ArchiveSlot{
+			_, err := db.AppendArchive(memhop.ArchiveInput{
 				Kind: memhop.KindEvent, EventType: "tool_call", Content: `{"tool":"read"}`, CreatedAt: ts,
 			})
 			return err

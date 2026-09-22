@@ -158,7 +158,7 @@ func TestPublicSignaturesCarryNoNumericIds(t *testing.T) {
 func TestTurnWritesCarryNoId(t *testing.T) {
 	want := map[string]int{
 		"Update":         1, // one TurnEnd
-		"AppendArchive":  1, // one ArchiveSlot
+		"AppendArchive":  1, // one ArchiveInput
 		"PlanNodeAdd":    2, // parentSeq and title
 		"PlanNodeUpdate": 1, // one PlanStep
 		"PlanState":      0, // nothing at all: the turn is the library's to know
@@ -173,6 +173,22 @@ func TestTurnWritesCarryNoId(t *testing.T) {
 			t.Errorf("Session.%s takes %d arguments, want %d — an id has crept back into the host's hands",
 				name, got, in)
 		}
+	}
+}
+
+// TestArchiveInputCarriesNoAddress pins the other half of the same contract: the
+// write shape has no field for an address the library fills in. ArchiveSlot names the
+// topic a stored record belongs to, and a host copying a read record into an append
+// would be naming a turn it does not hold — so the append takes a shape where that
+// claim has no place to go, rather than one that accepts it and drops it.
+func TestArchiveInputCarriesNoAddress(t *testing.T) {
+	for _, banned := range []string{"ID", "TopicID"} {
+		if _, ok := reflect.TypeOf(ArchiveInput{}).FieldByName(banned); ok {
+			t.Errorf("ArchiveInput carries %s: an address the write path cannot honor", banned)
+		}
+	}
+	if _, ok := reflect.TypeOf(ArchiveSlot{}).FieldByName("TopicID"); !ok {
+		t.Fatal("ArchiveSlot lost the address a read names")
 	}
 }
 

@@ -192,7 +192,7 @@ No `ctx` parameter — the read path holds no cancellable LLM or network work �
 
 An unknown `SceneID` returns `ErrNotFound` (the library will not create a scene you asked to read); an empty one continues the domain's current scene, creating one only when it holds none. `NewScene: true` skips all of that and opens a fresh scene.
 
-### 6.2 During the turn: `AppendArchive(ArchiveSlot)`
+### 6.2 During the turn: `AppendArchive(ArchiveInput)`
 
 The host records what happens while the turn runs, one call per record, into the turn
 `Search` opened — which turn that is belongs to the library, so this call names no ids
@@ -204,7 +204,7 @@ everything in between. `AppendArchive` returns the slot the record took and is t
 way content enters a topic.
 
 ```go
-seq, err := db.AppendArchive(api.ArchiveSlot{
+seq, err := db.AppendArchive(api.ArchiveInput{
     Kind:      api.KindUtterance, // or api.KindEvent
     Seq:       0,                 // 0 lets the library allocate a slot (Seq 1 and 2 are the
                                   // dialogue slots Update writes, so it allocates above them);
@@ -215,7 +215,7 @@ seq, err := db.AppendArchive(api.ArchiveSlot{
     CreatedAt: userTS,            // Unix milliseconds — a seconds- or microsecond-scale stamp is refused
 })
 // An event names itself instead of taking a speaker, and may hang on a plan step:
-seq, err = db.AppendArchive(api.ArchiveSlot{
+seq, err = db.AppendArchive(api.ArchiveInput{
     Kind:      api.KindEvent,
     EventType: "tool_call",       // event only; free-form, no whitelist
     NodeSeq:   2,                 // optional: the ordinal PlanNodeAdd handed out for this turn
@@ -512,7 +512,11 @@ arcs, err := db.SearchL4(api.L4Query{
 })
 ```
 
-`ArchiveSlot` carries `Kind` (utterance / event), `Seq`, `ContentType`
+`ArchiveInput` is what a write hands in: `Kind`, `Seq`, `ContentType`, `Role`, `EventType`,
+`NodeSeq`, `CreatedAt`, `Content` — and no `ID` or `TopicID`. Which turn a record belongs to is
+the library's to remember (`Search` minted it), so a record read back has nowhere to claim an
+origin when it is appended again. `ArchiveSlot` is the same shape once stored: it carries
+`Kind` (utterance / event), `Seq`, `ContentType`
 (text/image/video/document/audio/code/other), `Role` (`RoleUser` / `RoleAgent` /
 `RoleSystem`; the library's own consolidation role is not a public constant),
 `TopicID`, `CreatedAt` and `Content` — for media types `Content` is a path or URI,
@@ -535,7 +539,7 @@ on a large domain.
 ```go
 // A turn's events are L4 content of kind event, written into the turn Search
 // opened — the host names no key.
-_, err := db.AppendArchive(api.ArchiveSlot{
+_, err := db.AppendArchive(api.ArchiveInput{
     Kind:      api.KindEvent,
     EventType: "tool_call",   // any non-empty name the host chooses; no whitelist
     Content:   "tool name + arg summary", // 4 KiB covers the whole record, name included
@@ -602,7 +606,7 @@ topic id (`SearchL4{TopicID}`, `RenameTopic`, `DeleteTopic`) reject it.
 |---|---|---|
 | entry & handles | **`Open`** → `*DB`, then `DB.Primary()` / `DB.SubAgent(llm, profile)` → `*Session` | the only ways in; an agent domain is held as a handle, never named by an id |
 | config | **`LlmConfig`** / `MemHopDefaults` + `DefaultMemHopDefaults` | the endpoint and tuning arguments `Open` takes |
-| input shapes | **`ProfileInput`** / `SearchQuery` / `TurnEnd` / `ScenePatch` / `L3ImportItem` / `L3Relation` / `L3ImportMode` / `L3NodeQuery` / `L4Query` / `PlanStep` / `ArchiveSlot` (also a result) | inputs; `ProfileInput` is the only profile a host may write, and of its four fields only `Name` is required |
+| input shapes | **`ProfileInput`** / `SearchQuery` / `TurnEnd` / `ScenePatch` / `L3ImportItem` / `L3Relation` / `L3ImportMode` / `L3NodeQuery` / `L4Query` / `PlanStep` / `ArchiveInput` (the L4 write shape; a read returns `ArchiveSlot`) | inputs; `ProfileInput` is the only profile a host may write, and of its four fields only `Name` is required |
 | response DTOs | `ProfileSlot` / `SceneNodeView` / `SceneSlot` / `TopicSlot` / `SceneContext` / `SceneContextTopic` / `SceneMessage` / `SearchResult` / `HypergraphSlot` / `HypergraphNode` / `HypergraphEdge` / `L3Graph` / `L3Subgraph` / `L3ImportResult` / `PlanTree` / `PlanNodeView` / `DreamReport` / `DreamStage` | every id field is a 16-char hex string, and every one of them was issued by the library |
 | enums | `GraphEdgeKind` / `ContentType` / `ArchiveKind` / `PlanStatus` / `AgentTypePrimary` + `AgentTypeSub` | the vocabulary a call is written in |
 | errors | `Code` + the `Err*` constants, read with `CodeOf(err)` | the numeric code behind an error string |
@@ -704,7 +708,7 @@ func main() {
 
     // Per turn: record what happened while it ran, into the turn Search opened.
     // What was said (input / output) is supplied when the turn closes.
-    _, _ = db.AppendArchive(api.ArchiveSlot{Kind: api.KindEvent,
+    _, _ = db.AppendArchive(api.ArchiveInput{Kind: api.KindEvent,
         EventType: "tool_call", NodeSeq: leaf,
         Content: "grep ...", CreatedAt: userTS + 1})
     _ = db.PlanNodeUpdate(api.PlanStep{Seq: leaf, Status: api.PlanStatusDone,

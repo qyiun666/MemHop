@@ -353,12 +353,12 @@ func TestAppendArchiveRefusesAndStoresNothing(t *testing.T) {
 	}
 	// A dialogue original gets its own budget, and the same refuse-don't-truncate
 	// rule: 64 KiB is accepted, one rune more is not.
-	if _, err := sess.AppendArchive(ArchiveSlot{
+	if _, err := sess.AppendArchive(ArchiveInput{
 		Kind: KindUtterance, Role: RoleUser, Content: strings.Repeat("a", 64*1024), CreatedAt: 2,
 	}); err != nil {
 		t.Fatalf("utterance at the budget limit: %v", err)
 	}
-	if _, err := sess.AppendArchive(ArchiveSlot{
+	if _, err := sess.AppendArchive(ArchiveInput{
 		Kind: KindUtterance, Role: RoleUser, Content: strings.Repeat("a", 64*1024+1), CreatedAt: 3,
 	}); err == nil {
 		t.Fatal("an over-budget utterance must be refused, not truncated")
@@ -371,7 +371,7 @@ func TestAppendArchiveRefusesAndStoresNothing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := sess.AppendArchive(onStep(ArchiveSlot{Kind: KindEvent, CreatedAt: 1}, keyStep)); err == nil {
+	if _, err := sess.AppendArchive(onStep(ArchiveInput{Kind: KindEvent, CreatedAt: 1}, keyStep)); err == nil {
 		t.Fatal("a plan-bound event must satisfy the same write contract")
 	}
 	if evs := eventsOf(t, sess, key); len(evs) != 0 {

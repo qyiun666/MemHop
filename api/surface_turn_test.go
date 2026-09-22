@@ -17,12 +17,12 @@ import (
 
 // event builds one turn event as a host appends it: the kind is what makes it a
 // record of what happened rather than a line of dialogue.
-func event(eventType, payload string, ts int64) ArchiveSlot {
-	return ArchiveSlot{Kind: KindEvent, EventType: eventType, Content: payload, CreatedAt: ts}
+func event(eventType, payload string, ts int64) ArchiveInput {
+	return ArchiveInput{Kind: KindEvent, EventType: eventType, Content: payload, CreatedAt: ts}
 }
 
 // onStep names the plan step an event belongs to.
-func onStep(slot ArchiveSlot, seq uint32) ArchiveSlot {
+func onStep(slot ArchiveInput, seq uint32) ArchiveInput {
 	slot.NodeSeq = seq
 	return slot
 }
@@ -98,7 +98,7 @@ func TestSurfaceDreamPrunesExpiredEvents(t *testing.T) {
 func TestSurfaceArchiveAppendAndRead(t *testing.T) {
 	db := openSurfaceDB(t)
 	turn := mustTurnKey(t, db)
-	events := []ArchiveSlot{
+	events := []ArchiveInput{
 		event("llm_request", "user asks", 1_700_000_040_000),
 		event("tool_call", "search", 1_700_000_040_100),
 		event("llm_output", "replied", 1_700_000_040_200),
@@ -108,7 +108,7 @@ func TestSurfaceArchiveAppendAndRead(t *testing.T) {
 			t.Fatalf("append content: %v", err)
 		}
 	}
-	if _, err := db.AppendArchive(ArchiveSlot{Kind: KindEvent, Content: "no type"}); CodeOf(err) != ErrInvalidQuery {
+	if _, err := db.AppendArchive(ArchiveInput{Kind: KindEvent, Content: "no type"}); CodeOf(err) != ErrInvalidQuery {
 		t.Fatalf("append invalid event: want ErrInvalidQuery, got %v", err)
 	}
 	got := eventsOf(t, db, turn)
@@ -312,7 +312,7 @@ func TestSurfaceAppendArchivePlanBranch(t *testing.T) {
 	if _, err := db.AppendArchive(onStep(event("sandbox_ask", "asked", now+2), root)); err != nil {
 		t.Fatalf("host-named plan event: %v", err)
 	}
-	if _, err := db.AppendArchive(onStep(ArchiveSlot{Kind: KindEvent, Content: "x", CreatedAt: now + 3}, root)); CodeOf(err) != ErrInvalidQuery {
+	if _, err := db.AppendArchive(onStep(ArchiveInput{Kind: KindEvent, Content: "x", CreatedAt: now + 3}, root)); CodeOf(err) != ErrInvalidQuery {
 		t.Fatalf("empty plan event type: want ErrInvalidQuery, got %v", err)
 	}
 	// An ordinal no step of this turn holds can never name one, so the same rule
@@ -326,7 +326,7 @@ func TestSurfaceAppendArchivePlanBranch(t *testing.T) {
 	}
 	// An event that claims the dialogue track while naming a step is refused: the
 	// two kinds do not share axes.
-	if _, err := db.AppendArchive(onStep(ArchiveSlot{
+	if _, err := db.AppendArchive(onStep(ArchiveInput{
 		Kind: KindUtterance, Role: RoleUser, EventType: "tool_call", Content: "x", CreatedAt: now + 5,
 	}, root)); CodeOf(err) != ErrInvalidQuery {
 		t.Fatalf("utterance wearing an event: want ErrInvalidQuery, got %v", err)

@@ -322,14 +322,13 @@ type L3Subgraph struct {
 }
 
 // ArchiveSlot is one record of a topic's L4 content: a dialogue original (KindUtterance)
-// or an operation event (KindEvent) — and the same shape AppendArchive takes, where a
-// Seq of 0 asks the library for a slot. TopicID is the topic that owns a stored record
-// and Seq the slot it owns there, so (TopicID, Seq) is the address a replay rewrites.
-// Role is what a host declares when it appends — RoleUser / RoleAgent / RoleSystem, and
-// an event leaves it 0. A read can hand back one more value: 3, the library's own mark
-// on a fused group's summary, which has no exported name on purpose. ContentType says
-// whether Content is prose or a reference to media; EventType names an event and is the
-// host's own word for it. CreatedAt is milliseconds since the epoch.
+// or an operation event (KindEvent), as read back. TopicID is the topic that owns a
+// stored record and Seq the slot it owns there, so (TopicID, Seq) is the address a read
+// names. Role is what a host declared when it appended — RoleUser / RoleAgent /
+// RoleSystem, and an event leaves it 0. A read can hand back one more value: 3, the
+// library's own mark on a fused group's summary, which has no exported name on purpose.
+// ContentType says whether Content is prose or a reference to media; EventType names an
+// event and is the host's own word for it. CreatedAt is milliseconds since the epoch.
 type ArchiveSlot struct {
 	ID          string      `json:"id"`
 	Kind        ArchiveKind `json:"kind"`
@@ -337,6 +336,28 @@ type ArchiveSlot struct {
 	ContentType ContentType `json:"content_type"`
 	Role        uint8       `json:"role"`
 	TopicID     string      `json:"topic_id"`
+	EventType   string      `json:"event_type,omitempty"`
+	NodeSeq     uint32      `json:"node_seq,omitempty"`
+	CreatedAt   int64       `json:"created_at"`
+	Content     string      `json:"content"`
+}
+
+// ArchiveInput is what AppendArchive hands in: the eight fields a host actually
+// decides about, and no others. Same family as ProfileInput — the library-owned
+// fields are absent rather than ignored.
+//
+// ArchiveSlot carries two fields this layer fills in and a host has no standing to
+// claim. Which turn a record belongs to is the library's to remember (Search minted
+// it), so an inbound TopicID would be a second claim that either agrees or is
+// silently dropped — and a record read from an older turn and appended again would
+// land on the open one while appearing to name its origin. ID follows from the pair,
+// so it is derived, never taken. A Seq of 0 asks the library for a slot; a named one
+// is this turn's slot to rewrite, which is what makes a replay converge.
+type ArchiveInput struct {
+	Kind        ArchiveKind `json:"kind"`
+	Seq         uint64      `json:"seq"`
+	ContentType ContentType `json:"content_type"`
+	Role        uint8       `json:"role"`
 	EventType   string      `json:"event_type,omitempty"`
 	NodeSeq     uint32      `json:"node_seq,omitempty"`
 	CreatedAt   int64       `json:"created_at"`

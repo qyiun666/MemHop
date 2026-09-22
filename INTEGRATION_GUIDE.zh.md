@@ -168,7 +168,7 @@ res, err := db.Search(api.SearchQuery{
 
 未知 `SceneID` 返回 `ErrNotFound`（库不会替你新建一个你指名要读的场景）；`SceneID` 为空则续用该域当前场景，只有它一个场景都没有时才新建。`NewScene: true` 跳过这一切，直接开一个新场景。
 
-### 6.2 轮次进行中：`AppendArchive(ArchiveSlot)`
+### 6.2 轮次进行中：`AppendArchive(ArchiveInput)`
 
 这一轮由宿主自己记录，一条记录一次调用，写进 `Search` 开着的这一轮——是哪一轮由库自持，
 所以这个调用不点名任何 id，写的东西也落不到宿主没在做的轮上、或某个任何读取都列不出的孤儿键
@@ -177,7 +177,7 @@ res, err := db.Search(api.SearchQuery{
 这条记录占用的槽位（`Seq`），一条内容进入话题的唯一途径就是它。
 
 ```go
-seq, err := db.AppendArchive(api.ArchiveSlot{
+seq, err := db.AppendArchive(api.ArchiveInput{
     Kind:      api.KindUtterance, // 或 api.KindEvent
     Seq:       0,                 // 0 = 由库分配槽位（Seq 1、2 属于 Update 写的对话，故分配跳过它们）；
                                   // 拿到的槽位就是返回值
@@ -187,7 +187,7 @@ seq, err := db.AppendArchive(api.ArchiveSlot{
     CreatedAt: userTS,            // Unix 毫秒——秒级与微秒级那两段值一律拒
 })
 // 事件自己命名、不要说话者，并可挂在某个计划步骤上：
-seq, err = db.AppendArchive(api.ArchiveSlot{
+seq, err = db.AppendArchive(api.ArchiveInput{
     Kind:      api.KindEvent,
     EventType: "tool_call",       // 仅事件；自由字符串，库不做白名单校验
     NodeSeq:   2,                 // 可选：本轮 PlanNodeAdd 发回的步骤序号
@@ -401,7 +401,10 @@ arcs, err := db.SearchL4(api.L4Query{
 })
 ```
 
-`ArchiveSlot` 带 `Kind`（原文 / 事件）、`Seq`、`ContentType`（text/image/video/document/audio/code/other）、`Role`（`RoleUser` / `RoleAgent` / `RoleSystem`；库自己那个融合角色不作公开常量）、`TopicID`、`CreatedAt`、`Content`——媒体类型的 `Content` 是路径或 URI，不是二进制。每个查询字段都可选，填了的条件之间是 **AND** 关系——不分「三种模式」。顺序看查询宽度：填了 `TopicID` 按该轮内 `Seq` 升序，跨轮读取按记录自己的 `CreatedAt` 升序、同值以记录 id 收尾，`Limit` 保留该顺序末尾的 N 条。所以宿主最常用的读取各一次就够：`SearchL4(L4Query{TopicID: &topicID, Kind: &utterance})` 拿这一轮说了什么，换成 `&event` 拿做了什么，`Kind` 不填即两种都要；`NodeSeq` 只取归因到某个计划步骤**及其全部子步**的记录（闭包沿父子链接求出——序号是整数，没有前缀形状可匹配；步骤是轮次内的地址，因此必须与 `TopicID` 同填），于是一步做过什么能单独读回，不必先把整轮拉回来。
+`ArchiveInput` 是写入侧的形状：`Kind`、`Seq`、`ContentType`、`Role`、`EventType`、`NodeSeq`、
+`CreatedAt`、`Content`——没有 `ID` 也没有 `TopicID`。一条记录属于哪一轮由库自持（是 `Search` 铸的
+键），所以把读回的一条原样递回来写时，它没有地方声称自己的出处。存下之后同一个形状叫
+`ArchiveSlot`，它带 `Kind`（原文 / 事件）、`Seq`、`ContentType`（text/image/video/document/audio/code/other）、`Role`（`RoleUser` / `RoleAgent` / `RoleSystem`；库自己那个融合角色不作公开常量）、`TopicID`、`CreatedAt`、`Content`——媒体类型的 `Content` 是路径或 URI，不是二进制。每个查询字段都可选，填了的条件之间是 **AND** 关系——不分「三种模式」。顺序看查询宽度：填了 `TopicID` 按该轮内 `Seq` 升序，跨轮读取按记录自己的 `CreatedAt` 升序、同值以记录 id 收尾，`Limit` 保留该顺序末尾的 N 条。所以宿主最常用的读取各一次就够：`SearchL4(L4Query{TopicID: &topicID, Kind: &utterance})` 拿这一轮说了什么，换成 `&event` 拿做了什么，`Kind` 不填即两种都要；`NodeSeq` 只取归因到某个计划步骤**及其全部子步**的记录（闭包沿父子链接求出——序号是整数，没有前缀形状可匹配；步骤是轮次内的地址，因此必须与 `TopicID` 同填），于是一步做过什么能单独读回，不必先把整轮拉回来。
 `L4Query{IDs: []string{id}}` 取代原来的单条 getter（ID 不存在返回空列表，格式不合法返回 `ErrInvalidQuery`）；
 空查询返回该域全部原文——域大了请先加时间范围或 `Limit`，否则这就是文件里的每一条原文。
 
@@ -410,7 +413,7 @@ arcs, err := db.SearchL4(api.L4Query{
 ```go
 // 每轮的事件是 L4 里 Kind=event 的内容，写进 Search 开着的这一轮
 // （宿主不点名任何轮键）。
-_, err := db.AppendArchive(api.ArchiveSlot{
+_, err := db.AppendArchive(api.ArchiveInput{
     Kind:      api.KindEvent,
     EventType: "tool_call",   // 宿主自己起名，任意非空即可；库不设白名单
     Content:   "工具名+入参摘要", // 整条 4 KiB 预算（含事件名），超了直接拒
@@ -457,7 +460,7 @@ _, err := db.AppendArchive(api.ArchiveSlot{
 |---|---|---|
 | 入口与句柄 | **`Open`** → `*DB`，再由 `DB.Primary()` / `DB.SubAgent(llm, profile)` → `*Session` | 只有这两条进来路；agent 域是握在手里的句柄，从不以 id 命名 |
 | 配置 | **`LlmConfig`** / `MemHopDefaults` + `DefaultMemHopDefaults` | `Open` 要的端点与调参入参 |
-| 入参形状 | **`ProfileInput`** / `SearchQuery` / `TurnEnd` / `ScenePatch` / `L3ImportItem` / `L3Relation` / `L3ImportMode` / `L3NodeQuery` / `L4Query` / `PlanStep` / `ArchiveSlot`（写与读同形） | 宿主唯一能写的画像形状就是 `ProfileInput`，它四项里只有 `Name` 必填 |
+| 入参形状 | **`ProfileInput`** / `SearchQuery` / `TurnEnd` / `ScenePatch` / `L3ImportItem` / `L3Relation` / `L3ImportMode` / `L3NodeQuery` / `L4Query` / `PlanStep` / `ArchiveInput`（L4 的写形状；读回是 `ArchiveSlot`） | 宿主唯一能写的画像形状就是 `ProfileInput`，它四项里只有 `Name` 必填 |
 | 响应 DTO | `ProfileSlot` / `SceneNodeView` / `SceneSlot` / `TopicSlot` / `SceneContext` / `SceneContextTopic` / `SceneMessage` / `SearchResult` / `HypergraphSlot` / `HypergraphNode` / `HypergraphEdge` / `L3Graph` / `L3Subgraph` / `L3ImportResult` / `PlanTree` / `PlanNodeView` / `DreamReport` / `DreamStage` | 每个 id 字段都是 16 位 hex 字符串，且每一个都由库发号 |
 | 枚举 | `GraphEdgeKind` / `ContentType` / `ArchiveKind` / `PlanStatus` / `AgentTypePrimary` + `AgentTypeSub` | 一次调用写在里面的词汇 |
 | 错误 | `Code` + 各 `Err*` 常量，用 `CodeOf(err)` 取回数字码 | 错误串背后的那一层分类 |
@@ -534,7 +537,7 @@ func main() {
     if err != nil { log.Fatal(err) }
 
     // 每轮对话：把做过的事记进 Search 开着的这一轮。说了什么（问/答）在收口时给出。
-    _, _ = db.AppendArchive(api.ArchiveSlot{Kind: api.KindEvent,
+    _, _ = db.AppendArchive(api.ArchiveInput{Kind: api.KindEvent,
         EventType: "tool_call", NodeSeq: leaf, Content: "grep ...", CreatedAt: userTS + 1})
     _ = db.PlanNodeUpdate(api.PlanStep{Seq: leaf, Status: api.PlanStatusDone,
         Summary: "…"})

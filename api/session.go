@@ -238,8 +238,8 @@ func (s *Session) SearchL4(q L4Query) ([]ArchiveSlot, error) {
 // stays until DeleteTopic or the retention window.
 //
 // What is stored of what you hand in is Kind, Seq, Role, ContentType, EventType,
-// NodeSeq, Content and CreatedAt; ID and TopicID are ignored, so a record read back
-// can be written again to the slot it came from. CreatedAt is yours to supply and the
+// NodeSeq, Content and CreatedAt — the whole of ArchiveInput, which is the write shape
+// and carries nothing else. CreatedAt is yours to supply and the
 // library never stamps it — a turn records when things were said, not when the write
 // happened — and a non-positive one, or one in the seconds or microsecond band, is
 // refused, because the retention window measures milliseconds.
@@ -262,8 +262,8 @@ func (s *Session) SearchL4(q L4Query) ([]ArchiveSlot, error) {
 // these conventions are a shared vocabulary for the reader, not an accepted set —
 // plan_step, llm_request, llm_output, tool_call, tool_result, subagent_spawn,
 // subagent_done, context_inject, ask_user, user_reply.
-func (s *Session) AppendArchive(slot ArchiveSlot) (uint64, error) {
-	return s.session.AppendArchive(toCoreAppendSlot(slot))
+func (s *Session) AppendArchive(in ArchiveInput) (uint64, error) {
+	return s.session.AppendArchive(toCoreAppendSlot(in))
 }
 
 // PlanNodeAdd adds one step to the open turn's plan tree and returns its ordinal.

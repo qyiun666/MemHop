@@ -148,7 +148,7 @@ func TestSurfaceTurnFlow(t *testing.T) {
 	// content, the library's own consolidation role (named by value here, since it
 	// is deliberately not a public constant), an event that never says what
 	// happened, and a kind no reader can name.
-	for i, bad := range []ArchiveSlot{
+	for i, bad := range []ArchiveInput{
 		{Kind: KindUtterance, Role: RoleUser, CreatedAt: 1},
 		{Kind: KindUtterance, Role: 3, Content: "u", CreatedAt: 1},
 		{Kind: KindEvent, Content: "c", CreatedAt: 1},

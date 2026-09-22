@@ -189,9 +189,10 @@ func formatOptionalID(id uint64) string {
 	return formatID(id)
 }
 
-// toCoreAppendSlot drops ID and TopicID: the owning topic comes from the argument
-// the call is keyed by, and the record id follows from (topic, Seq).
-func toCoreAppendSlot(s ArchiveSlot) internal.ArchiveSlot {
+// toCoreAppendSlot turns the write shape into a record: the owning topic comes from
+// the turn the domain holds open, and the record id follows from (topic, Seq) — which
+// is why ArchiveInput carries neither.
+func toCoreAppendSlot(s ArchiveInput) internal.ArchiveSlot {
 	return internal.ArchiveSlot{
 		Kind:        s.Kind,
 		Seq:         s.Seq,

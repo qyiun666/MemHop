@@ -102,7 +102,7 @@ for _, topic := range res.Topics { // 该会话的 depth-1 话题集 = 本轮上
 // 一轮进行中：宿主把轮中做过的事写进 Search 开着的这一轮——是哪一轮由库记着，这个
 // 调用不点名 id，域上没有开着的轮时它直接被拒。对话与事件是同一类记录，只差一个
 // Kind；每次调用返回这条记录占用的槽位。
-_, _ = sess.AppendArchive(memhop.ArchiveSlot{
+_, _ = sess.AppendArchive(memhop.ArchiveInput{
     Kind:      memhop.KindEvent,
     EventType: "tool_call",
     Content:   `{"tool":"grep"}`,
@@ -139,12 +139,12 @@ report, err := sess.Dream(context.Background(), "")
 
 | 分组 | 方法 |
 |------|------|
-| 核心循环 | `Search(q) → 开启本轮` · `PlanNodeAdd(parentSeq, title) → seq`（parentSeq 0 即开出本轮的树）/ `PlanNodeUpdate(PlanStep{Seq, Status, …})`（计划先于步骤，一次一步） · `AppendArchive(ArchiveSlot{...}) → seq` · `Update(TurnEnd{Input, Output, Outcome, CreatedAt}) → topic` · `Dream(ctx, sceneID)` —— 轮中这几个写入都不点名场景 id 与轮次 id：它们落在 `Search` 开着的这一轮上 |
+| 核心循环 | `Search(q) → 开启本轮` · `PlanNodeAdd(parentSeq, title) → seq`（parentSeq 0 即开出本轮的树）/ `PlanNodeUpdate(PlanStep{Seq, Status, …})`（计划先于步骤，一次一步） · `AppendArchive(ArchiveInput{...}) → seq` · `Update(TurnEnd{Input, Output, Outcome, CreatedAt}) → topic` · `Dream(ctx, sceneID)` —— 轮中这几个写入都不点名场景 id 与轮次 id：它们落在 `Search` 开着的这一轮上 |
 | L0 画像 | `GetL0` · `UpdateL0` |
 | L1 纠缠图（只读） | `ListL1() → []SceneNodeView` —— 本域全部场景节点，顺序稳定、id 为 hex。节点与它们之间的共现边都由 Dream 建立，Dream 是唯一写入方，所以没有 L1 写接口。`Importance` / `Valence` / `Arousal` 是巩固算出来的值，`EmotionSet` 标记有没有哪一趟真的盖过那两个信号（0 是合法读数，光看值分不出）；`EdgeIDs` 本身没有读取口——两个节点共享同一个 id 就意味着 Dream 判定它们相关 |
 | L2 上下文 | `ListScenes([l3ID])` · `UpdateScene(id, {Name, L3ID, Force})` · `RenameTopic(topicID, name)` · `SceneContext(sceneID，传 "" 即读该域当前会话)` · `MergeScenes` · `DeleteTopic` · `DeleteScene` |
 | L3 知识 | `GetL3` · `ListL3` · `ImportL3`（报出本批把每个 domain 解析进了哪张图，含什么都没新写的那张） · `UpdateL3` · `DeleteL3` · `QueryL3Nodes` · `QueryL3Subgraph`（`edgeKinds` 收窄走的边，未定义的边种类是拒绝，不是回一个空子图） |
-| L4 归档 | `AppendArchive(ArchiveSlot{Kind, Seq, Role, ContentType, EventType, NodeSeq, Content, CreatedAt}) → seq` 是一条记录进入话题的唯一途径：它写的就是 `Search` 开着的这一轮——是哪一轮由库记着，这个调用不点名 id，因此拼错或自造的键根本传不进来，而域上没有开着的轮时直接 `ErrInvalidQuery`，`Seq: 0` 由库分配、占到的槽位随调用返回，写一个已被占用的槽位就是覆写。事件的 `NodeSeq` 必须指向本轮计划里已创建的那一步（`0` 即不绑任何步骤）。`SearchL4(q)` 是唯一读取面，两类内容都在里面；关键词（忽略大小写）/ 时间段 / id / 话题 / `Kind`（原文 or 事件）/ `NodeSeq`（**某一步及其全部子步**归因的记录，步骤只在它那一轮内成立；`0` 即不加这条约束）/ 内容类型都是条件而不是模式，`Kind` 不填即两种都要，`Limit` 保留该次读取排序后的末尾 N 条（单话题按槽位序，跨话题按记录自己的时间序） |
+| L4 归档 | `AppendArchive(ArchiveInput{Kind, Seq, Role, ContentType, EventType, NodeSeq, Content, CreatedAt}) → seq` 是一条记录进入话题的唯一途径：它写的就是 `Search` 开着的这一轮——是哪一轮由库记着，这个调用不点名 id，因此拼错或自造的键根本传不进来，而域上没有开着的轮时直接 `ErrInvalidQuery`，`Seq: 0` 由库分配、占到的槽位随调用返回，写一个已被占用的槽位就是覆写。事件的 `NodeSeq` 必须指向本轮计划里已创建的那一步（`0` 即不绑任何步骤）。`SearchL4(q)` 是唯一读取面，两类内容都在里面；关键词（忽略大小写）/ 时间段 / id / 话题 / `Kind`（原文 or 事件）/ `NodeSeq`（**某一步及其全部子步**归因的记录，步骤只在它那一轮内成立；`0` 即不加这条约束）/ 内容类型都是条件而不是模式，`Kind` 不填即两种都要，`Limit` 保留该次读取排序后的末尾 N 条（单话题按槽位序，跨话题按记录自己的时间序） |
 | 轮内事件（L4 的 `Kind=event`） | 一轮一个键：Search 为该轮开出的话题 id；事件本身住在 L4（`Kind=event`），超出保留窗自动清理（默认 7 天，可配）、无删除接口，读它用 `SearchL4(L4Query{TopicID, Kind: &KindEvent})`，写它用 `AppendArchive`。一个话题的首条事件是 `Seq=3`，因为槽位 1 与 2 属于对话 |
 | L5 计划树 | `PlanNodeAdd(parentSeq, title) → seq` · `PlanNodeUpdate(PlanStep{Seq, Status, Title, Summary})` · `PlanState()` —— 计划树是 L5 唯一自己的记录：一节点一条，一个步骤由「开出它的那一轮 + 该轮内库顺序发号的序号」说清（`ParentSeq` 指它挂在谁下面，0 即根、也即开出本轮的树；序号只保证**同时活着的两步**不共用一个，不保证永久唯一——保留窗扫掉哪一步就腾出它的序号，而事件按自己的时间老化、可以活过它所标注的那一步，回到一个被扫空的旧轮次时，手里的旧序号要按新步骤的地址对待），所以 `PlanState()` 与 `SearchL4{TopicID, Kind}` 是同一个键、两层存储，而 `SearchL4{TopicID, NodeSeq}` 能单独读回某一步及其全部子步做过的事。节点**只因被创建而存在**：`parentSeq` 指向树上没有的步骤是拒绝，而不是顺手补出一个父节点（因此打错一个序号不会长出第二棵树）。`PlanNodeUpdate` 只重述已在树上的那一步——`Status` 每次必须给（没有「保持不变」这种写法），`Title`/`Summary` 留空继承现值。新建的步骤就是 `in_progress`，模型里没有「已计划未开始」这一档；撤回一步没有接口，也不需要一个：手段就是不在此后的轮里再创建它。这三个计划写入口都不点名轮次 id——`Search` 开着的这一轮就是它们的键——也不落任何内容：一步的轨迹是宿主自己 append 的 L4 记录 |
 | DB 句柄 | `Open(path, llm, defaults, profile)` · `Primary()` · `SubAgent(llm, profile)` · `Checkpoint` · `CompactTo(newPath)`（写出整理后的副本，目的地路径由调用方自行约束） · `Stats`（文件字节数与全文件可达记录数——判断是否该压缩的两个读数） · `Close` · `IsClosed` |
@@ -180,7 +180,7 @@ Dream 周期是一个自动记忆巩固过程，受人脑睡眠中处理经历�
 | 路径 | 做什么 | 代价 |
 |------|--------|------|
 | `Search(SearchQuery{SceneID, L3ID, NewScene})` | 空 `SceneID` → 续用该域当前的场景（重开文件后从记录里恢复「轮次计数器跑得最远」的那个），域内一个都没有时才新建（名字由库生成）；`NewScene: true` → 另开一条会话，这是同一个域上开第二场会话的唯一路子；点名 `SceneID` → 返回该场景的 depth-1 话题集（按用户消息时间升序）+ L0 画像，外加 `NewTopicID`：本次读取为即将进行的这一轮开出的话题 | 纯内存读（L2Meta 缓存），零 LLM、零 embedding、零打分；唯一写是场景记录（轮次计数） |
-| `AppendArchive(ArchiveSlot{Kind, ...}) → seq` | 一轮内容的唯一写入面，写的就是 `Search` 开着的这一轮——是哪一轮由库记着，这个调用不点名 id，因此拼错或自造的话题 id 传不进来；域上没有开着的轮时它被拒（`ErrInvalidQuery`），而不是把内容写进一个任何读取都列不出的孤儿键。原文声明谁说的、是什么媒介；事件自己命名，并可挂在某个计划步骤上。`Seq: 0` 在两个对话槽之上分配，占到的槽位随调用返回 | 零 LLM；被拒的记录一字节不留（含顺路要建的节点）。事件整条 4 KiB（名字与正文合计）、原文 64 KiB，超预算是拒写不是截断 |
+| `AppendArchive(ArchiveInput{Kind, ...}) → seq` | 一轮内容的唯一写入面，写的就是 `Search` 开着的这一轮——是哪一轮由库记着，这个调用不点名 id，因此拼错或自造的话题 id 传不进来；域上没有开着的轮时它被拒（`ErrInvalidQuery`），而不是把内容写进一个任何读取都列不出的孤儿键。原文声明谁说的、是什么媒介；事件自己命名，并可挂在某个计划步骤上。`Seq: 0` 在两个对话槽之上分配，占到的槽位随调用返回 | 零 LLM；被拒的记录一字节不留（含顺路要建的节点）。事件整条 4 KiB（名字与正文合计）、原文 64 KiB，超预算是拒写不是截断 |
 | `Update(TurnEnd{Input, Output, Outcome, CreatedAt}) → topic` | 收口那一轮：`Input` 与 `Output` 落到该话题的两个对话槽（Seq 1 / Seq 2），所以重收同一轮是原地覆写这两行而不是叠加版本；`Outcome` 是宿主自己的说法——它说这一轮是从哪条路收的，引擎从不按它分支——按调用次数追加成一条 `turn_outcome` 事件（一次挂起加一次恢复是两条事实，不是一行写两遍）。随后把该话题已有的原文蒸馏成它的关键词轨，并随落盘后的话题一起返回——蒸出的 `FusedKeywords` 就在里面 | 每轮恰好 1 次 LLM 调用，且排在该轮话题落盘之前，失败不留半成品话题。内容已被保留窗裁光的轮次直接 `ErrInvalidQuery`，一次 LLM 也不调用；域上没有开着的轮时同样 `ErrInvalidQuery`（消息含 `no turn is open`） |
 
 宿主注入的上下文就是该场景 depth-1 话题的关键词集合；要看某轮原文，用那一轮的话题 id 去寻址 L4——`SearchL4(L4Query{TopicID})`——或直接用已经带回消息的 `SceneContext`。注入规模靠 Dream 向 `DreamCompressMinTopics`（默认 20）收敛来控住——那是巩固这一趟瞄准的目标数，不是场景被牢牢按住的上限，所以让自动巩固照常开着，才是让注入不至于无界增长的那件事。

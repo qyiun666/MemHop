@@ -92,13 +92,13 @@ func mustEvents(t *testing.T, db *testDB, key string) []memhop.ArchiveSlot {
 	return events
 }
 
-func planEvent(ts int64, kind, payload string) memhop.ArchiveSlot {
-	return memhop.ArchiveSlot{Kind: memhop.KindEvent, EventType: kind, Content: payload, CreatedAt: ts}
+func planEvent(ts int64, kind, payload string) memhop.ArchiveInput {
+	return memhop.ArchiveInput{Kind: memhop.KindEvent, EventType: kind, Content: payload, CreatedAt: ts}
 }
 
 // mustAppend writes one event into the open turn's content, binding it to a plan
 // step when nodeSeq names one (0 leaves it bound to nothing).
-func mustAppend(t *testing.T, db *testDB, nodeSeq uint32, ev memhop.ArchiveSlot) {
+func mustAppend(t *testing.T, db *testDB, nodeSeq uint32, ev memhop.ArchiveInput) {
 	t.Helper()
 	ev.NodeSeq = nodeSeq
 	if _, err := db.AppendArchive(ev); err != nil {

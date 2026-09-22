@@ -24,12 +24,12 @@ func TestInterfaceTurnEvents(t *testing.T) {
 	session := openTurn(t, db, sceneID)
 	ts := time.Now().UnixMilli()
 
-	if _, err := db.AppendArchive(api.ArchiveSlot{
+	if _, err := db.AppendArchive(api.ArchiveInput{
 		Kind: api.KindEvent, EventType: "tool_call", Content: `{"tool":"read_file","file":"a.go"}`, CreatedAt: ts,
 	}); err != nil {
 		t.Fatalf("AppendArchive: %v", err)
 	}
-	if _, err := db.AppendArchive(api.ArchiveSlot{
+	if _, err := db.AppendArchive(api.ArchiveInput{
 		Kind: api.KindEvent, EventType: "tool_result", Content: "file content", CreatedAt: ts + 500,
 	}); err != nil {
 		t.Fatalf("AppendArchive #2: %v", err)
@@ -77,7 +77,7 @@ func TestInterfaceTurnContentSharesOneKey(t *testing.T) {
 	// The step is created first, then the event logged against it: a plan node is
 	// only ever created by the plan write surface. Both belong to the open turn.
 	step := mustCreate(t, db, 0, "")
-	if _, err := db.AppendArchive(api.ArchiveSlot{
+	if _, err := db.AppendArchive(api.ArchiveInput{
 		Kind: api.KindEvent, EventType: "tool_call", NodeSeq: step,
 		Content: `{"tool":"bash","cmd":"go test"}`, CreatedAt: ts,
 	}); err != nil {
