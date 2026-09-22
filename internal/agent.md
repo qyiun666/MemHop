@@ -11,9 +11,9 @@ internal/ 根    大方法层：接收 api 透传，每个大方法 = 拿域锁 
                 + 组合根装配（Open/DB/Session/agents/exports/models）
 internal/{domain,scene,turn,dream,graph,plan,content}
                 小方法包：每个小方法只组装功能（repo/core 记录读写、
-                cap 纯计算、llmops 提示契约），不自己拿域锁
+                cap 功能包、llmops 提示契约），不自己拿域锁
 内部底座        internal/{config,llm} 配置类型与 LLM 传输；
-                internal/cap 纯功能；internal/repo(+core) 连数据库内核的功能层
+                internal/cap 能力包（engram/profile 携记录读写，只接收注入的 engine/index）；internal/repo(+core) 连数据库内核的功能层
 ```
 
 - 大方法（`Search`/`Update`/`RunDream`/L0-L5 各面/
