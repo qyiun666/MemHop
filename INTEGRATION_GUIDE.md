@@ -326,14 +326,14 @@ the round ended; no id travels through any of it.
 
 What is left for the host is six facts to know, not six adapters to write:
 
-- **One round may end twice, and that is the one place the loop loses a word.** A kernel's
-  memory port fires at the terminal point of every invocation, so a round that suspends for
-  input and then resumes closes twice. Each `Update` rewrites the turn's two dialogue slots
-  with the pair it was handed, so the resume's question-and-answer is what the turn ends up
-  stating — while both endings stay on the event track as separate records, pinned by
-  `TestTwoClosesOfOneTurnKeepBothEndingsAndTheLastDialogue`. Words from the earlier arm that
-  must survive go in through `AppendArchive` while the round runs: the close is not where a
-  turn's history accumulates, and one topic still comes out of it.
+- **Closing one turn twice is a replay, not a continuation.** The two dialogue slots hold the
+  pair the last close stated, while every ending stays as its own event —
+  `TestTwoClosesOfOneTurnKeepBothEndingsAndTheLastDialogue` pins exactly that residue. So a
+  round that suspends for input and resumes must not be closed twice on the same turn, and the
+  mapping above is what keeps it straight: each invocation reads once (`Search`) and closes
+  once (`Update`), so each arm is its own turn and keeps its own words. Nothing in the library
+  merges the two arms — and the close is not where a turn's history accumulates, which is what
+  `AppendArchive` is for.
 
 - **Only `Update` and `Dream` talk to the model.** `Update` makes exactly one call, inside
   the domain lock; the read that opens a turn and every write inside it are deterministic.

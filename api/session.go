@@ -51,9 +51,10 @@ func (s *Session) Search(q SearchQuery) (*SearchResult, error) {
 // looks for them on, so closing the same turn again rewrites them instead of
 // accumulating versions — and the host's own word for how it ended goes in as one
 // event per call, since a suspension and the resume that followed it are two facts,
-// not one line written twice. A round whose kernel ends twice therefore keeps both
-// endings while stating only the last pair of words: what an earlier arm said belongs
-// on AppendArchive, not on the close. The turn's utterances are then distilled into its
+// not one line written twice. Closing one turn twice is therefore a replay, not a
+// continuation: both endings are kept and only the last pair of words is stated, so a
+// round that suspends and resumes is two turns (each its own read and its own close),
+// never one turn closed twice. The turn's utterances are then distilled into its
 // topic's keyword track, and the topic comes back as stored, that track among its
 // fields.
 //

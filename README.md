@@ -258,7 +258,7 @@ Dependency direction is strictly one-way: `api → internal → repo → core`, 
 - **Write path** (`Update`): exactly one keyword distillation per turn (both originals fed together), a 512-token output cap escalating on truncation, then one format-constrained retry — a reply that still will not parse is `ErrLLM` and that turn writes nothing.
 - **Dream**: one consolidation call per scene reaching the topic floor (`DreamCompressMinTopics`, default 20), plus one distill call with at most 200 ranked L1 samples (up to 20 keywords each). Output caps: 8192 / 2048 tokens.
 - Use a small/fast chat model (a cheap API model or a local OpenAI-compatible endpoint) for the configured LLM when latency and cost matter; keyword distillation does not need a frontier model.
-- **The bill is per closing call, not per round.** A host whose kernel suspends for input and resumes ends the round twice: two distillations, still one topic, the turn's dialogue slots holding only the last pair of words while both endings stay as events on its track.
+- **The bill is per closing call, not per round.** Two closes of one turn are two distillations and still one topic — the dialogue slots keep the last pair of words while both endings stay as events on its track. A round that suspends for input and resumes is read and closed once per invocation, so it is two turns, not one closed twice.
 
 ## Development
 
