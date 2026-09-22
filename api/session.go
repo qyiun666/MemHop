@@ -339,9 +339,12 @@ func (s *Session) Dream(ctx context.Context, sceneID string) (*DreamReport, erro
 
 // SceneContext reads a scene's whole transcript without opening a turn: unlike Search
 // it writes nothing — no topic id is minted and the scene's turn counter stays where
-// it is — so it is the read for showing or exporting a conversation. Entries come in
-// speaking order, each carrying its own L4 messages; depth-2 originals are included
-// here (see SceneContext).
+// it is — so it is the read for showing or exporting a conversation, and the one a
+// loop can call again mid-round without spending a turn. An empty sceneID reads the
+// scene this domain is working, so a host running one agent over one library names
+// nothing to read it; a domain that has never been read answers ErrNotFound rather
+// than starting a conversation. Entries come in speaking order, each carrying its own
+// L4 messages; depth-2 originals are included here (see SceneContext).
 func (s *Session) SceneContext(sceneID string) (*SceneContext, error) {
 	return s.session.SceneContext(sceneID)
 }

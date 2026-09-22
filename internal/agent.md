@@ -196,7 +196,8 @@ internal/{domain,scene,turn,dream,graph,plan,content}
 1. **一次 `Search` = 定场景 + 开一轮**：`SceneID` 为空 → 续用该域自持的 `ac.Scene`；
    自持为空（首次访问、或空闲回收后重建、或当前场景被删）时经 `scene.CurrentScene`
    从记录里恢复「`TurnSeq` 跑得最远」的那个，平手取 id 小的，所以同一份记录两次恢复
-   得到同一个场景；一个场景都没有才新建——`scene` 在自己内部铸一个未被占用的 ID
+   得到同一个场景（这一步与下面的纯读共用 `ensureScene`，两条读不会各自演化「当前场景」
+   的判法）；一个场景都没有才新建——`scene` 在自己内部铸一个未被占用的 ID
    （`0` 跳过；只有 `ErrNotFound` 才算可用，其他读错误原样上抛）并落一条场景记录
    （名字一律库生成 `session:<id>`，锚点与它同批写入）。`NewScene:true` 跳过这一切
    直接新建，那是宿主唯一「另开一条会话」的写法。`L3ID` 只被**这一读会新建场景**的两条
@@ -388,6 +389,11 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    的第一轮的 `UserTimestamp`，两者必然同值，所以排序在时间戳之后加
    `Depth` 次键（浅的在前）。只按时间戳排时 `slices.SortFunc` 不稳定，一组的
    摘要会随机落到它所总结的原文中间。
+15. **纯读也能不点名**：`SceneContext` 收到空的 `sceneID` 时读的是该域自持的那条会话
+    （`readScene` → `ensureScene`），并且**不新建**——新建场景是开轮那条读的义务，一个承诺
+    零写入的调用不能顺手留下一条会话，所以从没读过的域问它得到 `ErrNotFound`。这条是给
+    决策循环的召回用的：一轮里「问模型之前」的读可以发生很多次，只该有一次 `Search` 真的
+    开轮，其余都走这一条，否则轮次计数会替没发生过的轮往前空跳。
 
 ## 修改者义务
 

@@ -529,10 +529,24 @@ func TestSceneContextAfterContentRetentionIsEmptyNotAnError(t *testing.T) {
 func TestSceneContextOpensNoTurn(t *testing.T) {
 	srv := mockLLMServer(t, turnKeywords)
 	db := newSearchTestDB(t, srv.URL)
-	sceneID, _ := openTurn(t, db)
+	sceneID, topicID := openTurn(t, db)
 
 	if _, err := db.SceneContext(core.DefaultAgentID, common.FormatHash(sceneID)); err != nil {
 		t.Fatalf("scene context: %v", err)
+	}
+	// The same read with no id named is the same transcript: which scene the domain is
+	// working is the library's memory, so a loop that recalls between its own rounds
+	// needs no id to do it with — and needs no turn, either.
+	blind, err := db.SceneContext(core.DefaultAgentID, "")
+	if err != nil {
+		t.Fatalf("un-named scene context: %v", err)
+	}
+	named, err := db.SceneContext(core.DefaultAgentID, common.FormatHash(sceneID))
+	if err != nil {
+		t.Fatalf("named scene context: %v", err)
+	}
+	if len(blind.Topics) != len(named.Topics) || blind.SceneName != named.SceneName {
+		t.Fatalf("the un-named read answered another scene: %+v vs %+v", blind, named)
 	}
 	slot, err := core.ReadSceneSlot(db.engine, core.DefaultAgentID, sceneID)
 	if err != nil {
@@ -541,6 +555,10 @@ func TestSceneContextOpensNoTurn(t *testing.T) {
 	if slot.TurnSeq != 1 {
 		t.Fatalf("SceneContext opened a turn: TurnSeq = %d, want 1", slot.TurnSeq)
 	}
+	// The turn Search opened is still the one this closes — neither read above moved it.
+	if err := settle(db, sceneID, topicID); err != nil {
+		t.Fatalf("close after two pure reads: %v", err)
+	}
 
 	res, err := db.Search(core.DefaultAgentID, SearchQuery{SceneID: common.FormatHash(sceneID)})
 	if err != nil {
@@ -548,5 +566,49 @@ func TestSceneContextOpensNoTurn(t *testing.T) {
 	}
 	if want := core.ComputeTurnTopicID(sceneID, 2); res.NewTopicID != want {
 		t.Fatalf("next read issued %d, want turn 2 (%d)", res.NewTopicID, want)
+	}
+}
+
+// The un-named read answers from the domain's memory of which scene it is on, and that
+// memory restores from the records — so the same transcript comes back after the context
+// is dropped, which is the read a restarted host's recall loop makes first. A domain with
+// no scene yet is ErrNotFound: this read promises to write nothing, and creating a scene
+// is what opening a turn does.
+func TestSceneContextWithoutAnIdReadsTheDomainsScene(t *testing.T) {
+	srv := mockLLMServer(t, turnKeywords)
+	db := newSearchTestDB(t, srv.URL)
+
+	if _, err := db.SceneContext(core.DefaultAgentID, ""); common.CodeOf(err) != common.ErrNotFound {
+		t.Fatalf("an un-named read of an unread domain: err = %v, want ErrNotFound", err)
+	}
+	if n := countRecords(db.engine, core.DefaultAgentID, core.RecL2Scene); n != 0 {
+		t.Fatalf("the refused read created %d scenes, want none", n)
+	}
+
+	res, err := db.Search(core.DefaultAgentID, SearchQuery{})
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	first, err := db.SceneContext(core.DefaultAgentID, "")
+	if err != nil {
+		t.Fatalf("un-named read: %v", err)
+	}
+	// A second conversation, then back to the first through the domain's own memory:
+	// the named read moves it, so the un-named read that follows answers about the
+	// scene the host last pointed at.
+	if _, err := db.Search(core.DefaultAgentID, SearchQuery{NewScene: true}); err != nil {
+		t.Fatalf("NewScene: %v", err)
+	}
+	if _, err := db.Search(core.DefaultAgentID, SearchQuery{SceneID: common.FormatHash(res.Scene.SceneID)}); err != nil {
+		t.Fatalf("named read: %v", err)
+	}
+	delete(db.agents, core.DefaultAgentID)
+	restored, err := db.SceneContext(core.DefaultAgentID, "")
+	if err != nil {
+		t.Fatalf("un-named read after the context was dropped: %v", err)
+	}
+	if restored.SceneName != first.SceneName || len(restored.Topics) != len(first.Topics) {
+		t.Fatalf("the restored read answered %+v, want the scene last pointed at (%+v)",
+			restored, first)
 	}
 }

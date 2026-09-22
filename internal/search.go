@@ -92,10 +92,8 @@ func (db *DB) resolveScene(ac *domain.Context, agentID uint64, q SearchQuery) (u
 	if q.NewScene {
 		return scene.Create(db.engine, agentID, anchor)
 	}
-	if ac.Scene == 0 {
-		if ac.Scene, err = scene.CurrentScene(db.engine, agentID); err != nil {
-			return 0, err
-		}
+	if err := db.ensureScene(ac, agentID); err != nil {
+		return 0, err
 	}
 	if ac.Scene == 0 {
 		return scene.Create(db.engine, agentID, anchor)
@@ -103,6 +101,39 @@ func (db *DB) resolveScene(ac *domain.Context, agentID uint64, q SearchQuery) (u
 	if anchor != 0 {
 		return 0, common.NewError(common.ErrInvalidQuery,
 			"an L3 anchor is set when a scene is created: pass NewScene to hang a new conversation on a project, or UpdateScene to move the current one")
+	}
+	return ac.Scene, nil
+}
+
+// ensureScene fills the domain's memory of which scene it is working from the records,
+// when nothing holds it: the first read after an open, an idle sweep, a delete or a
+// merge. It stays 0 when the domain holds no scene at all, which each caller answers in
+// its own way — the read that opens a turn creates the first one, the pure read has
+// nothing to show and says so.
+func (db *DB) ensureScene(ac *domain.Context, agentID uint64) error {
+	if ac.Scene != 0 {
+		return nil
+	}
+	id, err := scene.CurrentScene(db.engine, agentID)
+	ac.Scene = id
+	return err
+}
+
+// readScene resolves the scene a write-free read is scoped to: the id the host named, or
+// the domain's own current one when it names none. That is the whole of the host's side
+// of a pure read — no id held, no turn opened, nothing written. A domain that has never
+// been read gets ErrNotFound rather than an empty transcript, because creating a scene
+// is what opening a turn does and this call promises not to do that.
+func (db *DB) readScene(ac *domain.Context, agentID uint64, sceneID string) (uint64, error) {
+	if sceneID != "" {
+		return parseID("scene", sceneID)
+	}
+	if err := db.ensureScene(ac, agentID); err != nil {
+		return 0, err
+	}
+	if ac.Scene == 0 {
+		return 0, common.NewError(common.ErrNotFound,
+			"this domain holds no scene to read: Search opens the first one")
 	}
 	return ac.Scene, nil
 }

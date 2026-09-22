@@ -316,11 +316,13 @@ bookkeeping of its own:
 verbatim and never branches on it, the same posture an event's `EventType` has. So no
 status vocabulary is imposed on the kernel, and nothing translates on the way in.
 
-A decision-loop kernel's memory port already has this shape: a recall that runs before the
-model is consulted, and a remember that runs once at the round's terminal point on every
-exit arm. Those two hooks are the first and third rows above, and nothing between them
-carries a key — what an adapter is left holding is one session handle plus the kernel's own
-name for how the round ended.
+A decision-loop kernel's memory port has this shape: a recall before the model is consulted,
+and a remember once at the round's terminal point on every exit arm. The two are not
+symmetric — a kernel that works through tool calls recalls several times per round — so the
+mapping is one read that opens the turn (`Search`, on the kernel's once-per-invocation hook,
+not on the recall port), one pure read for every recall in between (`SceneContext("")` — no id
+named, no turn consumed), and one close (`Update`). What an adapter holds is a session handle and the kernel's own name for how
+the round ended; no id travels through any of it.
 
 What is left for the host is five facts to know, not five adapters to write:
 
@@ -415,7 +417,7 @@ to keep it. `Name`, `Role` and `Preferences` have the host as their only writer.
 | Method | Meaning |
 |---|---|
 | `db.ListScenes(l3ID) ([]SceneSlot, error)` | scene list (`SceneID / SceneName / L3ID`); a non-empty `l3ID` keeps only the scenes anchored to that project domain, `""` lists all |
-| `db.SceneContext(sceneID) (*SceneContext, error)` | the scene's whole transcript (topics + their L4 originals) and **no write at all** — no turn is opened; **use for session resume**. Unlike `Search` it flattens to depth 2, because a Dream-fused group keeps its originals on the children it sank, and this is the only read that brings them back. `ChildCount > 0` is what marks a fused group (its own single message carries role 3, the mark Dream puts on a fused group's summary); `Depth` only says whether the topic is still on the scene's surface — a group a later pass folded away sits at 2 level with the turns it summarizes. The entries returned are the whole count — roots and the sunk children this read alone brings back |
+| `db.SceneContext(sceneID) (*SceneContext, error)` | the scene's whole transcript (topics + their L4 originals) and **no write at all** — no turn is opened; **use for session resume**, and for every recall a round makes after the one that opened its turn. An empty `sceneID` reads the scene this domain is working, so nothing has to be held to call it again. Unlike `Search` it flattens to depth 2, because a Dream-fused group keeps its originals on the children it sank, and this is the only read that brings them back. `ChildCount > 0` is what marks a fused group (its own single message carries role 3, the mark Dream puts on a fused group's summary); `Depth` only says whether the topic is still on the scene's surface — a group a later pass folded away sits at 2 level with the turns it summarizes. The entries returned are the whole count — roots and the sunk children this read alone brings back |
 | `db.UpdateScene(sceneID, api.ScenePatch{Name, L3ID, Force}) (SceneSlot, error)` | title it (`Name`), anchor it to an L3 project domain (`L3ID`), or clear the anchor (`L3ID: &""`); nil fields keep their stored value, and the **written scene comes back** |
 | `db.MergeScenes(primaryID, []secondaryIDs) error` | merge scenes |
 | `db.DeleteTopic(topicID) error` | delete a topic subtree + its L4 archives + indexes; the subtree is the topics whose `parent_id` points into it (memory correction) |

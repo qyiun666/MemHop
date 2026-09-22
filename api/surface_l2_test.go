@@ -130,3 +130,31 @@ func TestSurfaceRenameTopicRefusals(t *testing.T) {
 		t.Fatalf("malformed topic id: want ErrInvalidQuery, got %v", err)
 	}
 }
+
+// The transcript read can name nothing at all: which scene this domain is working is
+// the library's own memory, so a loop that recalls between its rounds carries no id and
+// opens no turn to do it. A domain that has never been read answers ErrNotFound instead
+// of starting a conversation — creating one is what the read that opens a turn does.
+func TestSurfaceSceneReadNeedsNoId(t *testing.T) {
+	db := openSurfaceDB(t)
+
+	if _, err := db.SceneContext(""); CodeOf(err) != ErrNotFound {
+		t.Fatalf("an unread domain: err = %v, want ErrNotFound", err)
+	}
+	res, err := db.Search(SearchQuery{})
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	blind, err := db.SceneContext("")
+	if err != nil {
+		t.Fatalf(`SceneContext(""): %v`, err)
+	}
+	named, err := db.SceneContext(res.Scene.SceneID)
+	if err != nil {
+		t.Fatalf("SceneContext(named): %v", err)
+	}
+	if blind.SceneName != named.SceneName || len(blind.Topics) != len(named.Topics) {
+		t.Fatalf("the un-named read answered %+v, want the scene the named one answered (%+v)",
+			blind, named)
+	}
+}

@@ -207,16 +207,19 @@ func (db *DB) requireScenes(agentID uint64, ids ...uint64) error {
 // timestamp order plus their L4 messages — and writes nothing. The depth is
 // deliberate: a fused group's originals live on the children Dream sank, so
 // stopping at depth 1 (what Search returns) would hide them. Unknown scenes
-// return an error.
+// return an error. An empty sceneID reads the scene this domain is working, so a
+// host that runs one agent over one library reads a conversation without holding
+// or naming anything; a domain with no scene yet is ErrNotFound, since minting one
+// is what opening a turn does and this call writes nothing.
 func (db *DB) SceneContext(agentID uint64, sceneID string) (*SceneContext, error) {
 	ac, err := db.lockAgent(agentID)
 	if err != nil {
 		return nil, err
 	}
 	defer ac.Mu.Unlock()
-	sceneHash, err := common.ParseID(sceneID)
+	sceneHash, err := db.readScene(ac, agentID, sceneID)
 	if err != nil {
-		return nil, common.NewError(common.ErrInvalidQuery, "parse scene id", err)
+		return nil, err
 	}
 	scenes, err := repo.ListScenesL2(db.engine, agentID, []uint64{sceneHash})
 	if err != nil {
