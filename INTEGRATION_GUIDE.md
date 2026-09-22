@@ -127,6 +127,12 @@ db, err := lib.Primary()                        // the domain the file was opene
 worker, err := lib.SubAgent(workerLLM, api.ProfileInput{Name: "worker"}) // by name
 ```
 
+The path is the host's to bound. `Open` creates the file it is handed, and there is no
+sandbox and no name registry underneath it — so when a path, or the agent name a worker's
+file is derived from, arrives out of a model's tool arguments, the host resolves it inside
+its own directory before handing it in. `CompactTo` is the same kind of argument: an
+arbitrary destination path.
+
 `api.Open` is the only entry point, and what it does depends on the file and on the
 primary domain's profile:
 
@@ -315,6 +321,13 @@ bookkeeping of its own:
 `Outcome` takes the kernel's own word for which arm ended the round: the engine stores it
 verbatim and never branches on it, the same posture an event's `EventType` has. So no
 status vocabulary is imposed on the kernel, and nothing translates on the way in.
+
+Several agents are this shape repeated, not a wider shape. A worker the model recruits
+through a tool call gets its own file, its own kernel and its own session handle, and
+nothing in the table above changes for it: the library keeps no process-wide state to be
+shared, so two such stacks running in one process neither see each other's turns nor reach
+the same id. The one thing the host supplies is a bound on where a worker's file may go —
+that path came out of a model (§5).
 
 A decision-loop kernel's memory port has this shape: a recall before the model is consulted,
 and a remember once at the round's terminal point on every exit arm. The two are not
