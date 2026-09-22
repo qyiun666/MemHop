@@ -324,7 +324,7 @@ not on the recall port), one pure read for every recall in between (`SceneContex
 named, no turn consumed), and one close (`Update`). What an adapter holds is a session handle and the kernel's own name for how
 the round ended; no id travels through any of it.
 
-What is left for the host is five facts to know, not five adapters to write:
+What is left for the host is six facts to know, not six adapters to write:
 
 - **One round may end twice, and that is the one place the loop loses a word.** A kernel's
   memory port fires at the terminal point of every invocation, so a round that suspends for
@@ -348,6 +348,13 @@ What is left for the host is five facts to know, not five adapters to write:
   surface (`Search` and `SceneContext` hand them over in turn order), while
   `SearchL4{Limit}` caps *records*. A recall window of N turns therefore takes those N
   topics and then reads each one's content; no L4 query on this surface counts turns.
+- **A facade type that is *not* the engine's own is hiding something.** Most shapes here are
+  aliases, so the struct filled at the call site is the struct the engine reads — a value
+  crosses that boundary with no conversion step at all. The exceptions withhold a thing
+  rather than rename one: an id, rendered as hex for the host (`TopicSlot`, `ArchiveSlot`), or
+  a field the host has no right to write (`ProfileInput` is the four writable fields where
+  `ProfileSlot` is the whole read shape; `PlanStep` carries no turn key, because the turn is
+  the library's to remember).
 - **Loops stay apart, including one started mid-round.** The open turn belongs to an agent
   domain and nothing about it is process-wide, so a second file — or a second domain of the
   same file — cannot write onto the first one's turn, and opening that second file *between*
