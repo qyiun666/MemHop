@@ -5,9 +5,9 @@
 // drives every turn and what LLM tools bind to: Search, Update, Dream, AppendArchive,
 // SceneContext, ListScenes, GetL0, UpdateL0, ListL1, SearchL4, GetL3, ListL3,
 // ImportL3, QueryL3Nodes, QueryL3Subgraph, PlanNodeAdd, PlanNodeUpdate, PlanState. The
-// assembly/admin face (7) is host code at session boundaries and management channels
+// assembly/admin face (8) is host code at session boundaries and management channels
 // rather than the per-turn loop: UpdateScene, RenameTopic, MergeScenes, DeleteTopic,
-// DeleteScene, UpdateL3, DeleteL3.
+// DeleteScene, UpdateL3, DeleteL3, AgentID.
 
 package api
 
@@ -321,6 +321,14 @@ func (s *Session) PlanState() (*PlanTree, error) {
 	out := fromPlanTree(t)
 	return &out, nil
 }
+
+// AgentID is the unique id of the domain this handle is bound to, as 16 hex characters.
+// The library issues it — a sub-agent's when that domain is created, and the primary's is
+// the implicit zero domain the file was opened on — and DB.Agent takes this string back to
+// reach the same domain again. A host that keeps one identifier per memory should keep
+// this one: it survives reopening, and it is the only id here that addresses a domain
+// rather than a record inside one. Round-trip it; never construct or parse it.
+func (s *Session) AgentID() string { return formatID(s.session.AgentID()) }
 
 // ---- Promoted surface, documented ----
 //

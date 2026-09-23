@@ -196,3 +196,93 @@ func TestKnowledgeGraphStaysInsideItsFile(t *testing.T) {
 		t.Fatalf("the worker's import disturbed the parent file: %+v (err %v)", got, err)
 	}
 }
+
+// A domain's own id — the one Session.AgentID renders — is the handle a host keeps when it
+// would rather address one memory than re-say a name. DB.Agent takes it back to that same
+// domain, across a reopening, and refuses an id this file never registered rather than
+// opening an empty memory in its place. Every id the facade hands out round-trips, the
+// primary's included.
+func TestADomainIsAddressableByTheIDTheLibraryIssued(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ids.meh")
+	llm := LlmConfig{APIURL: "http://127.0.0.1:1", APIKey: "k", Model: "m"}
+
+	db, err := Open(path, llm, DefaultMemHopDefaults, &ProfileInput{Name: "Meow", Role: "assistant"})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	primary, err := db.Primary()
+	if err != nil {
+		t.Fatalf("Primary: %v", err)
+	}
+	worker, err := db.SubAgent(llm, ProfileInput{Name: "worker", Role: "helper"})
+	if err != nil {
+		t.Fatalf("SubAgent worker: %v", err)
+	}
+	helper, err := db.SubAgent(llm, ProfileInput{Name: "helper", Role: "helper"})
+	if err != nil {
+		t.Fatalf("SubAgent helper: %v", err)
+	}
+	primaryID, workerID, helperID := primary.AgentID(), worker.AgentID(), helper.AgentID()
+	if len(workerID) != 16 || workerID == helperID || workerID == primaryID {
+		t.Fatalf("three domains answered %q %q %q, want three distinct 16-hex ids", primaryID, workerID, helperID)
+	}
+	if err := worker.UpdateL0(&ProfileInput{Name: "worker", Role: "helper", Personality: "先写测试再动手"}); err != nil {
+		t.Fatalf("worker UpdateL0: %v", err)
+	}
+
+	// The id lands on the domain it came from, and a second id on a different one.
+	again, err := db.Agent(llm, workerID)
+	if err != nil {
+		t.Fatalf("Agent by id: %v", err)
+	}
+	if again.AgentID() != workerID {
+		t.Fatalf("the handle came back with %q, want %q", again.AgentID(), workerID)
+	}
+	got, err := again.GetL0()
+	if err != nil {
+		t.Fatalf("GetL0 through the id handle: %v", err)
+	}
+	if got.Name != "worker" || got.Personality != "先写测试再动手" {
+		t.Fatalf("the id addressed %+v, want worker's own profile", got)
+	}
+	other, err := db.Agent(llm, helperID)
+	if err != nil {
+		t.Fatalf("Agent by the second id: %v", err)
+	}
+	if slot, err := other.GetL0(); err != nil || slot.Name != "helper" {
+		t.Fatalf("the second id landed on %+v (err %v), want helper's own domain", slot, err)
+	}
+	fromID, err := db.Agent(llm, primaryID)
+	if err != nil {
+		t.Fatalf("Agent by the primary's own id: %v", err)
+	}
+	if slot, err := fromID.GetL0(); err != nil || slot.Name != "Meow" || slot.AgentType != AgentTypePrimary {
+		t.Fatalf("the primary's id addressed %+v (err %v), want the file's primary", slot, err)
+	}
+
+	// An id this file never registered is refused, not created; a name handed to the id
+	// door is a parameter error, before any domain is touched.
+	if _, err := db.Agent(llm, "ffffffffffffffff"); CodeOf(err) != ErrAgentNotFound {
+		t.Fatalf("an unknown id answered %v (code %d), want ErrAgentNotFound", err, CodeOf(err))
+	}
+	if _, err := db.Agent(llm, "worker"); CodeOf(err) != ErrInvalidQuery {
+		t.Fatalf("a name at the id door answered %v (code %d), want ErrInvalidQuery", err, CodeOf(err))
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopened, err := Open(path, llm, DefaultMemHopDefaults, nil)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	byID, err := reopened.Agent(llm, workerID)
+	if err != nil {
+		t.Fatalf("Agent by the same id after reopening: %v", err)
+	}
+	if slot, err := byID.GetL0(); err != nil || slot.Name != "worker" || slot.Personality != "先写测试再动手" {
+		t.Fatalf("after reopening the id addressed %+v (err %v), want worker's profile", slot, err)
+	}
+}

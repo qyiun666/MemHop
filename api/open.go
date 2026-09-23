@@ -82,6 +82,25 @@ func (d *DB) SubAgent(llm LlmConfig, profile ProfileInput) (*Session, error) {
 	return &Session{s}, nil
 }
 
+// Agent returns the handle of a domain this file already holds, addressed by the unique id
+// Session.AgentID handed out for it, and points that domain at ll — the same endpoint
+// replacement SubAgent performs, minus the name and minus creation.
+//
+// It creates nothing: an id that is not this file's primary and not a registered tenant is
+// refused with ErrAgentNotFound, so a mistyped or invented id cannot open an empty memory
+// on top of somebody else's. The primary's id addresses the primary — the same domain
+// Primary returns, with llm now as its endpoint. A domain whose profile was lost to a crash
+// between registration and the profile is healed by SubAgent (its name is the key that
+// carries the profile); this call hands back the handle either way, and GetL0 on it reports
+// what the domain holds.
+func (d *DB) Agent(llm LlmConfig, agentID string) (*Session, error) {
+	s, err := d.db.Agent(llm, agentID)
+	if err != nil {
+		return nil, err
+	}
+	return &Session{s}, nil
+}
+
 // ---- file-level lifecycle ----
 
 // Checkpoint persists the per-agent index snapshots without closing.

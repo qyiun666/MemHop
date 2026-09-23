@@ -75,6 +75,8 @@ func TestSessionPublicSurface(t *testing.T) {
 		"UpdateScene", "RenameTopic", "MergeScenes", "DeleteScene", "DeleteTopic",
 		// L3 management and corrections
 		"UpdateL3", "DeleteL3",
+		// the domain's own identity, for handing back to DB.Agent
+		"AgentID",
 	}
 	sort.Strings(want)
 
@@ -85,11 +87,11 @@ func TestSessionPublicSurface(t *testing.T) {
 }
 
 func TestDBPublicSurface(t *testing.T) {
-	// Two ways in — the domain the file was opened on, and one created under it
-	// by name — plus the file-level lifecycle and the file-level diagnostics. No
-	// agent id crosses either, and no LLM tool binds here.
+	// Three ways in — the domain the file was opened on, one created under it by
+	// name, and one addressed by the id the library handed out — plus the file-level
+	// lifecycle and the file-level diagnostics. No LLM tool binds here.
 	want := []string{
-		"Primary", "SubAgent",
+		"Primary", "SubAgent", "Agent",
 		"Checkpoint", "CompactTo", "Close", "IsClosed", "Stats",
 	}
 	sort.Strings(want)

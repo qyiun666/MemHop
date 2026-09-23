@@ -4,7 +4,8 @@
 > 适用版本：**v1.6.6**。模块路径 `github.com/qyiun666/MemHop`，只允许 import `api` 包。
 
 > 本指南描述的就是当前的面：`api.Open` → `api.DB`，域以句柄持有（`Primary` /
-> `SubAgent`，agent id 不越边界），没有能力面，也没有轮次列举——宿主读某一轮做过的事
+> `SubAgent` / `Agent`，第三条收的是 `Session.AgentID` 交出的 id，宿主只原样回传），
+> 没有能力面，也没有轮次列举——宿主读某一轮做过的事
 > 用 `SearchL4{TopicID, Kind: event}`。下面的方法清单与 `api/surface_public_test.go`
 > 钉住的一致；`go doc github.com/qyiun666/MemHop/api.Session` 仍是每个方法的权威文本，
 > 因为 `internal` 不发布，被内嵌提升的方法只有那一条命令能查到。
@@ -18,8 +19,8 @@
  ├─ go.mod: require github.com/qyiun666/MemHop（或 go.work replace → 本地 checkout）
  ├─ 只 import github.com/qyiun666/MemHop/api（禁止碰 internal/）
  ├─ 一个 .meh 文件 = 多个 agent 域（除文件级 L3 公共池外相互隔离），每个域都是一个句柄：
- │   DB.Primary() 拿文件被打开所依据的那个域，DB.SubAgent(llm, profile) 按名字建/取一个
- │   ——agent id 从不越过这条边界
+ │   DB.Primary() 拿文件被打开所依据的那个域，DB.SubAgent(llm, profile) 按名字建/取一个，
+ │   DB.Agent(llm, id) 按 Session.AgentID 交出的 id 取回同一个域
  └─ 外部服务依赖：
       └─ 只有一个 OpenAI 兼容 LLM（轮次提炼 / Dream 巩固）
       └─ 无 embedding / 向量服务
@@ -130,11 +131,15 @@ worker, err := lib.SubAgent(workerLLM, api.ProfileInput{Name: "worker"}) // 按�
 | 不在 | — | 传了 | 校验后建文件并播种 → 成功 |
 
 - 主域是隐式的零号域，所以一个文件恰好有一个、也不需要扫描去找。`Primary()` 返回它的
-  句柄；**宿主从头到尾看不到任何 agent id**。
+  句柄，而任何句柄上的 `AgentID()` 交出它所绑定那个域的 id。
 - `SubAgent(llm, profile)` 第一次调用建出名为 `profile.Name` 的域，之后每次返回同一个
   ——名字就是域的地址，创建时冻结。`llm` 是该域自己的端点，所以子 agent 可以跑在另一个
   模型上。画像只在域还没有画像时才写，这同时把「崩在两次写之间」的半截域补完。
   `AgentType` 由库盖章而不采信入参：这样建出来的域就是子 agent。
+- `Agent(llm, agentID)` 按 `Session.AgentID` 交出的 id 找到那个域：拿回的句柄与按名字调
+  `SubAgent` 是同一个，只是端点换成传进来的这个。它**不建任何东西**——这个文件从没注册过的 id
+  会被 `ErrAgentNotFound` 拒掉，所以一个打错或编出来的 id 开不出一个顶替真域的空记忆。宿主若只想
+  存一件标识符，存这个 id 而不是名字；主域自己的 id 就是那个隐式零号值，交回它到的还是主域。
 - 两条拒绝都发生在碰文件系统之前，所以被拒的 `Open` 不在宿主的路径上留文件让下一次尝试
   走错分支。
 - 中途主动落盘：`lib.Checkpoint()`。
@@ -354,9 +359,9 @@ worker 属于哪一种由宿主定，库不替它猜。
 25 个会话方法按使用者分两类：
 
 - **任务面（18 个）**——宿主每轮驱动、LLM 工具绑定的方法：`Search` / `AppendArchive` / `Update` / `Dream`（宿主自动循环）、`GetL0` / `UpdateL0`、`ListL1`、`ListScenes` / `SceneContext`、`GetL3` / `ListL3` / `ImportL3` / `QueryL3Nodes` / `QueryL3Subgraph`、`SearchL4`、`PlanNodeAdd` / `PlanNodeUpdate` / `PlanState`。
-- **组装/管理面（7 个）**——宿主代码在会话边界与管理通道调用，**不做成 LLM 工具**：`UpdateScene` / `RenameTopic` / `MergeScenes` / `DeleteScene` / `DeleteTopic`、`UpdateL3` / `DeleteL3`。
+- **组装/管理面（8 个）**——宿主代码在会话边界与管理通道调用，**不做成 LLM 工具**：`UpdateScene` / `RenameTopic` / `MergeScenes` / `DeleteScene` / `DeleteTopic`、`UpdateL3` / `DeleteL3`、`AgentID`。
 
-文件级生命周期与诊断在 `api.DB` 上（7 个）：`Primary` / `SubAgent`，加 `Checkpoint` / `CompactTo` / `Close` / `IsClosed` / `Stats`（文件字节数 + 全文件可达记录数，压缩决策的数据来源）。整个面上没有任何能力相关的方法：引擎不存卡、不解析卡，宿主读某一轮做过的事就用 `SearchL4{Kind: event}`，之后怎么组织是它自己的事。
+文件级生命周期与诊断在 `api.DB` 上（8 个）：`Primary` / `SubAgent` / `Agent`，加 `Checkpoint` / `CompactTo` / `Close` / `IsClosed` / `Stats`（文件字节数 + 全文件可达记录数，压缩决策的数据来源）。整个面上没有任何能力相关的方法：引擎不存卡、不解析卡，宿主读某一轮做过的事就用 `SearchL4{Kind: event}`，之后怎么组织是它自己的事。
 
 ### L0 画像
 
@@ -490,7 +495,7 @@ _, err := db.AppendArchive(api.ArchiveInput{
 
 | 类别 | 名字 | 用途 |
 |---|---|---|
-| 入口与句柄 | **`Open`** → `*DB`，再由 `DB.Primary()` / `DB.SubAgent(llm, profile)` → `*Session` | 只有这两条进来路；agent 域是握在手里的句柄，从不以 id 命名 |
+| 入口与句柄 | **`Open`** → `*DB`，再由 `DB.Primary()` / `DB.SubAgent(llm, profile)` / `DB.Agent(llm, id)` → `*Session` | 三条进来路；域是握在手里的句柄，而 `Session.AgentID` 交出的就是 `DB.Agent` 收的那个 id |
 | 配置 | **`LlmConfig`** / `MemHopDefaults` + `DefaultMemHopDefaults` | `Open` 要的端点与调参入参 |
 | 入参形状 | **`ProfileInput`** / `SearchQuery` / `TurnEnd` / `ScenePatch` / `L3ImportItem` / `L3Relation` / `L3ImportMode` / `L3NodeQuery` / `L4Query` / `PlanStep` / `ArchiveInput`（L4 的写形状；读回是 `ArchiveSlot`） | 宿主唯一能写的画像形状就是 `ProfileInput`，它四项里只有 `Name` 必填 |
 | 响应 DTO | `ProfileSlot` / `SceneNodeView` / `SceneSlot` / `TopicSlot` / `SceneContext` / `SceneContextTopic` / `SceneMessage` / `SearchResult` / `DreamReport` + `DreamStage` / `HypergraphSlot` / `HypergraphNode` / `HypergraphEdge` / `L3Graph` / `L3Subgraph` / `L3ImportResult` / `PlanTree` / `PlanNodeView` / `DreamReport` / `DreamStage` | 每个 id 字段都是 16 位 hex 字符串，且每一个都由库发号 |
@@ -607,7 +612,7 @@ func main() {
 3. **时间戳用 Unix 毫秒**，`<=0` 报 `ErrInvalidQuery`。两口时钟、一条规矩：你记的内容与你收的那一轮带的是**你的**毫秒戳，缺 `CreatedAt` 时库**不会**替你盖一个——那个值是保留窗量的尺子，替调用方猜等于悄悄决定一份转录该过期还是永生。反过来，库自己算出来的时间戳（计划节点自己的三个戳、画像的 `UpdatedAtMs`、某张图的内容钟）由库按同一毫秒刻度盖上。
 4. **ID 是不透明 16 位 hex**：不要自行拼接/截断；响应里的 id 原样回传即可，门面上不再有 hex ⇄ 整数转换函数。
 5. **`Search` 不写记忆内容**：它开启一个轮次（场景的轮次计数 +1），但不建任何话题记录——没收束的那一轮因此不会出现在场景读里。但这不等于「不留残渣」：那一轮已经 append 的记录仍在，挂在这个轮次的 id 下，而域往前走之后没有任何读会再点名它，要等保留窗把它们扫掉。让一轮的内容真正可达的收尾是 `Update`，所以「记了东西又放弃这一轮」花的是空间，不是零。想读原文用 `SceneContext` / `SearchL4`。重放一次 append（同 `(话题, Seq)`）是幂等的：记录 id 由那一对派生，重试只会覆盖不会叠加；而重放不再去填的槽位不会被回收。
-6. **单文件多 agent 域**：所有租户驻留同一个 `.meh` 文件——`api.Open` 落定文件被打开所依据的那个域，`DB.SubAgent(llm, profile)` 按名字在其下建/取一个——除文件级 L3 公共池外按域完全隔离；旧库（`FormatVersion < 0x0012`）既打不开也不迁移。
+6. **单文件多 agent 域**：所有租户驻留同一个 `.meh` 文件——`api.Open` 落定文件被打开所依据的那个域，`DB.SubAgent(llm, profile)` 按名字在其下建/取一个，`DB.Agent(llm, id)` 则按 `Session.AgentID` 交出的 id 取回同一个域——除文件级 L3 公共池外按域完全隔离；旧库（`FormatVersion < 0x0012`）既打不开也不迁移。
 7. **内容与计划自动过期**：Dream 清掉保留窗外的内容与计划节点（窗口默认 7 天，宿主经 `Defaults.ContentRetentionMs` 可配。一棵树要**同时**满足「仍有未到终态的步」与「窗口内有过活动」才豁免——被搁置的在途树照样被扫，这正是 L5 有界的理由；而不豁免的树里每一步各按自己的钟量，所以被一次晚到活动救回的只是那一批新节点，旧的照扫）；显式纠正走 `DeleteTopic` / `DeleteScene`。过了窗的话题只剩关键词轨，`Messages` 读回来是空的或 `Seq` 上有洞——那是合法的终局，不是读取失败。融合组的摘要按**写下它的那一次巩固**计龄，不按它取代的那几轮，所以它能活过那些原文：子话题的原文被扫走之后，父话题仍可能带着 Dream 自己写的那段文本。一切都按库自持的开轮绑定，所以在这一轮进行中随时追加，收口交给 `Update`——没有要宿主保管或自造的轮键。
 8. **场景与开着的轮都由库自持**：`Search` 续用该域当前场景并开下一轮；写调用（`Update`、`AppendArchive`、计划族）都作用在这一轮上，不点名 id。没有开着的轮时——从没 `Search` 过，或那一轮/那个场景被删了（`DeleteTopic`/`DeleteScene`）或被合并吞掉（`MergeScenes`）——它们返回 `ErrInvalidQuery`，消息含 `no turn is open`。库不会为一次写入自动建场景，也不会在 Dream 里合并场景——合并只走显式 `MergeScenes`，而它会把被并场景连记录删掉，宿主手里的旧 id 随即失效。**合并之前先收口**：开了没收口的轮次还没有话题记录，所以不在被改写的范围之内——它的 id 指着一个已经不存在的场景，此后再也收不了口。每次 `Search` 恰好开启一个轮次：读两次只收口一次，就是跳掉一个轮次号，空洞不产生成本，且已给出的 id 永不重复。
 9. **旋钮留 0 就是「没填」**：`MemHopDefaults` 现在处处按这个读法走（`LlmConfig` 那两个预算早就是这样），一份部分字面量再也不会悄悄把自动巩固关掉。要关掉某项得显式写负数——而对 `DreamCompressMinTopics` 来说负数是**丢细节的方向**（那个数正是提示词里让场景收敛到的目标）。上下文规模只由 Dream 收敛，不是硬上限，禁用自动巩固就等于让注入无界增长。

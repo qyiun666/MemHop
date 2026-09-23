@@ -157,6 +157,39 @@ func (db *DB) SubAgent(llmCfg LlmConfig, profile core.ProfileSlot) (*Session, er
 	return sess, nil
 }
 
+// Agent returns the session of a domain this file already holds, addressed by the id the
+// library handed out for it — the one `Session.AgentID` renders — and points it at llmCfg
+// the way SubAgent does. It creates nothing: an id nobody registered is refused with
+// ErrAgentNotFound, so a mistyped or invented id cannot open an empty memory over somebody
+// else's. The primary is addressed by its own id too (the implicit zero one), which is the
+// same domain Primary hands back.
+func (db *DB) Agent(llmCfg LlmConfig, agentIDHex string) (*Session, error) {
+	if err := llmCfg.Validate(); err != nil {
+		return nil, err
+	}
+	id, err := parseID("agent", agentIDHex)
+	if err != nil {
+		return nil, err
+	}
+	if err := db.CheckSession(id); err != nil {
+		return nil, err
+	}
+	provider := db.setDomainLLM(id, llmCfg)
+	sess, err := db.NewSession(id)
+	if err != nil {
+		return nil, err
+	}
+	ac, err := db.lockAgent(id)
+	if err != nil {
+		return nil, err
+	}
+	defer ac.Mu.Unlock()
+	// Same reason as in SubAgent: a live context caches the transport, and the lock is
+	// what makes that write and every read of it agree.
+	ac.LLM = provider
+	return sess, nil
+}
+
 // CheckSession is the session-eligibility policy: the database must be open
 // and agentID must address a registered tenant or the default domain.
 func (db *DB) CheckSession(agentID uint64) error {

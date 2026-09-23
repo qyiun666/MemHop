@@ -31,6 +31,11 @@ func (db *DB) NewSession(agentID uint64) (*Session, error) {
 	return &Session{db: db, agentID: agentID}, nil
 }
 
+// AgentID reports the domain this handle is bound to, as the library numbers it. DB.Agent
+// takes that number back, so a host that keeps one identifier for a memory has a usable
+// one — no id is ever invented by the host, and none is derived from anything it holds.
+func (s *Session) AgentID() uint64 { return s.agentID }
+
 // ---- scene read / turn write ----
 
 func (s *Session) Search(q SearchQuery) (*SearchResult, error) {

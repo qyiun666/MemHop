@@ -5,7 +5,8 @@
 > only ever import the `api` package.
 
 > This guide describes the surface as it is now: `api.Open` → `api.DB`, domains held
-> as handles from `Primary` / `SubAgent` (no agent id crosses the boundary), no
+> as handles from `Primary` / `SubAgent` / `Agent` (the third takes the id
+> `Session.AgentID` issued for a domain, and a host only ever round-trips it), no
 > capability surface, and no trajectory-session enumeration — a host reads a turn's
 > events with `SearchL4{TopicID, Kind: event}`. The method lists below are the ones
 > `api/surface_public_test.go` pins; `go doc
@@ -23,7 +24,8 @@ host process
  ├─ import only github.com/qyiun666/MemHop/api (never internal/)
  ├─ one .meh file = many agent domains (isolated except the file-wide L3 pool), each reached
  │   through a handle: DB.Primary() for the domain the file was opened on,
- │   DB.SubAgent(llm, profile) for one created under it — no agent id ever crosses this line
+ │   DB.SubAgent(llm, profile) for one created under it, and
+ │   DB.Agent(llm, id) for one addressed by the id Session.AgentID hands out
  └─ external services:
       └─ ONE OpenAI-compatible LLM (turn distillation / Dream consolidation)
       └─ no embedding / vector service
@@ -148,14 +150,20 @@ primary domain's profile:
 | absent | — | given | validated, then the file is created and seeded → succeeds |
 
 - The primary is the implicit zero domain, so a file holds exactly one and nothing has
-  to be scanned to find it. `Primary()` returns its handle; a host never sees an agent
-  id at all.
+  to be scanned to find it. `Primary()` returns its handle, and `AgentID()` on any handle
+  renders the id of the domain it is bound to.
 - `SubAgent(llm, profile)` creates the domain named `profile.Name` the first time and
   returns the same one every time after — the name is the domain's address, frozen at
   creation. `llm` is that domain's own endpoint, so a sub-agent can run on a different
   model. The profile is written only if the domain has none yet, which also finishes
   off a domain left half-created by a crash. `AgentType` is stamped, not taken: a
   domain created this way is a sub-agent.
+- `Agent(llm, agentID)` reaches a domain by the id `Session.AgentID` issued for it: the
+  same handle `SubAgent` returns for its name, re-pointed at `llm`. It creates nothing —
+  an id this file never registered is refused with `ErrAgentNotFound`, so a mistyped or
+  invented id cannot open an empty memory in a real domain's place. A host that wants to
+  keep exactly one identifier per memory keeps this id rather than a name; the primary's
+  own id is the implicit zero one and addresses the primary.
 - Both refusals happen before anything touches the filesystem, so a refused `Open`
   leaves no file behind for the next attempt to trip over.
 - Explicit flush: `lib.Checkpoint()`.
@@ -468,9 +476,9 @@ summary is the one record whose type and role the library fixes — `text`, role
 The 25 session methods split by audience:
 
 - **Runtime/task face (18)** — the host drives these every turn and LLM tools bind to them: `Search` / `AppendArchive` / `Update` / `Dream` (the host-driven loop), `GetL0` / `UpdateL0`, `ListL1`, `ListScenes` / `SceneContext`, `GetL3` / `ListL3` / `ImportL3` / `QueryL3Nodes` / `QueryL3Subgraph`, `SearchL4`, `PlanNodeAdd` / `PlanNodeUpdate` / `PlanState`.
-- **Assembly/admin face (7)** — host code at session boundaries and management channels only, never an LLM tool: `UpdateScene` / `RenameTopic` / `MergeScenes` / `DeleteScene` / `DeleteTopic`, `UpdateL3` / `DeleteL3`.
+- **Assembly/admin face (8)** — host code at session boundaries and management channels only, never an LLM tool: `UpdateScene` / `RenameTopic` / `MergeScenes` / `DeleteScene` / `DeleteTopic`, `UpdateL3` / `DeleteL3`, `AgentID`.
 
-The file-level lifecycle and diagnostics sit on `api.DB` instead (7): `Primary` / `SubAgent`, then `Checkpoint` / `CompactTo` / `Close` / `IsClosed` / `Stats` (file size plus reachable record count across the file — the numbers a compaction decision is made from). There is no capability surface anywhere: the engine neither stores nor parses cards, so a host reads the events of a turn with `SearchL4{Kind: event}` and organizes them itself.
+The file-level lifecycle and diagnostics sit on `api.DB` instead (8): `Primary` / `SubAgent` / `Agent`, then `Checkpoint` / `CompactTo` / `Close` / `IsClosed` / `Stats` (file size plus reachable record count across the file — the numbers a compaction decision is made from). There is no capability surface anywhere: the engine neither stores nor parses cards, so a host reads the events of a turn with `SearchL4{Kind: event}` and organizes them itself.
 
 ### L0 profile
 
@@ -683,7 +691,7 @@ topic id (`SearchL4{TopicID}`, `RenameTopic`, `DeleteTopic`) reject it.
 
 | Kind | Names | Use |
 |---|---|---|
-| entry & handles | **`Open`** → `*DB`, then `DB.Primary()` / `DB.SubAgent(llm, profile)` → `*Session` | the only ways in; an agent domain is held as a handle, never named by an id |
+| entry & handles | **`Open`** → `*DB`, then `DB.Primary()` / `DB.SubAgent(llm, profile)` / `DB.Agent(llm, id)` → `*Session` | three ways in; a domain is a handle, and `Session.AgentID` is the id `DB.Agent` takes back |
 | config | **`LlmConfig`** / `MemHopDefaults` + `DefaultMemHopDefaults` | the endpoint and tuning arguments `Open` takes |
 | input shapes | **`ProfileInput`** / `SearchQuery` / `TurnEnd` / `ScenePatch` / `L3ImportItem` / `L3Relation` / `L3ImportMode` / `L3NodeQuery` / `L4Query` / `PlanStep` / `ArchiveInput` (the L4 write shape; a read returns `ArchiveSlot`) | inputs; `ProfileInput` is the only profile a host may write, and of its four fields only `Name` is required |
 | response DTOs | `ProfileSlot` / `SceneNodeView` / `SceneSlot` / `TopicSlot` / `SceneContext` / `SceneContextTopic` / `SceneMessage` / `SearchResult` / `DreamReport` + `DreamStage` / `HypergraphSlot` / `HypergraphNode` / `HypergraphEdge` / `L3Graph` / `L3Subgraph` / `L3ImportResult` / `PlanTree` / `PlanNodeView` / `DreamReport` / `DreamStage` | every id field is a 16-char hex string, and every one of them was issued by the library |
@@ -855,8 +863,9 @@ func main() {
    hashes from the open turn and its `Seq`, so a retry rewrites it instead of duplicating — and a
    slot the replay stops filling is not reclaimed.
 6. **One file, many agent domains**: all tenants live inside one `.meh` file —
-   `api.Open` settles the domain the file was opened on, and `DB.SubAgent(llm,
-   profile)` creates or returns one under it by name — fully isolated per domain
+   `api.Open` settles the domain the file was opened on, `DB.SubAgent(llm,
+   profile)` creates or returns one under it by name, and `DB.Agent(llm, id)` returns the
+   same domain by the id `Session.AgentID` issued — fully isolated per domain
    except the file-wide L3 pool; legacy files (`FormatVersion < 0x0012`) cannot be
    opened or migrated.
 7. **Content and plans auto-expire**: Dream drops a topic's content past the

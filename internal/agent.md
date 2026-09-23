@@ -128,9 +128,11 @@ internal/{domain,scene,turn,dream,graph,plan,content}
   任何东西。**建文件是带截断的**，所以 `openEngine` 只在
   `errors.Is(err, os.ErrNotExist)` 时才走创建分支，其它 stat 失败一律上报；路径是
   目录时显式拒绝，否则 `core.Open` 会回一句误导的「文件太小放不下双头」。
-- **域身份两个入口**：`Primary()` 返回零号域（一个文件恰好一个主域，无需扫描），
+- **域身份三个入口**：`Primary()` 返回零号域（一个文件恰好一个主域，无需扫描），
   `SubAgent(llm, profile)` 按 `profile.Name` 幂等建/取一个注册域并挂上它自己的
-  LLM 端点。`SubAgent` 的顺序是硬约束：注册（`agentsMu`）→ 挂端点（`agentsMu`）
+  LLM 端点，`Agent(llm, agentID)` 按 `Session.AgentID` 交出的那个 id 取回同一个域——它只走
+  `CheckSession` 的准入（注册表认不出即 `ErrAgentNotFound`，不许顺手建一个空域顶上去），
+  因此既不注册也不写画像，剩下的锁序与 `SubAgent` 那一条相同。`SubAgent` 的顺序是硬约束：注册（`agentsMu`）→ 挂端点（`agentsMu`）
   → 取会话句柄（`CheckSession` 读注册表，`agentsMu`）→ **最后**才 `lockAgent`
   拿域锁，在锁内把这次的端点装到域上下文上、再写画像。反过来就是 `ac.Mu` 之下取
   `agentsMu`，正是本文件域锁纪律第 2 条禁止的那个环。写画像用 ensure 语义（已有就不动），所以注册记录写完、画像没写完

@@ -447,3 +447,46 @@ func TestIdleReclaimRefusesTheDroppedRound(t *testing.T) {
 		t.Fatalf("scene context = %+v, want no topic for a turn that never closed", sc.Topics)
 	}
 }
+
+// The id door has to do the whole job, not just hand back a handle: a host that re-points a
+// domain it is already working with — a sub-agent whose model got changed — by its id
+// expects the live domain to move, the way naming it again does.
+func TestAgentByIDMovesTheLiveDomainToTheNewEndpoint(t *testing.T) {
+	primarySrv, _ := countingLLMServer(t, turnKeywords)
+	firstSrv, firstCalls := countingLLMServer(t, turnKeywords)
+	secondSrv, secondCalls := countingLLMServer(t, turnKeywords)
+
+	defaults := DefaultMemHopDefaults
+	defaults.AgentIdleTTLMs = 0 // never reclaimed: only a replacement can move this domain
+	db, err := OpenDB(filepath.Join(t.TempDir(), "swap-by-id.meh"),
+		LlmConfig{APIURL: primarySrv.URL, APIKey: "test", Model: "mock"},
+		defaults, primaryProfile("primary"))
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+
+	endpoint := func(url string) LlmConfig {
+		return LlmConfig{APIURL: url, APIKey: "test", Model: "mock"}
+	}
+	sub, err := db.SubAgent(endpoint(firstSrv.URL), core.ProfileSlot{Name: "worker"})
+	if err != nil {
+		t.Fatalf("SubAgent: %v", err)
+	}
+	runTurn(t, sub)
+	if got := firstCalls.Load(); got != 1 {
+		t.Fatalf("the first endpoint took %d distillations, want 1", got)
+	}
+
+	if _, err := db.Agent(endpoint(secondSrv.URL), common.FormatHash(sub.AgentID())); err != nil {
+		t.Fatalf("Agent by id: %v", err)
+	}
+	runTurn(t, sub)
+
+	if got := secondCalls.Load(); got != 1 {
+		t.Fatalf("the id door left the live domain on the old endpoint: second took %d, want 1", got)
+	}
+	if got := firstCalls.Load(); got != 1 {
+		t.Fatalf("turns still reach the endpoint the host replaced: %d calls, want only the first turn", got)
+	}
+}
