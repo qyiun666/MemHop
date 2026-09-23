@@ -1,7 +1,7 @@
 # MemHop Host Integration Guide (Go API)
 
 > How to embed MemHop **as a Go module** from your host
-> process. Applies to **v1.6.5**. Module path `github.com/qyiun666/MemHop` — you
+> process. Applies to **v1.6.6**. Module path `github.com/qyiun666/MemHop` — you
 > only ever import the `api` package.
 
 > This guide describes the surface as it is now: `api.Open` → `api.DB`, domains held
@@ -342,7 +342,14 @@ and it is needed only to read this round's own event track while the round is st
 need that: `PlanState` reads the turn the library holds open. An event appended mid-round is
 readable by that id before `Update` closes the turn.
 
-What is left for the host is six facts to know, not six adapters to write:
+What is left for the host is seven facts to know, not seven adapters to write:
+
+- **A recall port turns "no scene yet" into an empty answer.** `SceneContext("")` refuses with
+  `ErrNotFound` on a domain that has never been read — it does not create a scene for a read.
+  That is the library's contract, but a decision-loop kernel reads memory *before* every model
+  call and treats an error from that port as ending the whole invocation, so a first round
+  would kill the agent that has nothing to remember yet. Check that one code and return no
+  records; pass any other error up, where it is a real fault.
 
 - **Closing one turn twice is a replay, not a continuation.** The two dialogue slots hold the
   pair the last close stated, while every ending stays as its own event —
@@ -536,7 +543,8 @@ the library's to remember (`Search` minted it), so a record read back has nowher
 origin when it is appended again. `ArchiveSlot` is the same shape once stored: it carries
 `Kind` (utterance / event), `Seq`, `ContentType`
 (text/image/video/document/audio/code/other), `Role` (`RoleUser` / `RoleAgent` /
-`RoleSystem`; the library's own consolidation role is not a public constant),
+`RoleSystem`, plus `RoleDream` — the mark the library itself puts on a consolidated
+summary, readable and refused on append),
 `TopicID`, `CreatedAt` and `Content` — for media types `Content` is a path or URI,
 not the binary.
 Every query field is optional and the ones you set **AND** together — there are no
@@ -618,7 +626,7 @@ topic id (`SearchL4{TopicID}`, `RenameTopic`, `DeleteTopic`) reject it.
 
 ---
 
-## 9. Exported types (v1.6.5)
+## 9. Exported types (v1.6.6)
 
 | Kind | Names | Use |
 |---|---|---|
@@ -631,7 +639,7 @@ topic id (`SearchL4{TopicID}`, `RenameTopic`, `DeleteTopic`) reject it.
 
 Enum constants are exported too: `L3ImportSkip` / `Merge` / `Overwrite`,
 `EdgeRelated`…`EdgeCustom`, `ContentText`…`ContentOther`, `KindUtterance` /
-`KindEvent`, `RoleUser` / `RoleAgent` / `RoleSystem`,
+`KindEvent`, `RoleUser` / `RoleAgent` / `RoleSystem` / `RoleDream`,
 `PlanStatusInProgress` / `PlanStatusDone` / `PlanStatusFailed`.
 
 Nothing in this list converts an id: there is no `FormatID` / `ParseID` pair and no
@@ -642,10 +650,11 @@ file layout and its activation are the host's own assets.
 
 > A record's kind is `api.KindUtterance` / `api.KindEvent`. L4 `role` is a bare
 > `uint8`, and the three a host may declare on an appended utterance are
-> `api.RoleUser` / `RoleAgent` / `RoleSystem`. The fourth value, 3, is the library's
-> own mark on a consolidated summary: it is deliberately not exported and
-> `AppendArchive` refuses it, so a host cannot write a record that reads as
-> consolidated.
+> `api.RoleUser` / `RoleAgent` / `RoleSystem`. The fourth value, `api.RoleDream`, is the
+> library's own mark on a consolidated summary: naming it is how a host tells that summary
+> apart from a turn's own two lines when it renders a prompt, and `AppendArchive` still
+> refuses it, so a host cannot write a record that reads as consolidated. A name is not a
+> write grant — the boundary is.
 > A plan node's status is only ever a string — the `api.PlanStatus*` constants — since
 > the engine assigns a node's state separately from the events bound to it.
 

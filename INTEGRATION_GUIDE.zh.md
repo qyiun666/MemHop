@@ -1,7 +1,7 @@
 # MemHop 宿主集成指南（Go API 方式）
 
 > 面向直接以 **Go module 内嵌**方式集成 MemHop 的宿主程序。
-> 适用版本：**v1.6.5**。模块路径 `github.com/qyiun666/MemHop`，只允许 import `api` 包。
+> 适用版本：**v1.6.6**。模块路径 `github.com/qyiun666/MemHop`，只允许 import `api` 包。
 
 > 本指南描述的就是当前的面：`api.Open` → `api.DB`，域以句柄持有（`Primary` /
 > `SubAgent`，agent id 不越边界），没有能力面，也没有轮次列举——宿主读某一轮做过的事
@@ -287,8 +287,12 @@ rep, err := db.Dream(ctx, "")       // sceneID 传 "" = 遍历域内全部场景
 召回用 `SceneContext("")`（纯读，不点名、不吃轮次）；终点那一次收束用 `Update`。适配器手里只剩一个会话句柄和内核对「这轮怎么结束的」那个称呼。
 写入调用一个 id 也不收，宿主既不自己造一个、也不替库记着。唯一可能被宿主握住的是 `NewTopicID`——开轮那次读交回来的那个名字，而它只在两件事上需要：这一轮还没收就想读它自己的事件轨（`SearchL4{TopicID, Kind: event}`），或把它撤回（`DeleteTopic`）。计划树连这个都不必：`PlanState` 读的就是库替你开着的那一轮。轮中写进去的一条事件，在 `Update` 收掉这一轮之前就能按那个名字读到。
 
-宿主剩下的只有六条要知道的事实，不是六个要写的适配器：
+宿主剩下的只有七条要知道的事实，不是七个要写的适配器：
 
+- **召回端口要把「还没有场景」翻成一次空答案。** `SceneContext("")` 对一个从没读过的域按契约
+  报 `ErrNotFound`——它不替一次读新建场景。这是库的契约，但决策循环是**每次问模型之前**都读
+  一遍记忆，而端口一报错内核就把整次调用判终止：于是「还没有任何可记的东西」的第一轮反而会
+  打死这只猫。只认这一码，返回空记录；其余错误原样上抛，那里才是真正的故障。
 - **同一轮收两次是重放，不是延续。** 那两个对话槽留下的是最后一次收束说的那一对问答，而每次
   结局各自成为一条事件——`TestTwoClosesOfOneTurnKeepBothEndingsAndTheLastDialogue` 钉住的就是这
   个残留。所以「挂起等输入 → 恢复」的一轮不该在同一轮上收两次束，上面那条对应关系正是为此：
@@ -413,7 +417,7 @@ arcs, err := db.SearchL4(api.L4Query{
 `ArchiveInput` 是写入侧的形状：`Kind`、`Seq`、`ContentType`、`Role`、`EventType`、`NodeSeq`、
 `CreatedAt`、`Content`——没有 `ID` 也没有 `TopicID`。一条记录属于哪一轮由库自持（是 `Search` 铸的
 键），所以把读回的一条原样递回来写时，它没有地方声称自己的出处。存下之后同一个形状叫
-`ArchiveSlot`，它带 `Kind`（原文 / 事件）、`Seq`、`ContentType`（text/image/video/document/audio/code/other）、`Role`（`RoleUser` / `RoleAgent` / `RoleSystem`；库自己那个融合角色不作公开常量）、`TopicID`、`CreatedAt`、`Content`——媒体类型的 `Content` 是路径或 URI，不是二进制。每个查询字段都可选，填了的条件之间是 **AND** 关系——不分「三种模式」。顺序看查询宽度：填了 `TopicID` 按该轮内 `Seq` 升序，跨轮读取按记录自己的 `CreatedAt` 升序、同值以记录 id 收尾，`Limit` 保留该顺序末尾的 N 条。所以宿主最常用的读取各一次就够：`SearchL4(L4Query{TopicID: &topicID, Kind: &utterance})` 拿这一轮说了什么，换成 `&event` 拿做了什么，`Kind` 不填即两种都要；`NodeSeq` 只取归因到某个计划步骤**及其全部子步**的记录（闭包沿父子链接求出——序号是整数，没有前缀形状可匹配；步骤是轮次内的地址，因此必须与 `TopicID` 同填），于是一步做过什么能单独读回，不必先把整轮拉回来。
+`ArchiveSlot`，它带 `Kind`（原文 / 事件）、`Seq`、`ContentType`（text/image/video/document/audio/code/other）、`Role`（`RoleUser` / `RoleAgent` / `RoleSystem`，另加 `RoleDream`——那是库盖在巩固组摘要上的标记，读得到、追加时被拒）、`TopicID`、`CreatedAt`、`Content`——媒体类型的 `Content` 是路径或 URI，不是二进制。每个查询字段都可选，填了的条件之间是 **AND** 关系——不分「三种模式」。顺序看查询宽度：填了 `TopicID` 按该轮内 `Seq` 升序，跨轮读取按记录自己的 `CreatedAt` 升序、同值以记录 id 收尾，`Limit` 保留该顺序末尾的 N 条。所以宿主最常用的读取各一次就够：`SearchL4(L4Query{TopicID: &topicID, Kind: &utterance})` 拿这一轮说了什么，换成 `&event` 拿做了什么，`Kind` 不填即两种都要；`NodeSeq` 只取归因到某个计划步骤**及其全部子步**的记录（闭包沿父子链接求出——序号是整数，没有前缀形状可匹配；步骤是轮次内的地址，因此必须与 `TopicID` 同填），于是一步做过什么能单独读回，不必先把整轮拉回来。
 `L4Query{IDs: []string{id}}` 取代原来的单条 getter（ID 不存在返回空列表，格式不合法返回 `ErrInvalidQuery`）；
 空查询返回该域全部原文——域大了请先加时间范围或 `Limit`，否则这就是文件里的每一条原文。
 
@@ -463,7 +467,7 @@ _, err := db.AppendArchive(api.ArchiveInput{
 
 ---
 
-## 9. 导出类型清单（v1.6.5）
+## 9. 导出类型清单（v1.6.6）
 
 | 类别 | 名字 | 用途 |
 |---|---|---|
@@ -476,7 +480,7 @@ _, err := db.AppendArchive(api.ArchiveInput{
 
 枚举常量同样导出：`L3ImportSkip` / `Merge` / `Overwrite`、`EdgeRelated`…`EdgeCustom`、
 `ContentText`…`ContentOther`、`KindUtterance` / `KindEvent`、`RoleUser` / `RoleAgent` /
-`RoleSystem`、`PlanStatusInProgress` / `PlanStatusDone` / `PlanStatusFailed`。
+`RoleSystem` / `RoleDream`、`PlanStatusInProgress` / `PlanStatusDone` / `PlanStatusFailed`。
 
 这份清单里没有任何换算 id 的东西：没有 `FormatID` / `ParseID`，任何签名里也没有数字
 id——宿主把自己拿到的 hex 字符串原样回传，不自己拼。也没有任何能力类型：卡片形态、
