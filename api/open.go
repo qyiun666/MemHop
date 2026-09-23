@@ -104,6 +104,21 @@ func (d *DB) Agent(llm LlmConfig, agentID string) (*Session, error) {
 	return &Session{s}, nil
 }
 
+// Agents lists every domain the file holds: the primary first, then the registered
+// sub-agents in id order. It is the discovery half of DB.Agent — a host that inherited a
+// file, or lost its own roster, reads this to learn which ids and which names are in it,
+// instead of guessing a name and quietly creating a second domain beside the real one.
+// The list is what the file's registry records say, so a domain whose key cannot be read
+// stops the listing with that cause rather than being left out of a list whose purpose is
+// completeness. The file-wide L3 pool is not a domain and never appears.
+func (d *DB) Agents() ([]AgentInfo, error) {
+	list, err := d.db.Agents()
+	if err != nil {
+		return nil, err
+	}
+	return mapSlice(list, fromAgentInfo), nil
+}
+
 // ---- file-level lifecycle ----
 
 // Checkpoint persists the per-agent index snapshots without closing.

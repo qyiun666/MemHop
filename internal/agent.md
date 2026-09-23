@@ -132,7 +132,9 @@ internal/{domain,scene,turn,dream,graph,plan,content}
   `SubAgent(llm, profile)` 按 `profile.Name` 幂等建/取一个注册域并挂上它自己的
   LLM 端点，`Agent(llm, agentID)` 按 `Session.AgentID` 交出的那个 id 取回同一个域——它只走
   `CheckSession` 的准入（注册表认不出即 `ErrAgentNotFound`，不许顺手建一个空域顶上去），
-  因此既不注册也不写画像，剩下的锁序与 `SubAgent` 那一条相同。域 id 的作用域**是一个文件**：
+  因此既不注册也不写画像，剩下的锁序与 `SubAgent` 那一条相同。`Agents()` 是反向的发现口：读磁盘上的
+  注册记录（不是内存里那份表）列出本文件的所有域，键读不出来就带着那个原因停下——一份更短的列表是一次
+  错答。域 id 的作用域**是一个文件**：
   每个文件的主域都是那个隐式零号域，所以同样的 16 个 0 在另一个文件里指另一份记忆；宿主按
   「一个 agent 一个文件」部署时跨文件的键是路径（`TestAnAgentIDAddressesADomainInsideOneFile`
   两头各钉一条）。`SubAgent` 的顺序是硬约束：注册（`agentsMu`）→ 挂端点（`agentsMu`）

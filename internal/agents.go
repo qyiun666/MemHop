@@ -15,6 +15,7 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -189,6 +190,50 @@ func (db *DB) Agent(llmCfg LlmConfig, agentIDHex string) (*Session, error) {
 	// what makes that write and every read of it agree.
 	ac.LLM = provider
 	return sess, nil
+}
+
+// AgentInfo is one domain of this file as Agents lists it: the id the library issued, the
+// name that keys the domain, and whether it is the primary.
+type AgentInfo struct {
+	AgentID uint64
+	Name    string
+	Primary bool
+}
+
+// Agents lists every domain the file holds — the primary plus the registered sub-agents —
+// in id order, so the same file answers the same way twice (the primary's id is the
+// implicit zero, so it leads the list). A sub-agent's name is the tenant key it was
+// registered under, which is what a host needs to hand it back to SubAgent; the primary's
+// name is its own profile's.
+//
+// The listing reads the registry records rather than the in-memory table, because the
+// registry on disk is what survives a restart and an unreadable key has to stop a list
+// whose whole purpose is completeness — leaving a domain out would tell a host the file
+// holds one fewer memory than it does. The shared file-wide L3 pool is not a domain and
+// never carries a registry record, so it cannot appear here.
+func (db *DB) Agents() ([]AgentInfo, error) {
+	if db.closed.Load() {
+		return nil, common.NewError(common.ErrClosed, "database is closed")
+	}
+	names, unresolved := repo.ListAgentRegistry(db.engine)
+	if unresolved != nil {
+		return nil, unresolved
+	}
+	primary, err := db.GetL0(core.DefaultAgentID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]AgentInfo, 0, len(names)+1)
+	out = append(out, AgentInfo{AgentID: core.DefaultAgentID, Name: primary.Name, Primary: true})
+	ids := make([]uint64, 0, len(names))
+	for id := range names {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	for _, id := range ids {
+		out = append(out, AgentInfo{AgentID: id, Name: names[id]})
+	}
+	return out, nil
 }
 
 // CheckSession is the session-eligibility policy: the database must be open

@@ -286,3 +286,89 @@ func TestADomainIsAddressableByTheIDTheLibraryIssued(t *testing.T) {
 		t.Fatalf("after reopening the id addressed %+v (err %v), want worker's profile", slot, err)
 	}
 }
+
+// The listing is the other half of the id door: a host that inherited a `.meh` or lost its
+// own roster reads DB.Agents to learn which domains the file holds, instead of guessing a
+// name and quietly creating a second domain beside the real one. What it lists must be what
+// it can open, by both keys, and survive a restart.
+func TestAgentsDiscoversEveryDomainInTheFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "roster.meh")
+	llm := LlmConfig{APIURL: "http://127.0.0.1:1", APIKey: "k", Model: "m"}
+
+	db, err := Open(path, llm, DefaultMemHopDefaults, &ProfileInput{Name: "Meow", Role: "assistant"})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	primary, err := db.Primary()
+	if err != nil {
+		t.Fatalf("Primary: %v", err)
+	}
+	handles := map[string]string{}
+	for _, name := range []string{"worker", "helper"} {
+		s, err := db.SubAgent(llm, ProfileInput{Name: name, Role: "helper"})
+		if err != nil {
+			t.Fatalf("SubAgent %s: %v", name, err)
+		}
+		handles[s.AgentID()] = name
+	}
+
+	list, err := db.Agents()
+	if err != nil {
+		t.Fatalf("Agents: %v", err)
+	}
+	if len(list) != 3 {
+		t.Fatalf("Agents listed %d domains (%+v), want primary + two sub-agents", len(list), list)
+	}
+	if !list[0].Primary || list[0].ID != "0000000000000000" || list[0].Name != "Meow" {
+		t.Fatalf("the list does not lead with the primary it was opened on: %+v", list[0])
+	}
+	if primary.AgentID() != list[0].ID {
+		t.Fatalf("Primary reports %q while the list says %q", primary.AgentID(), list[0].ID)
+	}
+	for i := 1; i < len(list); i++ {
+		if list[i].Primary || list[i-1].ID >= list[i].ID {
+			t.Fatalf("the sub-agents are not id-ascending and unflagged: %+v", list)
+		}
+		if got, ok := handles[list[i].ID]; !ok || got != list[i].Name {
+			t.Fatalf("Agents names %s/%s, want it to match the domain that got %q",
+				list[i].ID, list[i].Name, got)
+		}
+	}
+
+	// Everything listed is openable, and opens onto the domain the name belongs to.
+	for _, entry := range list {
+		reopened, err := db.Agent(llm, entry.ID)
+		if err != nil {
+			t.Fatalf("Agent(%s): %v", entry.ID, err)
+		}
+		slot, err := reopened.GetL0()
+		if err != nil {
+			t.Fatalf("GetL0(%s): %v", entry.ID, err)
+		}
+		if slot.Name != entry.Name || reopened.AgentID() != entry.ID {
+			t.Fatalf("id %s opened %q, want the domain Agents named %q", entry.ID, slot.Name, entry.Name)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	after, err := Open(path, llm, DefaultMemHopDefaults, nil)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	t.Cleanup(func() { _ = after.Close() })
+	list2, err := after.Agents()
+	if err != nil {
+		t.Fatalf("Agents after reopening: %v", err)
+	}
+	if len(list2) != len(list) {
+		t.Fatalf("the roster changed across restart: %d then %d", len(list), len(list2))
+	}
+	for i := range list {
+		if list2[i] != list[i] {
+			t.Fatalf("entry %d changed across restart: %+v then %+v", i, list[i], list2[i])
+		}
+	}
+}

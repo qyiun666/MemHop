@@ -24,8 +24,9 @@ func openPrimaryTestDB(t *testing.T, path string) *DB {
 
 // A name is a domain's address, so it resolves to the same domain after a
 // restart — the mapping is rebuilt from the on-file registry records — and two
-// names never land in one place. Ids no longer cross the boundary, so sameness is
-// shown by what the domain holds.
+// names never land in one place. Sameness is shown by what the domain holds; the
+// id a domain answers to is published too (Session.AgentID / DB.Agent), but a name
+// is what survives a lost roster.
 func TestSubAgentNameResolvesToTheSameDomainAcrossRestart(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "registry.meh")
 	llm := testLLMConfig()
@@ -122,5 +123,37 @@ func TestAgentDomainIsolation(t *testing.T) {
 	}
 	if eb[0].Seq != core.LastUtteranceSeq+1 || eb[1].Seq != core.LastUtteranceSeq+2 {
 		t.Errorf("b Seq allocation leaked across domains: %d %d", eb[0].Seq, eb[1].Seq)
+	}
+}
+
+// Agents lists what the file holds, and the listing reads the registry rather than a
+// cache — so a tenant key that exists but resolves to no name has to stop it. Leaving
+// that domain out would tell a host the file holds one fewer memory than it does, and
+// the whole purpose of the list is to be the complete answer.
+func TestAgentsStopsOnAKeyThatResolvesToNoName(t *testing.T) {
+	db := openPrimaryTestDB(t, filepath.Join(t.TempDir(), "agents.meh"))
+	t.Cleanup(func() { _ = db.Close() })
+
+	worker, err := db.SubAgent(testLLMConfig(), core.ProfileSlot{Name: "worker"})
+	if err != nil {
+		t.Fatalf("SubAgent: %v", err)
+	}
+	list, err := db.Agents()
+	if err != nil {
+		t.Fatalf("Agents: %v", err)
+	}
+	if len(list) != 2 || !list[0].Primary || list[0].AgentID != core.DefaultAgentID ||
+		list[1].AgentID != worker.agentID || list[1].Name != "worker" {
+		t.Fatalf("Agents listed %+v, want the primary first and worker after it", list)
+	}
+
+	// The domain still holds its record; only its name is unreadable now.
+	if _, err := db.engine.WriteRecord(worker.agentID, core.RecAgentRegistry, worker.agentID,
+		[]byte(`{"name"`)); err != nil {
+		t.Fatalf("rot the tenant key: %v", err)
+	}
+	_, err = db.Agents()
+	if err == nil {
+		t.Fatal("a tenant key that resolves to no name must stop the listing, not be left out")
 	}
 }

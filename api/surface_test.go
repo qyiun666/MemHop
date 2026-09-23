@@ -81,12 +81,20 @@ func openSurfaceSession(t *testing.T, llmURL string) (*DB, *Session) {
 // DB is closed via t.Cleanup so the TempDir .meh file is released before removal
 // (Windows unlink fails on open handles).
 func openSurfaceDB(t *testing.T) *Session {
+	_, sess, _ := openSurfaceLibrary(t)
+	return sess
+}
+
+// openSurfaceLibrary is openSurfaceDB for the checks that need the file handle or the stub
+// endpoint too — the domain listing lives on DB, not on a Session, and a sub-agent is
+// created by an endpoint of its own.
+func openSurfaceLibrary(t *testing.T) (*DB, *Session, string) {
 	t.Helper()
 	llm := stubLLM()
 	t.Cleanup(llm.Close)
 	m, sess := openSurfaceSession(t, llm.URL)
 	t.Cleanup(func() { _ = m.Close() })
-	return sess
+	return m, sess, llm.URL
 }
 
 // isHexID reports whether s is a canonical 16-char lowercase hex id.

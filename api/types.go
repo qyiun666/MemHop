@@ -277,6 +277,16 @@ type SearchResult struct {
 	NewTopicID   string      `json:"new_topic_id"`
 }
 
+// AgentInfo is one agent domain of the file as DB.Agents lists it. ID is the same 16-hex
+// domain id Session.AgentID reports (an id names a domain inside this file, not across
+// files); Name is the key that domain is addressed by — the tenant key for a sub-agent,
+// the profile's own name for the primary; Primary marks the domain the file was opened on.
+type AgentInfo struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Primary bool   `json:"primary"`
+}
+
 // HypergraphSlot is one L3 graph's container metadata. UpdatedAt is the graph's change
 // clock: an import that writes a node or an edge here moves it, as does a rename, while
 // a batch that changed nothing leaves it where it was — and so does every read, however

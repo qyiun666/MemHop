@@ -119,6 +119,10 @@ func fromSearchResult(r *internal.SearchResult) *SearchResult {
 	}
 }
 
+func fromAgentInfo(a internal.AgentInfo) AgentInfo {
+	return AgentInfo{ID: formatID(a.AgentID), Name: a.Name, Primary: a.Primary}
+}
+
 func fromHypergraphSlot(s internal.HypergraphSlot) HypergraphSlot {
 	return HypergraphSlot{
 		ID:        formatID(s.IDHash),

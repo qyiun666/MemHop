@@ -143,6 +143,9 @@ worker, err := lib.SubAgent(workerLLM, api.ProfileInput{Name: "worker"}) // 按�
 - **id 的作用域是一个文件。** 每个文件都有自己的主域，而每个主域都是那个零号域，所以同样 16 个 0
   在另一个 `.meh` 里指的是另一份记忆。按「一个 agent 一个文件」部署的宿主，跨文件的键是路径（顶多
   再加 id）；只拿 id 建全局表会把两个 agent 的记忆叠在一起。
+- `Agents()` 是这条规则的反向口：列出本文件的每一个域（id、名字、是否主域），按 id 升序，所以拿到一个别人
+  建好的文件、或自家名册丢了，都能问出里面有什么，而不是去猜名字——猜错就等于在真域旁边建出第二个空域。
+  某条租户键读不出来时整个列表带着那个原因停下：交回一份更短的列表是一次错答。
 - 两条拒绝都发生在碰文件系统之前，所以被拒的 `Open` 不在宿主的路径上留文件让下一次尝试
   走错分支。
 - 中途主动落盘：`lib.Checkpoint()`。
@@ -364,7 +367,7 @@ worker 属于哪一种由宿主定，库不替它猜。
 - **任务面（18 个）**——宿主每轮驱动、LLM 工具绑定的方法：`Search` / `AppendArchive` / `Update` / `Dream`（宿主自动循环）、`GetL0` / `UpdateL0`、`ListL1`、`ListScenes` / `SceneContext`、`GetL3` / `ListL3` / `ImportL3` / `QueryL3Nodes` / `QueryL3Subgraph`、`SearchL4`、`PlanNodeAdd` / `PlanNodeUpdate` / `PlanState`。
 - **组装/管理面（8 个）**——宿主代码在会话边界与管理通道调用，**不做成 LLM 工具**：`UpdateScene` / `RenameTopic` / `MergeScenes` / `DeleteScene` / `DeleteTopic`、`UpdateL3` / `DeleteL3`、`AgentID`。
 
-文件级生命周期与诊断在 `api.DB` 上（8 个）：`Primary` / `SubAgent` / `Agent`，加 `Checkpoint` / `CompactTo` / `Close` / `IsClosed` / `Stats`（文件字节数 + 全文件可达记录数，压缩决策的数据来源）。整个面上没有任何能力相关的方法：引擎不存卡、不解析卡，宿主读某一轮做过的事就用 `SearchL4{Kind: event}`，之后怎么组织是它自己的事。
+文件级生命周期与诊断在 `api.DB` 上（9 个）：`Primary` / `SubAgent` / `Agent` / `Agents`，加 `Checkpoint` / `CompactTo` / `Close` / `IsClosed` / `Stats`（文件字节数 + 全文件可达记录数，压缩决策的数据来源）。整个面上没有任何能力相关的方法：引擎不存卡、不解析卡，宿主读某一轮做过的事就用 `SearchL4{Kind: event}`，之后怎么组织是它自己的事。
 
 ### L0 画像
 
@@ -501,7 +504,7 @@ _, err := db.AppendArchive(api.ArchiveInput{
 | 入口与句柄 | **`Open`** → `*DB`，再由 `DB.Primary()` / `DB.SubAgent(llm, profile)` / `DB.Agent(llm, id)` → `*Session` | 三条进来路；域是握在手里的句柄，而 `Session.AgentID` 交出的就是 `DB.Agent` 收的那个 id |
 | 配置 | **`LlmConfig`** / `MemHopDefaults` + `DefaultMemHopDefaults` | `Open` 要的端点与调参入参 |
 | 入参形状 | **`ProfileInput`** / `SearchQuery` / `TurnEnd` / `ScenePatch` / `L3ImportItem` / `L3Relation` / `L3ImportMode` / `L3NodeQuery` / `L4Query` / `PlanStep` / `ArchiveInput`（L4 的写形状；读回是 `ArchiveSlot`） | 宿主唯一能写的画像形状就是 `ProfileInput`，它四项里只有 `Name` 必填 |
-| 响应 DTO | `ProfileSlot` / `SceneNodeView` / `SceneSlot` / `TopicSlot` / `SceneContext` / `SceneContextTopic` / `SceneMessage` / `SearchResult` / `DreamReport` + `DreamStage` / `HypergraphSlot` / `HypergraphNode` / `HypergraphEdge` / `L3Graph` / `L3Subgraph` / `L3ImportResult` / `PlanTree` / `PlanNodeView` / `DreamReport` / `DreamStage` | 每个 id 字段都是 16 位 hex 字符串，且每一个都由库发号 |
+| 响应 DTO | `AgentInfo` / `ProfileSlot` / `SceneNodeView` / `SceneSlot` / `TopicSlot` / `SceneContext` / `SceneContextTopic` / `SceneMessage` / `SearchResult` / `DreamReport` + `DreamStage` / `HypergraphSlot` / `HypergraphNode` / `HypergraphEdge` / `L3Graph` / `L3Subgraph` / `L3ImportResult` / `PlanTree` / `PlanNodeView` / `DreamReport` / `DreamStage` | 每个 id 字段都是 16 位 hex 字符串，且每一个都由库发号 |
 | 枚举 | `GraphEdgeKind` / `ContentType` / `ArchiveKind` / `PlanStatus` / `AgentTypePrimary` + `AgentTypeSub` | 一次调用写在里面的词汇 |
 | 文件诊断 | **`DBStats`**（`FileBytes` / `RecordCount`） | `DB.Stats()` 的答复，也是决定要不要 `CompactTo` 的那一对数：两者的差就是压缩能还回来的字节 |
 | 错误 | `Code` + 各 `Err*` 常量，用 `CodeOf(err)` 取回数字码 | 错误串背后的那一层分类 |

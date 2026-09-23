@@ -88,10 +88,11 @@ func TestSessionPublicSurface(t *testing.T) {
 
 func TestDBPublicSurface(t *testing.T) {
 	// Three ways in — the domain the file was opened on, one created under it by
-	// name, and one addressed by the id the library handed out — plus the file-level
-	// lifecycle and the file-level diagnostics. No LLM tool binds here.
+	// name, and one addressed by the id the library handed out — plus the discovery of
+	// what is in the file, the file-level lifecycle and the file-level diagnostics. No
+	// LLM tool binds here.
 	want := []string{
-		"Primary", "SubAgent", "Agent",
+		"Primary", "SubAgent", "Agent", "Agents",
 		"Checkpoint", "CompactTo", "Close", "IsClosed", "Stats",
 	}
 	sort.Strings(want)

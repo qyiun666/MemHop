@@ -168,6 +168,11 @@ primary domain's profile:
   zero domain, so the same 16 zeros name different memories in different `.meh` files. A
   host that deploys one file per agent keys across files by the path (path plus id at most);
   a map keyed on id alone would fold two agents' memories together.
+- `Agents()` is that rule read the other way: it lists every domain in the file — id, name, and
+  whether it is the primary — in id order, so a host that inherited a file or lost its own
+  roster can discover what is in it rather than guess a name (and thereby create a second
+  domain beside the real one). A tenant key that cannot be read stops the listing with that
+  cause; a shorter list would be a wrong answer.
 - Both refusals happen before anything touches the filesystem, so a refused `Open`
   leaves no file behind for the next attempt to trip over.
 - Explicit flush: `lib.Checkpoint()`.
@@ -482,7 +487,7 @@ The 26 session methods split by audience:
 - **Runtime/task face (18)** — the host drives these every turn and LLM tools bind to them: `Search` / `AppendArchive` / `Update` / `Dream` (the host-driven loop), `GetL0` / `UpdateL0`, `ListL1`, `ListScenes` / `SceneContext`, `GetL3` / `ListL3` / `ImportL3` / `QueryL3Nodes` / `QueryL3Subgraph`, `SearchL4`, `PlanNodeAdd` / `PlanNodeUpdate` / `PlanState`.
 - **Assembly/admin face (8)** — host code at session boundaries and management channels only, never an LLM tool: `UpdateScene` / `RenameTopic` / `MergeScenes` / `DeleteScene` / `DeleteTopic`, `UpdateL3` / `DeleteL3`, `AgentID`.
 
-The file-level lifecycle and diagnostics sit on `api.DB` instead (8): `Primary` / `SubAgent` / `Agent`, then `Checkpoint` / `CompactTo` / `Close` / `IsClosed` / `Stats` (file size plus reachable record count across the file — the numbers a compaction decision is made from). There is no capability surface anywhere: the engine neither stores nor parses cards, so a host reads the events of a turn with `SearchL4{Kind: event}` and organizes them itself.
+The file-level lifecycle and diagnostics sit on `api.DB` instead (9): `Primary` / `SubAgent` / `Agent` / `Agents`, then `Checkpoint` / `CompactTo` / `Close` / `IsClosed` / `Stats` (file size plus reachable record count across the file — the numbers a compaction decision is made from). There is no capability surface anywhere: the engine neither stores nor parses cards, so a host reads the events of a turn with `SearchL4{Kind: event}` and organizes them itself.
 
 ### L0 profile
 
@@ -698,7 +703,7 @@ topic id (`SearchL4{TopicID}`, `RenameTopic`, `DeleteTopic`) reject it.
 | entry & handles | **`Open`** → `*DB`, then `DB.Primary()` / `DB.SubAgent(llm, profile)` / `DB.Agent(llm, id)` → `*Session` | three ways in; a domain is a handle, and `Session.AgentID` is the id `DB.Agent` takes back |
 | config | **`LlmConfig`** / `MemHopDefaults` + `DefaultMemHopDefaults` | the endpoint and tuning arguments `Open` takes |
 | input shapes | **`ProfileInput`** / `SearchQuery` / `TurnEnd` / `ScenePatch` / `L3ImportItem` / `L3Relation` / `L3ImportMode` / `L3NodeQuery` / `L4Query` / `PlanStep` / `ArchiveInput` (the L4 write shape; a read returns `ArchiveSlot`) | inputs; `ProfileInput` is the only profile a host may write, and of its four fields only `Name` is required |
-| response DTOs | `ProfileSlot` / `SceneNodeView` / `SceneSlot` / `TopicSlot` / `SceneContext` / `SceneContextTopic` / `SceneMessage` / `SearchResult` / `DreamReport` + `DreamStage` / `HypergraphSlot` / `HypergraphNode` / `HypergraphEdge` / `L3Graph` / `L3Subgraph` / `L3ImportResult` / `PlanTree` / `PlanNodeView` / `DreamReport` / `DreamStage` | every id field is a 16-char hex string, and every one of them was issued by the library |
+| response DTOs | `AgentInfo` / `ProfileSlot` / `SceneNodeView` / `SceneSlot` / `TopicSlot` / `SceneContext` / `SceneContextTopic` / `SceneMessage` / `SearchResult` / `DreamReport` + `DreamStage` / `HypergraphSlot` / `HypergraphNode` / `HypergraphEdge` / `L3Graph` / `L3Subgraph` / `L3ImportResult` / `PlanTree` / `PlanNodeView` / `DreamReport` / `DreamStage` | every id field is a 16-char hex string, and every one of them was issued by the library |
 | enums | `GraphEdgeKind` / `ContentType` / `ArchiveKind` / `PlanStatus` / `AgentTypePrimary` + `AgentTypeSub` | the vocabulary a call is written in |
 | file diagnostics | **`DBStats`** (`FileBytes` / `RecordCount`) | what `DB.Stats()` answers, and the pair a `CompactTo` decision is made from: the gap between the two is what compaction gives back |
 | errors | `Code` + the `Err*` constants, read with `CodeOf(err)` | the numeric code behind an error string |

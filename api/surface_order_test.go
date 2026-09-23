@@ -15,7 +15,15 @@ import (
 // map iteration is randomized per process, so a list assembled by ranging a map fails this
 // the way it fails a host.
 func TestSurfaceReadOrderIsDeterministic(t *testing.T) {
-	sess := openSurfaceDB(t)
+	m, sess, stubURL := openSurfaceLibrary(t)
+
+	// Two sub-domains, so the file's own domain listing has something to order beyond
+	// its single primary. Each gets its own id from the registry.
+	for _, name := range []string{"worker", "helper", "archivist"} {
+		if _, err := m.SubAgent(surfaceLLM(stubURL), ProfileInput{Name: name, Role: "sub"}); err != nil {
+			t.Fatalf("SubAgent %s: %v", name, err)
+		}
+	}
 
 	// Two graphs, so a listing of graphs has something to order as well. Each domain is
 	// imported by its own batch, because that is how the batch reports the graph it
@@ -101,6 +109,7 @@ func TestSurfaceReadOrderIsDeterministic(t *testing.T) {
 		"SearchL4/kind":      func() any { return mustRead(sess.SearchL4(L4Query{Kind: &kind})) },
 		"SceneContext":       func() any { return mustRead(sess.SceneContext("")) },
 		"SceneContext/other": func() any { return mustRead(sess.SceneContext(scenes[1].SceneID)) },
+		"Agents":             func() any { return mustRead(m.Agents()) },
 	}
 	// Eight rounds, because a map with two or three keys can walk in the same order twice
 	// by luck.
