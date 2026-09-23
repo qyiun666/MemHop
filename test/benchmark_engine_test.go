@@ -88,6 +88,19 @@ func seedEngineBenchAt(b testing.TB, path, url string, scenes, turns int) *engin
 			e.round(b, t == 0)
 		}
 	}
+	// The shape every number below is labelled with. Printed, not assumed: the first run of
+	// these benches claimed three scenes and settled 120 rounds into one, because an unnamed
+	// Search continues the session the domain is already on rather than opening a new one.
+	sc, err := e.sess.SceneContext("")
+	if err != nil {
+		b.Fatalf("corpus shape: %v", err)
+	}
+	listed, err := e.sess.ListScenes("")
+	if err != nil {
+		b.Fatalf("corpus scenes: %v", err)
+	}
+	b.Logf("corpus: %d scenes, %d rows on the scene a read of this domain addresses",
+		len(listed), len(sc.Topics))
 	return e
 }
 
