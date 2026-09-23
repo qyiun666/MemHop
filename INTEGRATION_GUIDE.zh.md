@@ -491,6 +491,15 @@ _, err := db.AppendArchive(api.ArchiveInput{
 
 状态只有三个值，各一种字符串写法：`api.PlanStatusInProgress`（`in_progress`）、`api.PlanStatusDone`（`done`）、`api.PlanStatusFailed`（`failed`）。引擎不保留「已计划、未开始」这一态——一步存在是因为宿主建了它，而它一存在就在进行中。
 
+**一份 plan 上下文的实测代价。** 把一轮的整个计划送进 prompt 只需两次读：`PlanState()` 拿树，
+再一次 `SearchL4{TopicID, Kind: &event}` 拿绑步骤的事件（每行的 `NodeSeq` 就是归因）。对离线桩
+端点在 Apple M2 上实测（`go test ./test/ -bench BenchmarkEngine -benchtime=100x`）：这一对约
+**97–99 µs**，一棵 21 步、每步一条事件的树，一次答案是 **8 268 字节** JSON——每步约 0.4 KB，算的是
+传输格式，不是宿主渲染成 prompt 的那份文本。引擎不做任何截断：`PlanState` 交出整片森林，它唯一
+会做的压缩是语义上的——一个 done 父节点的摘要在其**直接子全部到达终态**后折上来，一步的取值范围是
+它自己加整棵子树。所以 token 预算仍归宿主，和召回那条路一样；在被证明需要之前，不会加一条按预算
+裁剪的读口。
+
 计划的写读面在任务面那 18 个方法里——树种在 `Search` 为这个域开着的这一轮上，所以这些调用不点名话题 id。
 
 全零键 `0000000000000000` 是保留值（记录未赋键时的值）：`Search` 绝不会在它上面开轮，而仍收话题 id 的读/纠错口（`SearchL4{TopicID}`、`RenameTopic`、`DeleteTopic`）一律拒绝它。

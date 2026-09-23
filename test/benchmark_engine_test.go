@@ -15,6 +15,7 @@ package test
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
 	"testing"
 	"time"
@@ -274,4 +275,96 @@ func BenchmarkEngineDreamPass(b *testing.B) {
 		}
 	}
 	b.StartTimer()
+}
+
+// BenchmarkEnginePlanContext measures the read a host makes to put the plan into its prompt:
+// the turn's tree, plus the events that say what each step actually did. The corpus is the
+// shape a host that follows "every step carries at least one trajectory" ends up with — a
+// root, five children, three leaves under each, and one step-bound event per step — and the
+// reported bytes are what a single answer carries, which is the number a host needs when
+// prompt budget is what it is deciding about.
+func BenchmarkEnginePlanContext(b *testing.B) {
+	url := newMockLLM(b).srv.URL
+	e := seedEngineBench(b, url, 1, 3)
+	defer e.db.Close()
+	res, err := e.sess.Search(memhop.SearchQuery{})
+	if err != nil {
+		b.Fatalf("open a turn: %v", err)
+	}
+	topic := res.NewTopicID
+
+	seedTree := func() int {
+		root, err := e.sess.PlanNodeAdd(0, "ship the retry policy")
+		if err != nil {
+			b.Fatalf("PlanNodeAdd root: %v", err)
+		}
+		count := 1
+		for c := 0; c < 5; c++ {
+			child, err := e.sess.PlanNodeAdd(root, "verify the fallback")
+			if err != nil {
+				b.Fatalf("PlanNodeAdd child: %v", err)
+			}
+			count++
+			for l := 0; l < 3; l++ {
+				if _, err := e.sess.PlanNodeAdd(child, "add the covering test"); err != nil {
+					b.Fatalf("PlanNodeAdd leaf: %v", err)
+				}
+				count++
+			}
+		}
+		return count
+	}
+	steps := seedTree()
+
+	tree, err := e.sess.PlanState()
+	if err != nil {
+		b.Fatalf("PlanState: %v", err)
+	}
+	var walk func(nodes []memhop.PlanNodeView)
+	walk = func(nodes []memhop.PlanNodeView) {
+		for _, n := range nodes {
+			e.stamp++
+			if _, err := e.sess.AppendArchive(memhop.ArchiveInput{
+				Kind: memhop.KindEvent, ContentType: memhop.ContentText,
+				EventType: "tool_call", NodeSeq: n.Seq,
+				CreatedAt: e.stamp, Content: "ran the step and recorded its output",
+			}); err != nil {
+				b.Fatalf("AppendArchive: %v", err)
+			}
+			walk(n.Children)
+		}
+	}
+	walk(tree.Roots)
+
+	// The guard the corpus needs: 21 steps (a root, five children, fifteen leaves), each with an
+	// event of its own. An empty tree would time a read of nothing and report it as cheap.
+	kind := memhop.KindEvent
+	events, err := e.sess.SearchL4(memhop.L4Query{TopicID: &topic, Kind: &kind})
+	if err != nil {
+		b.Fatalf("SearchL4 events: %v", err)
+	}
+	if steps != 21 || tree.TotalCount != 21 || len(events) != 21 {
+		b.Fatalf("the plan corpus is %d steps created, %d in the tree read, %d step-bound events, "+
+			"want 21/21/21", steps, tree.TotalCount, len(events))
+	}
+	raw, err := json.Marshal([]any{tree, events})
+	if err != nil {
+		b.Fatalf("size of one answer: %v", err)
+	}
+	b.Logf("one plan-context answer: %d bytes for %d steps and %d events", len(raw), tree.TotalCount, len(events))
+	b.SetBytes(int64(len(raw)))
+
+	b.ResetTimer()
+	for b.Loop() {
+		read, err := e.sess.PlanState()
+		if err != nil {
+			b.Fatalf("PlanState: %v", err)
+		}
+		if read.TotalCount != 21 {
+			b.Fatalf("the tree read back %d steps, want 21", read.TotalCount)
+		}
+		if _, err := e.sess.SearchL4(memhop.L4Query{TopicID: &topic, Kind: &kind}); err != nil {
+			b.Fatalf("SearchL4: %v", err)
+		}
+	}
 }

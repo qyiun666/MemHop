@@ -687,6 +687,18 @@ Status has three values and one string encoding each: `api.PlanStatusInProgress`
 engine keeps no "planned but not started" state — a step exists because the host created
 it, and it exists in progress.
 
+**What one plan context costs, measured.** Two reads carry a turn's whole plan into a
+prompt: `PlanState()` for the tree, and one `SearchL4{TopicID, Kind: &event}` for the
+step-bound events (`NodeSeq` on each row is the attribution). Against the offline stub on an
+Apple M2 (`go test ./test/ -bench BenchmarkEngine -benchtime=100x`), that pair is
+**≈97–99 µs**, and one answer for a 21-step tree with an event per step is **8 268 bytes** of
+JSON — about 0.4 KB per step, counted on the wire format, not on the text a host renders from
+it. The engine truncates nothing: `PlanState` returns the whole forest, and the only
+compression it performs is the semantic one — a parent's summary folding once all of its
+direct children reach a terminal status, and a step reading as itself plus its subtree. The
+token budget therefore stays the host's, exactly as on the recall path, and a budget-shaped
+read is not added before a host is shown needing one.
+
 The plan write surface sits on `api.Session`'s 18 task-face methods: a tree is built on
 the turn `Search` opened for the domain, so these calls name no topic id.
 
