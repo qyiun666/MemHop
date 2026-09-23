@@ -428,10 +428,13 @@ func TestConsolidateSceneThreshold(t *testing.T) {
 		}
 	})
 
-	t.Run("zero threshold disables the trigger", func(t *testing.T) {
+	// The off spelling is a negative: a host that fills in 0 asked for nothing, so
+	// normalization hands it the library default before this reader ever sees the number
+	// (TestOpenTakesUnfilledDefaultsAsTheLibraryDefaults pins that boundary).
+	t.Run("a negative threshold disables the trigger", func(t *testing.T) {
 		srv := mockLLMServer(t, turnKeywords)
 		db := newSearchTestDB(t, srv.URL)
-		db.config.Defaults.SceneDreamTopicThreshold = 0
+		db.config.Defaults.SceneDreamTopicThreshold = -1
 		ac := testDefaultContext(db)
 		const sceneID = uint64(9)
 		mustWriteScene(t, db.engine, core.DefaultAgentID, sceneID, "s")
@@ -441,7 +444,7 @@ func TestConsolidateSceneThreshold(t *testing.T) {
 		}
 		db.consolidateScene(ac, sceneID)
 		if len(ac.DreamInFlight) != 0 {
-			t.Fatalf("threshold 0 must never trigger, got %v", ac.DreamInFlight)
+			t.Fatalf("an off threshold must never trigger, got %v", ac.DreamInFlight)
 		}
 	})
 }
