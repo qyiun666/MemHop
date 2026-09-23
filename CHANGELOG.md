@@ -12,7 +12,7 @@ README 的版本表与 git log。
 5. **自持字段与删除/合并同步**：`DeleteScene` 与 `DeleteTopic` 摘掉指向被删记录的那一半，`MergeScenes` 把被吞场景的轮次清空（轮次 id 由场景派生，跨合并活不下来），所以一个已毁的轮不可能被下一次 `Update` 继续写。一轮的键若真撞上保留的全零值，`Search` 直接报损坏而不是收下：那个值同时是「没有开着轮」的哨兵，静默收下等于让宿主写到别人的轮上。
 6. **宿主的 hex id 只在一处跨界**：渲染走 `internal.FormatID`，解析走 `internal.parseID`（它命名自己读的是哪个字段），根的大方法把 hex 换成 uint64 之后才往下传，第 3 层以下不再收 id 字符串。公开面维持 `Session` 25 + `DB` 7；`TestTurnWritesCarryNoId` 与 `TestPublicSignaturesCarryNoNumericIds` 钉住「形状里没有宿主该持有的键」。
 7. **时间单位在写边界判**：`AppendArchive` 与 `TurnEnd` 的毫秒保留窗拒掉秒级（1e9–1e11）与微秒级（>1e14）两段值（两条边界各一条用例：`TestAppendArchiveRefusesATimestampInTheWrongUnit`、`TestUpdateRefusesATimestampInTheWrongUnit`，后者另钉住「拒在 LLM 之前、零留痕、这一轮仍开着」）——保留窗按毫秒算 cutoff，一个秒级值写进去既会被下一次 Dream 当成过期扫掉，又永远命不中时间过滤。这条是跨仓端到端集成实测撞出来的：三仓同为毫秒之后，宿主侧不再有任何一次单位换算。
-8. **磁盘格式 `0x0012` 不变**：自持的两个字段不落新记录也不加新键，轮次计数器就是场景记录上原本就有的 `turn_seq`，旧文件照常打开。测试脚手架顺带收形：7 个 mock LLM server 的同一套骨架收成三处；本轮语义由离线接口面 `TestInterface*` 逐条钉住（不花额度），另有 `TestSecondLibraryOpenedMidRound` 与 `TestEachDomainHoldsItsOwnTurn` 钉住「中途再开一个库也不串、各域各持自己那一轮」。
+8. **磁盘格式 `0x0012` 不变**：自持的两个字段不落新记录也不加新键，轮次计数器就是场景记录上原本就有的 `turn_seq`，旧文件照常打开。测试脚手架顺带收形：7 个 mock LLM server 的同一套骨架收成三处；本轮语义由离线接口面 `TestInterface*` 逐条钉住（不花额度），另有 `TestSecondLibraryOpenedMidRound` 与 `TestEachDomainHoldsItsOwnTurn` 钉住「中途再开一个库也不串、各域各持自己那一轮」，`TestDreamLeavesTheOpenTurnCloseable` 钉住「定时巩固撞在开着的那一轮上：既不掉那一轮，也不扫掉它已写的记录」。
 
 ## v1.6.5 — 2026-09-22 — MCP 面整体退役：对外只剩 Go module
 

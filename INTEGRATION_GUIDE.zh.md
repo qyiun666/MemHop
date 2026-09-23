@@ -271,7 +271,7 @@ rep, err := db.Dream(ctx, "")       // sceneID 传 "" = 遍历域内全部场景
 | 跑它的各个分支（模型调用、工具调用、沙箱答复） | 值得留下的每一条事实一次 `AppendArchive`，写进开着的那一轮 |
 | 带一个状态词结束这一轮 | `Update(TurnEnd{Input, Output, Outcome, CreatedAt})` |
 | 一步一步计划这一轮 | `PlanNodeAdd` / `PlanNodeUpdate` / `PlanState`，全在开着的那一轮上 |
-| 睡觉 | `Dream` |
+| 睡觉（定时器也可能撞在轮还开着的时候） | `Dream`——它既不弄丢域自持着的那一轮，也不扫掉那一轮已经写下的记录 |
 
 `Outcome` 收的是内核对「哪条分支结束了这一轮」的自称：引擎原样存下、绝不按它分支——与一条
 事件的 `EventType` 同一个姿态。所以词表不强加给内核，进来这一趟也没有翻译。

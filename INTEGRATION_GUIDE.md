@@ -316,7 +316,7 @@ bookkeeping of its own:
 | runs its arms (model call, tool call, sandbox answer) | one `AppendArchive` per fact worth keeping, on the turn now open |
 | ends the round with a status word | `Update(TurnEnd{Input, Output, Outcome, CreatedAt})` |
 | plans the round step by step | `PlanNodeAdd` / `PlanNodeUpdate` / `PlanState`, all on the open turn |
-| sleeps | `Dream` |
+| sleeps (a timer may fire mid-round) | `Dream` — it neither drops the turn the domain holds open nor sweeps what that turn has already written |
 
 `Outcome` takes the kernel's own word for which arm ended the round: the engine stores it
 verbatim and never branches on it, the same posture an event's `EventType` has. So no
