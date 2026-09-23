@@ -565,6 +565,18 @@ members + kind). Unresolvable / self / invalid-kind entries land in `Errors`.
 public call renders that derivation, so `ImportL3` reports it directly —
 `SearchQuery.L3ID` / `UpdateScene` need that id.
 
+**Copying a graph into another file.** The pool is per file, so a worker that opens its own
+`.meh` starts with no project knowledge, and the copy is all public surface: `GetL3` hands back
+the nodes (with their titles) and the hyperedges (as member ids), so a host writes one
+`L3ImportItem` per node and hangs each edge under its lowest member as that item's `Related` —
+a hyperedge is an unordered set, so which member anchors it loses nothing. Two facts are worth
+writing down: a graph's id derives from its label, so importing under the same `Domain` lands
+the copy on the **same id** in the other file; and `SourceRef` is a plain string on both sides
+(empty means "no positional reference", which is exactly what the encoded answer leaves out), so
+what a read returns can be written back without dereferencing anything.
+`TestInterfaceGraphCopyBetweenLibraries` is that recipe with assertions — every node field, the
+edge sets keyed by kind plus sorted titles, and a replay of the same copy still at three edges.
+
 `GetL3` / `ListL3` / `QueryL3Nodes` / `QueryL3Subgraph` / `UpdateL3` / `DeleteL3`.
 Deletion has one granularity: the whole graph. `QueryL3Subgraph`'s `edgeKinds`
 narrows the walk to the kinds named and leaves the condition out when the list is

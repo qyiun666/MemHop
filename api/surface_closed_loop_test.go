@@ -122,7 +122,7 @@ func TestImportL3ReadsBackEveryField(t *testing.T) {
 		byTitle[n.Title] = n
 	}
 	n := byTitle["api"]
-	if n.NodeType != "package" || n.Content != "the facade" || n.SourceRef == nil || *n.SourceRef != "api/" {
+	if n.NodeType != "package" || n.Content != "the facade" || n.SourceRef != "api/" {
 		t.Fatalf("node fields did not round-trip: %+v", n)
 	}
 	if n.GraphID != gid || !strings.Contains(strings.Join(n.Keywords, ","), "facade") {

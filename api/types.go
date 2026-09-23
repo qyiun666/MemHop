@@ -298,7 +298,10 @@ type HypergraphSlot struct {
 	UpdatedAt int64  `json:"updated_at"`
 }
 
-// HypergraphNode is a node within an L3 hypergraph. CreatedAt and UpdatedAt are
+// HypergraphNode is a node within an L3 hypergraph. SourceRef is the same string the
+// import carried — empty means the node has no positional reference, and that is also what
+// the encoded answer leaves out, so a host copies it from a read straight back into an
+// import without dereferencing anything. CreatedAt and UpdatedAt are
 // milliseconds since the epoch.
 type HypergraphNode struct {
 	ID        string   `json:"id"`
@@ -307,7 +310,7 @@ type HypergraphNode struct {
 	NodeType  string   `json:"node_type"`
 	Content   string   `json:"content"`
 	Keywords  []string `json:"keywords"`
-	SourceRef *string  `json:"source_ref,omitempty"`
+	SourceRef string   `json:"source_ref,omitempty"`
 	CreatedAt int64    `json:"created_at"`
 	UpdatedAt int64    `json:"updated_at"`
 }

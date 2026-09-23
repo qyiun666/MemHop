@@ -132,6 +132,15 @@ func fromHypergraphSlot(s internal.HypergraphSlot) HypergraphSlot {
 	}
 }
 
+// derefString reads the library's optional string as the plain string the facade publishes:
+// a source reference is stored only when it is non-empty, so nil and "" are the same answer.
+func derefString(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}
+
 func fromHypergraphNode(n internal.HypergraphNode) HypergraphNode {
 	return HypergraphNode{
 		ID:        formatID(n.IDHash),
@@ -140,7 +149,7 @@ func fromHypergraphNode(n internal.HypergraphNode) HypergraphNode {
 		NodeType:  n.NodeType,
 		Content:   n.Content,
 		Keywords:  cloneStrings(n.Keywords),
-		SourceRef: n.SourceRef,
+		SourceRef: derefString(n.SourceRef),
 		CreatedAt: n.CreatedAt,
 		UpdatedAt: n.UpdatedAt,
 	}
