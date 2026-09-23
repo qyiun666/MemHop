@@ -13,6 +13,7 @@ import (
 	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/config"
 	"github.com/qyiun666/MemHop/internal/domain"
+	"github.com/qyiun666/MemHop/internal/repo"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
@@ -476,5 +477,82 @@ func TestFusedSummaryOutlivesTheTurnsItFolded(t *testing.T) {
 	}
 	if summary.Content != "两轮把登录链路讲完" {
 		t.Fatalf("summary = %q, want the text the group proposed", summary.Content)
+	}
+}
+
+// What a scene read holds once a fused group's summary has aged out — the case the recall
+// contract has to answer, because the group's children are the rows a host is told to skip.
+// The prose goes and nothing else goes with it: the parent row stays on the surface naming
+// its children, and each swallowed turn keeps its own keyword track. So "this group is now
+// silent" is a state a reader can detect, and the durable words are one hop away rather
+// than gone — a host that drops depth-2 rows unconditionally would render nothing at all
+// for a scene it still has memory of.
+func TestFusedGroupAgesIntoKeywordTracksNotSilence(t *testing.T) {
+	engine, err := core.Create(filepath.Join(t.TempDir(), "test.meh"))
+	if err != nil {
+		t.Fatalf("create engine: %v", err)
+	}
+	t.Cleanup(func() { _ = engine.Close() })
+
+	const sceneID = uint64(7)
+	now := time.Now()
+	first := now.Add(-2 * time.Hour)
+	last := now.Add(-time.Hour)
+	writeTurn := func(id uint64, at time.Time, words []string) core.TopicSlot {
+		topic := core.TopicSlot{
+			ID: id, SceneID: sceneID, Depth: 1, FusedKeywords: words,
+			UserTimestamp: at.UnixMilli(), AgentTimestamp: at.UnixMilli(),
+		}
+		if err := core.WriteTopicSlot(engine, core.DefaultAgentID, id, &topic); err != nil {
+			t.Fatalf("write topic %d: %v", id, err)
+		}
+		return topic
+	}
+	topics := []core.TopicSlot{
+		writeTurn(81, first, []string{"登录", "session"}),
+		writeTurn(82, last, []string{"登录", "token"}),
+	}
+	ac := domain.NewContext(core.DefaultAgentID, context.Background(), engine, anyKeywords{}, &config.MemHopDefaults{})
+	out := &llmops.ConsolidationOutput{L2Groups: []llmops.L2Group{
+		{NodeHashes: []uint64{81, 82}, MergedSummary: "两轮把登录链路讲完"},
+	}}
+	if got, err := applyGroups(context.Background(), ac, sceneID, topics, out); err != nil || got.groups != 1 {
+		t.Fatalf("fold the group: %+v err=%v", got, err)
+	}
+	parentID := core.ComputeFusedTopicID(sceneID, first.UnixMilli(), last.UnixMilli(), []uint64{81, 82})
+
+	// Age the summary alone: same slot, older stamp — the replay converges in place, so
+	// this is the same record, not a second line the sweep would have to choose between.
+	stale := time.Now().Add(-ContentRetention - time.Hour)
+	if err := repo.AppendArchiveL4(ac.Engine, ac.ID, ac.L4, &core.ArchiveSlot{
+		TopicID: parentID, Seq: core.SeqUser, Kind: core.KindUtterance,
+		Role: core.RoleDream, ContentType: core.ContentText, Content: "两轮把登录链路讲完",
+		CreatedAt: stale.UnixMilli(),
+	}); err != nil {
+		t.Fatalf("age the summary: %v", err)
+	}
+	PruneContentStage(ac, core.DefaultAgentID, &core.DreamReport{})
+
+	if _, err := core.ReadArchiveSlot(engine, core.DefaultAgentID, core.HashContent(parentID, core.SeqUser)); common.CodeOf(err) != common.ErrNotFound {
+		t.Fatalf("the aged summary survived the sweep: err=%v", err)
+	}
+	parent, err := core.ReadTopicSlot(engine, core.DefaultAgentID, parentID)
+	if err != nil {
+		t.Fatalf("the group itself left the scene with its prose: %v", err)
+	}
+	if parent.Depth != 1 {
+		t.Fatalf("a fused group's row should stay on the surface, got depth %d", parent.Depth)
+	}
+	for _, id := range []uint64{81, 82} {
+		child, err := core.ReadTopicSlot(engine, core.DefaultAgentID, id)
+		if err != nil {
+			t.Fatalf("read the swallowed turn %d: %v", id, err)
+		}
+		if child.ParentID == nil || *child.ParentID != parentID {
+			t.Fatalf("turn %d answers to %v, want the group", id, child.ParentID)
+		}
+		if len(child.FusedKeywords) == 0 {
+			t.Fatalf("turn %d lost the track that outlives its prose: %+v", id, child)
+		}
 	}
 }

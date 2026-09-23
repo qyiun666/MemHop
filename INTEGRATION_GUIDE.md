@@ -399,6 +399,12 @@ What is left for the host is eight facts to know, not eight adapters to write:
   group shows up as its summary *and* again as every turn it replaced. The engine renders no prose
   — that is the host's — but which row *is* which is the library's to say, and it says it on the
   row: `Depth`, `ChildCount`, `Role`.
+  One more case, and it is the common one after a week: **content ages out while the topic rows
+  stay**. A group whose `RoleDream` summary the retention window swept is then a surface row with
+  no prose of its own, and what survived of the memory it folded are the children's keyword tracks
+  — so rule (1) is conditional: skip depth-2 rows while their parent still speaks, and once the
+  parent has no prose, fall back to `Keywords` down that subtree rather than dropping the memory.
+  An empty `Messages` list is an expired end state, not a lost line (`TestFusedGroupAgesIntoKeywordTracksNotSilence`).
 
 - **A facade type that is *not* the engine's own is hiding something.** Most shapes here are
   aliases, so the struct filled at the call site is the struct the engine reads — a value
