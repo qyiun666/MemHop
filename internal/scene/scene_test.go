@@ -23,7 +23,7 @@ func TestContextTopicRendersTheTopicAndTheUtterancesGiven(t *testing.T) {
 	st := ContextTopic(
 		core.TopicSlot{
 			ID: topicID, SceneID: childID, Depth: 2, Name: "那一轮",
-			FusedKeywords: keywords,
+			FusedKeywords: keywords, UserTimestamp: 7, AgentTimestamp: 9,
 		},
 		map[uint64]int{topicID: 3},
 		[]core.ArchiveSlot{
@@ -37,6 +37,10 @@ func TestContextTopicRendersTheTopicAndTheUtterancesGiven(t *testing.T) {
 	}
 	if st.ChildCount != 3 {
 		t.Fatalf("child count = %d, want the number this topic's parent holds", st.ChildCount)
+	}
+	if st.UserTimestamp != 7 || st.AgentTimestamp != 9 {
+		t.Fatalf("the row's own bounds did not travel: %d/%d — a reader needs a date for a row whose messages are all gone",
+			st.UserTimestamp, st.AgentTimestamp)
 	}
 	if len(st.Messages) != 2 || st.Messages[1].Seq != 4 || st.Messages[1].Type != core.ContentImage {
 		t.Fatalf("utterances not paired with their slot and medium: %+v", st.Messages)

@@ -62,13 +62,20 @@ type SceneMessage struct {
 // (1) or a Dream group has swallowed it (2) — and a fused summary is itself a
 // topic, so a group folded into a later one sits at 2 level with the turns it
 // summarizes. Name is a caller-supplied label, empty until one is set.
+//
+// The two timestamps are the row's own bounds and the only date a reader gets for a
+// row whose messages have aged out: content sweeps, topic rows do not. A turn carries
+// its stimulus and reply times; a fused group carries the earliest and latest of the
+// turns it swallowed.
 type SceneContextTopic struct {
-	TopicID    string         `json:"topic_id"`
-	Depth      int            `json:"depth"`
-	Name       string         `json:"name,omitempty"`
-	Keywords   []string       `json:"keywords"`
-	Messages   []SceneMessage `json:"messages,omitempty"`
-	ChildCount int            `json:"child_count"`
+	TopicID        string         `json:"topic_id"`
+	Depth          int            `json:"depth"`
+	Name           string         `json:"name,omitempty"`
+	Keywords       []string       `json:"keywords"`
+	Messages       []SceneMessage `json:"messages,omitempty"`
+	ChildCount     int            `json:"child_count"`
+	UserTimestamp  int64          `json:"user_timestamp"`
+	AgentTimestamp int64          `json:"agent_timestamp"`
 }
 
 // SceneContext is a scene's whole transcript, flattened to depth 2 on purpose:

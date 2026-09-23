@@ -29,7 +29,7 @@ func SurfaceTopics(ac *domain.Context, sceneID uint64) []core.TopicSlot {
 }
 
 // ContextTopic renders one topic of a scene context: its keyword track, child count,
-// and the utterances it owns, in the Seq order they were written to.
+// own time bounds, and the utterances it owns, in the Seq order they were written to.
 //
 // The utterances come from the topic's own content read: which ids a topic owns is
 // the mirror's answer, and only it can tell a reclaimed slot from a missing record.
@@ -48,6 +48,10 @@ func ContextTopic(t core.TopicSlot, children map[uint64]int, utterances []core.A
 		Keywords:   keywords,
 		ChildCount: children[t.ID],
 		Messages:   make([]core.SceneMessage, 0, len(utterances)),
+		// The row's own bounds travel with it: a reader dates this topic even after
+		// every message it owned has been swept, and no other pure read has them.
+		UserTimestamp:  t.UserTimestamp,
+		AgentTimestamp: t.AgentTimestamp,
 	}
 	for _, arc := range utterances {
 		st.Messages = append(st.Messages, core.SceneMessage{

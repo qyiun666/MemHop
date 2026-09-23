@@ -394,20 +394,21 @@ What is left for the host is eight facts to know, not eight adapters to write:
   those children, and the only place their originals come back. So: (1) drop rows with `Depth > 1`,
   those are originals a parent already summarized; (2) where `ChildCount > 0`, take that
   `RoleDream` line as the memory's text; (3) otherwise take the turn's own `RoleUser`/`RoleAgent`
-  lines; (4) date a memory by its earliest message rather than its last. Steps (1) and (2) are what
+  lines; (4) date a memory by the row's own `UserTimestamp` — for a turn that is when its user
+  message arrived, for a group the earliest turn it swallowed. Steps (1) and (2) are what
   keep one fact from reaching the model twice: render the list as it arrives and a consolidated
   group shows up as its summary *and* again as every turn it replaced. The engine renders no prose
   — that is the host's — but which row *is* which is the library's to say, and it says it on the
-  row: `Depth`, `ChildCount`, `Role`.
-  One more case, and it is the common one after a week: **content ages out while the topic rows
-  stay**. A group whose `RoleDream` summary the retention window swept is then a surface row with
-  no prose of its own, and what survived of it is a keyword track sitting on that very row —
-  `Keywords` is folded out of the members when the group is created, and topic rows never age.
-  So the skip in rule (1) is conditional: while the summary is there, drop the depth-2 children;
-  once it is not, render that row's own `Keywords` instead of dropping the memory. It has to be
-  on the row, not one hop away: the flattened listing carries no parent pointer, so a reader
-  cannot walk down a subtree. An empty `Messages` list is an expired end state, not a lost line
-  (`TestFusedGroupAgesIntoKeywordTracksNotSilence`).
+  row: `Depth`, `ChildCount`, `Role`, and that row's own two bounds.
+  Then the case that arrives by itself after a week: **content ages out while topic rows do not**.
+  The retention window sweeps utterances and events, so a surface row eventually comes back with an
+  empty `Messages` list — a group that lost its summary, or a plain turn that lost both of its
+  lines. That is an expired end state, not a lost record and not an answer of "nothing here": what
+  survived of that memory is the `Keywords` track sitting on the same row. Render those, or the host
+  silently drops every memory a consolidation ever touched. They have to come from the row — the
+  flattened listing carries no parent pointer, so no reader can walk down a subtree to find them
+  (`TestFusedGroupAgesIntoKeywordTracksNotSilence`). Rule (4) reads the row's own bounds for the same
+  reason: once the messages are gone there is nothing else left to date it by.
 
 - **A facade type that is *not* the engine's own is hiding something.** Most shapes here are
   aliases, so the struct filled at the call site is the struct the engine reads — a value
@@ -487,7 +488,7 @@ to keep it. `Name`, `Role` and `Preferences` have the host as their only writer.
 | Method | Meaning |
 |---|---|
 | `db.ListScenes(l3ID) ([]SceneSlot, error)` | scene list (`SceneID / SceneName / L3ID`); a non-empty `l3ID` keeps only the scenes anchored to that project domain, `""` lists all |
-| `db.SceneContext(sceneID) (*SceneContext, error)` | the scene's whole transcript (topics + their L4 originals) and **no write at all** — no turn is opened; **use for session resume**, and for every recall a round makes after the one that opened its turn. An empty `sceneID` reads the scene this domain is working, so nothing has to be held to call it again. Unlike `Search` it flattens to depth 2, because a Dream-fused group keeps its originals on the children it sank, and this is the only read that brings them back. `ChildCount > 0` is what marks a fused group (its own single message carries role 3, the mark Dream puts on a fused group's summary); `Depth` only says whether the topic is still on the scene's surface — a group a later pass folded away sits at 2 level with the turns it summarizes. The entries returned are the whole count — roots and the sunk children this read alone brings back |
+| `db.SceneContext(sceneID) (*SceneContext, error)` | the scene's whole transcript (topics + their L4 originals) and **no write at all** — no turn is opened; **use for session resume**, and for every recall a round makes after the one that opened its turn. An empty `sceneID` reads the scene this domain is working, so nothing has to be held to call it again. Unlike `Search` it flattens to depth 2, because a Dream-fused group keeps its originals on the children it sank, and this is the only read that brings them back. Each row also carries its own `UserTimestamp`/`AgentTimestamp` — the bounds of that turn, or of the group it belongs to — which is the only date left once retention has swept its messages. `ChildCount > 0` is what marks a fused group (its own single message carries role 3, the mark Dream puts on a fused group's summary); `Depth` only says whether the topic is still on the scene's surface — a group a later pass folded away sits at 2 level with the turns it summarizes. The entries returned are the whole count — roots and the sunk children this read alone brings back |
 | `db.UpdateScene(sceneID, api.ScenePatch{Name, L3ID, Force}) (SceneSlot, error)` | title it (`Name`), anchor it to an L3 project domain (`L3ID`), or clear the anchor (`L3ID: &""`); nil fields keep their stored value, and the **written scene comes back** |
 | `db.MergeScenes(primaryID, []secondaryIDs) error` | merge scenes |
 | `db.DeleteTopic(topicID) error` | delete a topic subtree + its L4 archives + indexes; the subtree is the topics whose `parent_id` points into it (memory correction) |
