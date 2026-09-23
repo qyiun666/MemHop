@@ -79,7 +79,8 @@ import "github.com/qyiun666/MemHop/api"
 
 ### `MemHopDefaults` 常用覆盖项
 
-`MemHopDefaults` 只暴露三个业务开关。其余调优常量住在读它的那一段旁边，不再可配置：L1 的衰减速率与共现相似度下限随 Dream 的阶段放在 `internal/dream`，各次调用的输出预算放在 `internal/cap/llmops`，蒸馏的样本预算放在 `internal/cap/profile`。宿主不应需要调整；如有调整诉求请提 issue。四个旋钮共用一套词汇：**0 就是「没填」**，由库默认顶上（与 `LlmConfig` 那两个预算同一读法）；负数才是显式的「关掉这一项」，而保留窗口没有「关掉」这一写法，只能调大窗口。
+`MemHopDefaults` 暴露四个旋钮。没填的那一项（0）由库默认顶上，所以满足于默认的宿主直接交 `api.MemHopDefaults{}`、只填自己要改的那一项即可，
+不必去取 `DefaultMemHopDefaults` 再复制一份。其余调优常量住在读它的那一段旁边，不再可配置：L1 的衰减速率与共现相似度下限随 Dream 的阶段放在 `internal/dream`，各次调用的输出预算放在 `internal/cap/llmops`，蒸馏的样本预算放在 `internal/cap/profile`。宿主不应需要调整；如有调整诉求请提 issue。四个旋钮共用一套词汇：**0 就是「没填」**，由库默认顶上（与 `LlmConfig` 那两个预算同一读法）；负数才是显式的「关掉这一项」，而保留窗口没有「关掉」这一写法，只能调大窗口。
 
 | 字段 | 默认 | 含义 |
 |---|---|---|
@@ -102,7 +103,7 @@ lib, err := api.Open(
         TimeoutSecs:     60,
         MaxOutputTokens: 8192,
     },
-    api.DefaultMemHopDefaults, // 调参旋钮；要改就复制一份改
+    api.MemHopDefaults{}, // 调参旋钮：整个留空即库默认，要改哪一项就填哪一项
     &api.ProfileInput{Name: "guide", Role: "assistant"}, // 文件还不存在时必填
 )
 if err != nil { /* 处理 ErrConfig / ErrInvalidQuery / ErrInvalidMagic / ErrCorruption */ }

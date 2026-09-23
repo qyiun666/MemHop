@@ -87,7 +87,8 @@ endpoint is checked before the path is touched).
 
 ### `MemHopDefaults` — common overrides
 
-`MemHopDefaults` exposes exactly three business knobs. Everything else lives with
+`MemHopDefaults` exposes four knobs. Because an unfilled one (0) takes the library default, a host that is happy with the defaults passes
+`api.MemHopDefaults{}` and fills only what it changes — no need to reach for `DefaultMemHopDefaults` and copy it. Everything else lives with
 the stage that reads it and is not configurable: the L1 decay lambdas and edge
 similarity floor sit beside the Dream stages, the prompt output budgets beside the
 LLM calls in `internal/cap/llmops`, the distillation sample limits in
@@ -117,7 +118,7 @@ lib, err := api.Open(
         TimeoutSecs:     60,
         MaxOutputTokens: 8192,
     },
-    api.DefaultMemHopDefaults, // tuning knobs; copy it to change one open
+    api.MemHopDefaults{}, // tuning knobs: leave it empty for the library defaults, fill one to change one
     &api.ProfileInput{Name: "guide", Role: "assistant"}, // required for a new file
 )
 if err != nil { /* ErrConfig / ErrInvalidQuery / ErrInvalidMagic / ErrCorruption */ }

@@ -53,6 +53,11 @@ README 的版本表与 git log。
 
 27. **列表读口的顺序从此是答案的一部分**（`internal/repo/core/engine.go` 一处 + `api/surface_order_test.go`）：引擎把索引快照交给遍历前不排序，而快照来自 map 键——同一份文件、同一个库，`ListScenes` 每次调用交回的顺序都不一样（实测：同一只猫六个场景，第二次调用就把首个场景挪到了末尾）。修在唯一的那一处：`iterSnapshot` 交出 id 升序，于是一切走枚举的读（`ListScenes`/`ListL3`/`QueryL3Nodes`/`GetL3` 的节点与边/无话题过滤的 `SearchL4`）一起定下来；要别的顺序的调用方照旧自己排（`GroupPlanNodes` 按话题、场景读按时间）。新测试把 12 条纯读各取 8 次、要求编码逐字节相同，**负例**＝撤掉那一句排序，它当场报 `ListScenes answered differently on repeat 1`。id 升序不是宿主眼中的相关性顺序，它是「每次一样」这件事本身；开销在实测里看不见（同一台机器：一轮 ≈20.1ms / 1352 B、纯场景读 ≈0.29ms、重开 ≈0.54ms，与改动前同量级）。公开面形状、磁盘格式一字未动。
 
+28. **指南不再要求宿主复制一份它并不需要的默认表**：`MemHopDefaults` 是四个旋钮，而「没填=库默认」早在 `d427d67`/`b4c62ff` 就归一了，
+最短的正确写法是 `api.MemHopDefaults{}`。两份指南此前写的是「要改就复制 `DefaultMemHopDefaults` 再改」，还把字段数写成「三个业务开关」——
+一句过期话会让宿主多写一次复制、并且怀疑留空是不是关掉什么。判据钉在入口处（`TestOpenTakesUnfilledDefaultsAsTheLibraryDefaults`：全零表到达引擎时逐字段等于默认表），
+按库形状写的宿主侧后端草案带着同一句过期注释，同批去掉后它的三包测试仍全绿。纯文档，代码与形状一字未动。
+
 ## v1.6.5 — 2026-09-22 — MCP 面整体退役：对外只剩 Go module
 
 1. **`cmd/memhop-mcp` 整包删除**（14 个文件 3109 行）：25 个工具、多租户 HTTP（SSE 与 streamable-http 双传输）、按 `/mcp/<tenant>` 建/取域的租户注册表、`--tenants` 白名单与锚定 db-dir 的读入口一起消失。仓库不再有 server 形态、不再有后台进程，对外只剩「以 Go module 使用 `api`」一种接入。
