@@ -263,6 +263,46 @@ func TestUpdateRefusesWhenNoTurnIsOpen(t *testing.T) {
 	}
 }
 
+// The close boundary checks the host's timestamp the same way the append boundary
+// does, and checks it before anything is spent or stored: a seconds-scale stamp would
+// settle a turn whose originals the next Dream reads as long expired, and the host
+// would find out only when the transcript is gone. A refusal leaves the turn open, so
+// the same close carrying a millisecond instant still settles it.
+func TestUpdateRefusesATimestampInTheWrongUnit(t *testing.T) {
+	srv, calls := countingLLMServer(t, turnKeywords)
+	db := newSearchTestDB(t, srv.URL)
+	_, topicID := openTurn(t, db)
+
+	for _, tc := range []struct {
+		name string
+		ts   int64
+	}{
+		{"seconds since the epoch", 1_700_000_000},
+		{"microseconds since the epoch", 1_700_000_000_000_000},
+	} {
+		err := endTurn(db, tc.ts)
+		if common.CodeOf(err) != common.ErrInvalidQuery {
+			t.Fatalf("%s close (%d): want ErrInvalidQuery, got %v", tc.name, tc.ts, err)
+		}
+		if got := calls.Load(); got != 0 {
+			t.Fatalf("%s close spent %d LLM calls on a turn it refused", tc.name, got)
+		}
+		if owned := archivesOfTopic(t, db.engine, topicID); len(owned) != 0 {
+			t.Fatalf("%s close stored %d records under the open turn", tc.name, len(owned))
+		}
+	}
+	if n := countRecords(db.engine, core.DefaultAgentID, core.RecL2Topic); n != 0 {
+		t.Fatalf("a refused close created %d topics", n)
+	}
+
+	if err := endTurn(db, 1_700_000_000_000); err != nil {
+		t.Fatalf("the same close with a millisecond instant: %v", err)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("LLM calls = %d, want the one distillation the accepted close spent", got)
+	}
+}
+
 // A close that leaves nothing to distill is refused without spending an LLM call: an
 // empty keyword track written now would read back as the real distillation of a turn
 // nobody can any longer quote. Both shapes of it are refused — a call that names
