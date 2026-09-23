@@ -82,6 +82,8 @@ README 的版本表与 git log。
 
 37. **指南说清『两口时钟』**（§12 第 3 条，中英各一段）：宿主记的内容与它收束的那一轮带的是**调用方的**毫秒戳，缺 `CreatedAt` 时库**不补表**；而计划节点自己的三个戳、画像的 `UpdatedAtMs`、图的内容钟由库按同一刻度盖。这句话之前只在实现里，而它是端口形状问题：决策循环的记忆端口（`Remember(facts)` 一类）通常不带时间字段，适配器于是必须自己取钟——不写出来，第一个宿主会以为留空即可（实测：`Update` 与 `AppendArchive` 同一道闸，`CreatedAt=0`、负数、秒级带内都拒，秒带以下的相对值放行）。既有测试已覆盖这两个边界（`internal/update_test.go`、`internal/append_test.go`），本次只补文档。零生产代码改动。
 
+38. **合并要活过重开，这条此前没人测**（`test/api_interface_merge_reopen_test.go`）：合并是唯一会**改写记录归属**的纠错口（被并场景的每个话题把 `scene_id` 换成活下来的那个），而它原有的那条用例只看活着的答复——缓存改了、记录没改，它照样绿。新用例走完「甲两书 + 乙一书 → 合并 → 关掉重开」，重开后必须仍只看得到一个场景、三行、六句原文一字不差、每行关键词轨非空，且被并进来的那一轮按它自己的话题 id 还能读出两条归档。**负例**：让 `MergeScenesL2` 只搬缓存、把话题记录原样写回（`scene_id` 仍指着已删场景），新用例当场报 `the surviving scene lists 2 rows after reopen`，而既有那条 `TestInterfaceMergeScenes` 在同一变异下全绿——盲区被证实，不是预防性加测。零生产代码改动。
+
 ## v1.6.5 — 2026-09-22 — MCP 面整体退役：对外只剩 Go module
 
 1. **`cmd/memhop-mcp` 整包删除**（14 个文件 3109 行）：25 个工具、多租户 HTTP（SSE 与 streamable-http 双传输）、按 `/mcp/<tenant>` 建/取域的租户注册表、`--tenants` 白名单与锚定 db-dir 的读入口一起消失。仓库不再有 server 形态、不再有后台进程，对外只剩「以 Go module 使用 `api`」一种接入。
