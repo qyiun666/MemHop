@@ -544,7 +544,7 @@ id——宿主把自己拿到的 hex 字符串原样回传，不自己拼。也�
 if api.CodeOf(err) == api.ErrNotFound { ... }
 ```
 
-错误码：`ErrConfig`、`ErrInvalidQuery`、`ErrNotFound`、`ErrIO`、`ErrClosed`、`ErrInvalidMagic`、`ErrCRCMismatch`、`ErrCorruption`、`ErrSerialization`、`ErrDeserialization`、`ErrCancelled`（调用方自己的上下文先结束——被取消的 `Dream`、退避中途被放弃的 LLM 调用）与 `ErrLLM`。`ErrAgentNotFound` 虽然导出，公开面上却没有任何调用能产出它：域以句柄交回，宿主手里没有一个「未注册」的 agentID。`api.NewError(code, message)` 供自己拒绝一个入参的调用方（例如工具层拒一个词表外的取值）构造同一套错误，于是它的拒绝与库自己的拒绝带同一个码。编号永不复用：`1002` 与 `9001` 已退役、不再重新发放。
+错误码：`ErrConfig`、`ErrInvalidQuery`、`ErrNotFound`、`ErrIO`、`ErrClosed`、`ErrInvalidMagic`、`ErrCRCMismatch`、`ErrCorruption`、`ErrSerialization`、`ErrDeserialization`、`ErrCancelled`（调用方自己的上下文先结束——被取消的 `Dream`、退避中途被放弃的 LLM 调用）与 `ErrLLM`。`ErrAgentNotFound` 由 `DB.Agent` 在一个这个文件从没注册过的 id 上答出来——那是宿主唯一交出一个 agent id 的地方，而它选择拒绝，而不是顺手开出一个空域。`api.NewError(code, message)` 供自己拒绝一个入参的调用方（例如工具层拒一个词表外的取值）构造同一套错误，于是它的拒绝与库自己的拒绝带同一个码。编号永不复用：`1002` 与 `9001` 已退役、不再重新发放。
 
 ---
 
@@ -563,13 +563,14 @@ import (
 )
 
 func main() {
+    llm := api.LlmConfig{
+        APIURL: os.Getenv("LLM_URL"),
+        APIKey: os.Getenv("LLM_KEY"),
+        Model:  os.Getenv("LLM_MODEL"),
+    }
     lib, err := api.Open(
         os.Getenv("MEH_PATH"), // /data/agent.meh
-        api.LlmConfig{
-            APIURL: os.Getenv("LLM_URL"),
-            APIKey: os.Getenv("LLM_KEY"),
-            Model:  os.Getenv("LLM_MODEL"),
-        },
+        llm,
         api.DefaultMemHopDefaults,
         // 只在文件还不存在时被采纳。
         &api.ProfileInput{Name: "guide-agent", Role: "assistant"},
@@ -581,6 +582,15 @@ func main() {
     // lib.SubAgent(llm, api.ProfileInput{Name: ...}) 取得。
     db, err := lib.Primary()
     if err != nil { log.Fatal(err) }
+
+    // 若宿主想为每份记忆只留一个标识符：域的 id 由库发出，DB.Agents 列出这个文件里有哪几个域，
+    // DB.Agent 按那个 id 开回来（id 的作用域是本文件——每个文件的主域都是同一个零号 id）。
+    roster, err := lib.Agents()
+    if err != nil { log.Fatal(err) }
+    _ = roster // 每条 AgentInfo：ID（只回传）、Name（就是 SubAgent 收的那个）、Primary
+    again, err := lib.Agent(llm, db.AgentID())
+    if err != nil { log.Fatal(err) }
+    _ = again // 同一个域，端点换成本次传入的这一个
 
     // 一个宿主会话 = 一个场景，且由库自持：空的 SearchQuery 续用该域当前场景（首次访问
     // 时新建）并开下一轮。NewScene: true 则另开一条会话。宿主跑一个 agent 对一个库时，

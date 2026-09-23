@@ -41,7 +41,8 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    取域 + `ac.Mu.Lock()` + 锁内复检库未关、且该上下文未被空闲回收——见第 4 条的
    标记），再调小方法；引擎自带的锁在内层，顺序不可颠倒。同 agent 串行、跨 agent 并行。
    `contextFor` 对非默认域校验注册表：未注册的 agentID 直接
-   `ErrAgentNotFound`。
+   `ErrAgentNotFound`。3002 只有这两处产出：`contextFor` 的复检，与门面 `DB.Agent(llm, id)` 的准入——后者是宿主唯一
+   把一个 agent id 交回来的地方，认不出即拒，不顺手建一个空域顶上去。
    开着一轮的写面（`AppendArchive`、计划族、`Update`）统一走
    `db.lockTurn(agentID)`：lockAgent，然后**该域没有开着轮就先拒**
    （`ErrInvalidQuery`，消息含 "no turn is open"）——为它猜一个（当前场景的下一轮）

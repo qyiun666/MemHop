@@ -774,9 +774,9 @@ Codes: `ErrConfig`, `ErrInvalidQuery`, `ErrNotFound`,
 `ErrIO`, `ErrClosed`, `ErrInvalidMagic`, `ErrCRCMismatch`, `ErrCorruption`,
 `ErrSerialization`, `ErrDeserialization`, `ErrCancelled` (the caller's own context
 ended before the work did — a cancelled `Dream`, an LLM call abandoned mid-retry)
-and `ErrLLM`. `ErrAgentNotFound` is exported but no public call produces it: domains
-come back as handles, so there is no host-supplied agent id that could be
-unregistered. `api.NewError(code, message)` builds one of these errors for a caller
+and `ErrLLM`. `ErrAgentNotFound` is what `DB.Agent` answers for an id this file never
+registered - the one place a host hands the library an agent id, and it refuses rather
+than opening an empty domain. `api.NewError(code, message)` builds one of these errors for a caller
 that refuses on its own terms — a tool layer turning down an argument outside a
 vocabulary, say — so that refusal carries the same code the library's own refusals do.
 Numbers are never reused: `1002` and `9001` are retired and will not be reissued.
@@ -798,13 +798,14 @@ import (
 )
 
 func main() {
+    llm := api.LlmConfig{
+        APIURL: os.Getenv("LLM_URL"),
+        APIKey: os.Getenv("LLM_KEY"),
+        Model:  os.Getenv("LLM_MODEL"),
+    }
     lib, err := api.Open(
         os.Getenv("MEH_PATH"), // /data/agent.meh
-        api.LlmConfig{
-            APIURL: os.Getenv("LLM_URL"),
-            APIKey: os.Getenv("LLM_KEY"),
-            Model:  os.Getenv("LLM_MODEL"),
-        },
+        llm,
         api.DefaultMemHopDefaults,
         // Only consulted when the file is not there yet.
         &api.ProfileInput{Name: "guide-agent", Role: "assistant"},
@@ -816,6 +817,16 @@ func main() {
     // lib.SubAgent(llm, api.ProfileInput{Name: ...}) the same way.
     db, err := lib.Primary()
     if err != nil { log.Fatal(err) }
+
+    // One identifier per memory, if the host wants one: the library issues each domain's
+    // id, DB.Agents lists the domains this file holds, and DB.Agent opens one again by that
+    // id (an id is scoped to its file - every file's primary is the same zero id).
+    roster, err := lib.Agents()
+    if err != nil { log.Fatal(err) }
+    _ = roster // each AgentInfo: ID (round-trip only), Name (what SubAgent takes), Primary
+    again, err := lib.Agent(llm, db.AgentID())
+    if err != nil { log.Fatal(err) }
+    _ = again // the same domain, now on this endpoint
 
     // One host session = one scene, and the library holds it: an empty SearchQuery
     // continues the domain's current scene (creating one on first use) and opens the

@@ -124,6 +124,8 @@ README 的版本表与 git log。
 
 58. **宿主那半画像是整次写入替换，不是按 key 合并——这条以前只写在实现里**（`internal/l0_test.go` 新增 `TestUpdateL0WritesTheHostHalfWhole` + 门面注释与两份指南同补一段）：`ProfileInput` 里除 `Name` 外的三项「可以留空」，此前没人说清留空是什么意思——实测是**替换**：只写一条 `Preferences` 就只剩那一条，省略 `Role` 就清空它，nil 表与空表是同一个答案；而被继承的是蒸馏那两项与 `AgentType`（`TestUpdateL0KeepsDistilledHalf` 早就钉着）。指南以前那句「`Name`、`Role`、`Preferences` 只有宿主一个写者」说的是所有权、不是合并语义，宿主照字面做「改一条偏好」的工具就会静悄悄丢掉其余偏好——这条正好落在你的第 1 条上（用户可修改字段）。为什么不做按 key 合并：那样一条偏好就永远删不掉（要删就得先造一套墓碑或一个显式删除口，比现在多一处形状），所以姿势是先 `GetL0` 拿表、改完整张写回，用例把替换与这条读-改-写两头都钉住。**负例**＝让写侧顺手继承空的 `Role` 并合并偏好表，用例当场报 `Preferences survived the edit as map[language:en tone:terse], want exactly the one this write named`。零生产代码改动（本轮改的是断言与文档），公开面、编码与磁盘格式一字未动。
 
+59. **「`ErrAgentNotFound` 公开面上没有任何调用能产出它」这句被两批前的改动自己作废了，这轮清掉**（两份指南的错误码段 + `internal/common` 那条注释 + 可跑骨架里的新门）：`Agent(llm, id)` 正是宿主交回 agent id 的那个口子，id 从没注册过时它答的就是 3002——上一轮加门时改了入口段与 §9，却漏了远处这句相反的话。同时把两条新门写进 §11 那段可跑骨架：`lib.Agents()` 列名册、`lib.Agent(llm, db.AgentID())` 按 id 开回来，`llm` 因此从 `api.Open` 的实参提成了变量。这段才是宿主真正抄走的东西，而 `make check-guides` 只保证编得过、`TestGuideSkeleton` 才保证跑得起，两道现在都绿。核对方式：把两份指南、AGENTS、`internal/agent.md` 与门面注释里所有「id 不越门面 / 没有任何调用能产出该码」的句子逐条扫一遍，剩下的只有讲锁序与准入的那句（`contextFor` 校验注册表），它仍然对。本轮只动文档与注释，形状与生产代码一字未改。
+
 ## v1.6.5 — 2026-09-22 — MCP 面整体退役：对外只剩 Go module
 
 1. **`cmd/memhop-mcp` 整包删除**（14 个文件 3109 行）：25 个工具、多租户 HTTP（SSE 与 streamable-http 双传输）、按 `/mcp/<tenant>` 建/取域的租户注册表、`--tenants` 白名单与锚定 db-dir 的读入口一起消失。仓库不再有 server 形态、不再有后台进程，对外只剩「以 Go module 使用 `api`」一种接入。

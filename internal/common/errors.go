@@ -20,7 +20,7 @@ const (
 	ErrInvalidQuery Code = 1003 // invalid query or ID parse failure (hex id parse, layer read/write guards, reclaim legacy layout)
 
 	ErrNotFound      Code = 3001 // resource not found (profile missing, record lookup)
-	ErrAgentNotFound Code = 3002 // agent domain not found: unregistered or deleted agentID (contextFor, Session)
+	ErrAgentNotFound Code = 3002 // agent domain not found: an agentID the registry does not hold (contextFor, DB.Agent)
 
 	ErrIO              Code = 5001 // io error: file read/write/lock/mmap failure (storage file operations)
 	ErrClosed          Code = 5002 // database is closed: instance unavailable (engine/reclaim)
