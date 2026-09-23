@@ -169,27 +169,36 @@ func TestTopicSlotRoundtripKeywords(t *testing.T) {
 	}
 }
 
-func TestComputeTopicIDDeterministic(t *testing.T) {
-	id1 := ComputeTopicID(100, 1000, 1001)
-	id2 := ComputeTopicID(100, 1000, 1001)
+func TestComputeFusedTopicIDDeterministic(t *testing.T) {
+	id1 := ComputeFusedTopicID(100, 1000, 1001, []uint64{11, 12})
+	id2 := ComputeFusedTopicID(100, 1000, 1001, []uint64{12, 11})
 	if id1 != id2 {
-		t.Fatalf("not deterministic: %d != %d", id1, id2)
+		t.Fatalf("the same members in another order derived another parent: %d != %d", id1, id2)
 	}
 }
 
-func TestComputeTopicIDDifferent(t *testing.T) {
-	id1 := ComputeTopicID(100, 1000, 1001)
-	id2 := ComputeTopicID(100, 1000, 1002)
-	if id1 == id2 {
-		t.Fatalf("should differ: both are %d", id1)
+// Two disjoint groups over one pair of bounds is the case the bounds-only key could not
+// hold: the loser was refused on every pass and each pass still cost a consolidation call.
+// Disjoint members must therefore be what separates them.
+func TestComputeFusedTopicIDSeparatesDisjointGroups(t *testing.T) {
+	first := ComputeFusedTopicID(100, 1000, 1001, []uint64{11, 12})
+	second := ComputeFusedTopicID(100, 1000, 1001, []uint64{13, 14})
+	if first == second {
+		t.Fatalf("two disjoint groups over the same bounds share a parent id: %d", first)
+	}
+	if other := ComputeFusedTopicID(100, 1000, 1001, []uint64{11, 12, 13}); other == first {
+		t.Fatalf("adding a member changed nothing: both are %d", other)
+	}
+	if other := ComputeFusedTopicID(101, 1000, 1001, []uint64{11, 12}); other == first {
+		t.Fatalf("another scene reused the parent id: both are %d", other)
 	}
 }
 
-func TestComputeTopicIDConsistency(t *testing.T) {
-	expected := common.HashID("100:1000:1001")
-	got := ComputeTopicID(100, 1000, 1001)
+func TestComputeFusedTopicIDConsistency(t *testing.T) {
+	expected := common.HashID("fused:100:1000:1001:11:12")
+	got := ComputeFusedTopicID(100, 1000, 1001, []uint64{12, 11})
 	if got != expected {
-		t.Fatalf("ComputeTopicID mismatch: got %d, want %d", got, expected)
+		t.Fatalf("ComputeFusedTopicID mismatch: got %d, want %d", got, expected)
 	}
 }
 
@@ -198,7 +207,7 @@ func TestComputeTopicIDConsistency(t *testing.T) {
 // timestamps, is what makes consecutive turns distinct.
 func TestComputeTurnTopicIDNamespaced(t *testing.T) {
 	turn := ComputeTurnTopicID(100, 1)
-	if turn == ComputeTopicID(100, 1000, 1001) {
+	if turn == ComputeFusedTopicID(100, 1000, 1001, []uint64{11, 12}) {
 		t.Fatalf("turn topic id collides with the fused-topic id space")
 	}
 	if turn != ComputeTurnTopicID(100, 1) {

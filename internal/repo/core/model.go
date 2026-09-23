@@ -7,6 +7,9 @@ package core
 import (
 	"cmp"
 	"fmt"
+	"slices"
+	"strconv"
+	"strings"
 
 	"github.com/qyiun666/MemHop/internal/common"
 )
@@ -127,11 +130,25 @@ func CompareTopicOrder(a, b TopicSlot) int {
 	return cmp.Compare(a.ID, b.ID)
 }
 
-// ComputeTopicID derives a topic ID from sceneID and both timestamps
-// (scene:userTS:agentTS hashed). Dream-created fused topics use this form for
-// deterministic replay.
-func ComputeTopicID(sceneID uint64, userTS, agentTS int64) uint64 {
-	return common.HashID(fmt.Sprintf("%d:%d:%d", sceneID, userTS, agentTS))
+// ComputeFusedTopicID derives a consolidation group's parent id from the group's bounds
+// and its member set (fused:scene:userTS:agentTS:members). The bounds alone cannot
+// identify a group: two disjoint groups sharing one (min,max) pair — ordinary once a host
+// stamps a batch of turns with the same timestamp — hashed to the same id, so the loser
+// was refused by the collision guard on every pass and each pass still spent a
+// consolidation call to apply nothing. Naming the members in the key makes that collision
+// structurally impossible while keeping the property the timestamp form was chosen for:
+// the same set hashes the same way however the model ordered it, so a replay re-derives
+// the same parent instead of inventing a second one.
+func ComputeFusedTopicID(sceneID uint64, userTS, agentTS int64, members []uint64) uint64 {
+	set := slices.Clone(members)
+	slices.Sort(set)
+	var b strings.Builder
+	fmt.Fprintf(&b, "fused:%d:%d:%d", sceneID, userTS, agentTS)
+	for _, m := range set {
+		b.WriteByte(':')
+		b.WriteString(strconv.FormatUint(m, 10))
+	}
+	return common.HashID(b.String())
 }
 
 // ComputeTurnTopicID derives a turn topic's ID from the scene's turn counter

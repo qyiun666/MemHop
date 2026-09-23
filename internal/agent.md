@@ -262,10 +262,11 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    分组，相邻两条线程可以都点名同一轮，而两组都应用等于把那一轮沉两次——第二次改父
    指向，第一个组的摘要于是管着一个不再应答它的子，那一轮也落到最深的读路径之下，
    所以后到的重叠组按「提出但未应用」计入 rejected（`TestApplyGroupsRejectsOverlappingGroups`）。
-   父话题 id 就是组的时间界派生的，成员互斥也挡不住两个不相交的组撞出同一个 id——
-   宿主打时间戳粗到几轮共一时很容易发生——所以父 id 已被一个话题占用时本组同样拒（落在
-   它写任何记录之前，无回滚），撞上一个不是话题的记录也拒而不覆写（一个 id 只对应一种
-   记录）（`TestApplyGroupsRefusesCollidingParentID`）。
+   父话题 id 把成员集合一并算进派生式，所以两个不相交的组共用一对时间界也各得一个父——
+   时间界单独作键时，后到的那一组永久压不掉，而每一趟巩固都会再为它花一次模型调用
+   （`TestApplyGroupsLandsDisjointGroupsWithOneBoundsPair`）。占用校验照旧在：同一成员集合被
+   再提一次就是落在已占用的地址上，仍在写任何记录之前拒掉、无回滚；撞上一个不是话题的记录
+   也拒而不覆写（一个 id 只对应一种记录）（`TestApplyGroupsRefusesReplayedMemberSet`）。
    下沉是一次批写，而**批写不是全有或全无**：尾界推进之后才失败（`Sync`/remap）时，
    已经写到的成员就是活了，父链接挂在它们身上。让整组保持原子的是回滚那一步——
    `dream.applyOneGroup` 拿本组自己点名的成员调 `repo.RestoreSunkTopicsL2`，只把

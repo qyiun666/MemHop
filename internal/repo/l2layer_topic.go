@@ -116,10 +116,12 @@ func CreateTurnTopicL2(engine *core.StorageEngine, agentID uint64, sceneHash, to
 // CreateFusedTopicL2 creates a compressed topic (depth 1) whose Keywords are
 // the fusion of its children. The group's reconstructed text is an ordinary L4
 // archive under the parent's own id, so the topic needs no follow-up write.
-// The children are addressed by their own ParentID, never by a list here.
-func CreateFusedTopicL2(engine *core.StorageEngine, agentID uint64, sceneID uint64, fusedKeywords []string, userTS, agentTS int64) error {
+// The children are addressed by their own ParentID, never by a list here — which is
+// why the members have to come in: they are part of the parent's identity, not a list
+// the parent keeps.
+func CreateFusedTopicL2(engine *core.StorageEngine, agentID uint64, sceneID uint64, fusedKeywords []string, userTS, agentTS int64, members []uint64) error {
 	topic := core.TopicSlot{
-		ID:             core.ComputeTopicID(sceneID, userTS, agentTS),
+		ID:             core.ComputeFusedTopicID(sceneID, userTS, agentTS, members),
 		SceneID:        sceneID,
 		Depth:          1,
 		UserTimestamp:  userTS,

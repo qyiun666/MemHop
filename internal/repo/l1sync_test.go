@@ -114,9 +114,9 @@ func TestSyncL1NodesFromL2SkipsCompressed(t *testing.T) {
 	sceneA := common.HashID("sceneA")
 	mustCreateTurn(t, engine, sceneA, []string{"k1"}, 1000)
 
-	parentID := core.ComputeTopicID(sceneA, 1000, 2000)
+	parentID := core.ComputeFusedTopicID(sceneA, 1000, 2000, []uint64{1001, 1002})
 	deep := core.TopicSlot{
-		ID: core.ComputeTopicID(sceneA, 1000, 2000), SceneID: sceneA,
+		ID: core.ComputeFusedTopicID(sceneA, 1000, 2000, []uint64{1001, 1002}), SceneID: sceneA,
 		ParentID: &parentID, Depth: 3, FusedKeywords: []string{"deep"},
 		UserTimestamp: 1000, AgentTimestamp: 2000,
 	}

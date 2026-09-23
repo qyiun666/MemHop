@@ -57,8 +57,8 @@ func TestApplyGroupsRejectsOverlappingGroups(t *testing.T) {
 	}
 	ac := domain.NewContext(core.DefaultAgentID, context.Background(), engine, anyKeywords{}, &config.MemHopDefaults{})
 
-	firstParent := core.ComputeTopicID(sceneID, 1000, 2001)
-	secondParent := core.ComputeTopicID(sceneID, 1001, 2002)
+	firstParent := core.ComputeFusedTopicID(sceneID, 1000, 2001, []uint64{11, 12})
+	secondParent := core.ComputeFusedTopicID(sceneID, 1001, 2002, []uint64{12, 13})
 	out := &llmops.ConsolidationOutput{L2Groups: []llmops.L2Group{
 		{NodeHashes: []uint64{11, 12}, MergedSummary: "两轮把登录链路讲完"},
 		{NodeHashes: []uint64{12, 13}, MergedSummary: "两轮都在追同一个 token 问题"},
@@ -105,11 +105,12 @@ func TestApplyGroupsRejectsOverlappingGroups(t *testing.T) {
 	}
 }
 
-// Members can be disjoint and still collide: the parent id is the group's
-// timestamp bounds, and a host that stamps several turns with one timestamp gives
-// two groups the same bounds. Only the first may land — otherwise one parent record
-// ends up summarising one group while the other group's originals hang beneath it.
-func TestApplyGroupsRefusesCollidingParentID(t *testing.T) {
+// Members can be disjoint and still share their bounds: a host that stamps several turns
+// with one timestamp gives every group over that batch the same (min,max) pair. The parent
+// id names its members, so this is not a collision — both land, each over its own children
+// with its own summary. A bounds-only key refused the second group here, and the refused
+// pair stayed on the surface for every later pass to be proposed and rejected again.
+func TestApplyGroupsLandsDisjointGroupsWithOneBoundsPair(t *testing.T) {
 	engine, err := core.Create(filepath.Join(t.TempDir(), "test.meh"))
 	if err != nil {
 		t.Fatalf("create engine: %v", err)
@@ -139,34 +140,90 @@ func TestApplyGroupsRefusesCollidingParentID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("applyGroups: %v", err)
 	}
-	if got.groups != 1 || got.unusable != 1 {
-		t.Fatalf("the colliding group must be refused, got %+v", got)
+	if got.groups != 2 || got.unusable != 0 {
+		t.Fatalf("two disjoint groups over one bounds pair must both land, got %+v", got)
 	}
 
-	collisionParent := core.ComputeTopicID(sceneID, 1000, 2000)
-	parent, err := core.ReadTopicSlot(engine, core.DefaultAgentID, collisionParent)
+	for _, tc := range []struct {
+		members []uint64
+		summary string
+	}{
+		{[]uint64{21, 22}, "第一组：登录链路"},
+		{[]uint64{23, 24}, "第二组：完全不同的话题，但时间界一模一样"},
+	} {
+		parentID := core.ComputeFusedTopicID(sceneID, 1000, 2000, tc.members)
+		parent, err := core.ReadTopicSlot(engine, core.DefaultAgentID, parentID)
+		if err != nil {
+			t.Fatalf("read the landed parent of %v: %v", tc.members, err)
+		}
+		if parent.Depth != 1 {
+			t.Fatalf("a fused parent belongs to the surface, got depth %d", parent.Depth)
+		}
+		summary, err := core.ReadArchiveSlot(engine, core.DefaultAgentID,
+			core.HashContent(parentID, core.SeqUser))
+		if err != nil {
+			t.Fatalf("read the parent's summary slot: %v", err)
+		}
+		if summary.Content != tc.summary {
+			t.Errorf("parent of %v carries %q, want its own group's summary %q",
+				tc.members, summary.Content, tc.summary)
+		}
+		for _, id := range tc.members {
+			child, err := core.ReadTopicSlot(engine, core.DefaultAgentID, id)
+			if err != nil {
+				t.Fatalf("read member %d: %v", id, err)
+			}
+			if child.Depth != 2 || child.ParentID == nil || *child.ParentID != parentID {
+				t.Errorf("member %d: depth=%d parent=%v, want sunk under %016x",
+					id, child.Depth, child.ParentID, parentID)
+			}
+		}
+	}
+}
+
+// What the collision guard still has to catch is a group landing on an address already in
+// use: the same members proposed again. That is a replay of an applied group, and landing
+// it would put a second parent over children that already answer to one.
+func TestApplyGroupsRefusesReplayedMemberSet(t *testing.T) {
+	engine, err := core.Create(filepath.Join(t.TempDir(), "test.meh"))
 	if err != nil {
-		t.Fatalf("read the landed parent: %v", err)
+		t.Fatalf("create engine: %v", err)
+	}
+	t.Cleanup(func() { _ = engine.Close() })
+
+	const sceneID = uint64(7)
+	var topics []core.TopicSlot
+	for _, id := range []uint64{21, 22} {
+		topic := core.TopicSlot{ID: id, SceneID: sceneID, Depth: 1,
+			FusedKeywords: []string{"原文"}, UserTimestamp: 1000, AgentTimestamp: 2000}
+		if err := core.WriteTopicSlot(engine, core.DefaultAgentID, id, &topic); err != nil {
+			t.Fatalf("write topic %d: %v", id, err)
+		}
+		topics = append(topics, topic)
+	}
+	ac := domain.NewContext(core.DefaultAgentID, context.Background(), engine, anyKeywords{}, &config.MemHopDefaults{})
+	out := &llmops.ConsolidationOutput{L2Groups: []llmops.L2Group{
+		{NodeHashes: []uint64{21, 22}, MergedSummary: "第一次落地"},
+	}}
+	if got, err := applyGroups(context.Background(), ac, sceneID, topics, out); err != nil || got.groups != 1 {
+		t.Fatalf("the first pass must land the group, got %+v err %v", got, err)
+	}
+
+	got, err := applyGroups(context.Background(), ac, sceneID, topics, out)
+	if err != nil {
+		t.Fatalf("the replay pass: %v", err)
+	}
+	if got.groups != 0 || got.unusable != 1 {
+		t.Fatalf("a replayed member set must be refused, got %+v", got)
+	}
+	// The refusal is ahead of the first write, so the applied group is untouched.
+	original := core.ComputeFusedTopicID(sceneID, 1000, 2000, []uint64{21, 22})
+	parent, err := core.ReadTopicSlot(engine, core.DefaultAgentID, original)
+	if err != nil {
+		t.Fatalf("the landed parent vanished: %v", err)
 	}
 	if parent.Depth != 1 {
-		t.Fatalf("a fused parent belongs to the surface, got depth %d", parent.Depth)
-	}
-	for _, id := range []uint64{23, 24} {
-		got, err := core.ReadTopicSlot(engine, core.DefaultAgentID, id)
-		if err != nil {
-			t.Fatalf("read %d: %v", id, err)
-		}
-		if got.Depth != 1 || got.ParentID != nil {
-			t.Fatalf("the refused group moved %d: depth=%d parent=%v", id, got.Depth, got.ParentID)
-		}
-	}
-	summary, err := core.ReadArchiveSlot(engine, core.DefaultAgentID,
-		core.HashContent(collisionParent, core.SeqUser))
-	if err != nil {
-		t.Fatalf("read the parent's summary slot: %v", err)
-	}
-	if summary.Content != "第一组：登录链路" {
-		t.Fatalf("the landed parent must still carry the first group's summary, got %q", summary.Content)
+		t.Fatalf("a replay left the surface with another parent at depth %d", parent.Depth)
 	}
 }
 
@@ -207,7 +264,7 @@ func TestApplyGroupsRollsBackTheGroupWhenASinkRefuses(t *testing.T) {
 		t.Fatalf("a group whose sink refused must come back as that refusal under its own code, got %+v err=%v", got, sinkErr)
 	}
 
-	parentID := core.ComputeTopicID(sceneID, 1000, 2001)
+	parentID := core.ComputeFusedTopicID(sceneID, 1000, 2001, []uint64{31, 32})
 	if stored, err := core.ReadTopicLenient(engine, core.DefaultAgentID, parentID); common.CodeOf(err) != common.ErrNotFound || stored != nil {
 		t.Fatalf("the rolled-back group left its parent behind: %+v err=%v", stored, err)
 	}
@@ -256,7 +313,7 @@ func TestApplyGroupsRefusesAGroupItCannotSeeWhole(t *testing.T) {
 		t.Fatalf("a group with an unseen member must be refused, got %+v", got)
 	}
 	if stored, err := core.ReadTopicLenient(engine, core.DefaultAgentID,
-		core.ComputeTopicID(sceneID, 1000, 2001)); common.CodeOf(err) != common.ErrNotFound || stored != nil {
+		core.ComputeFusedTopicID(sceneID, 1000, 2001, []uint64{41, 42})); common.CodeOf(err) != common.ErrNotFound || stored != nil {
 		t.Fatalf("a refused group leaves no fused parent: %+v err=%v", stored, err)
 	}
 	member, err := core.ReadTopicSlot(engine, core.DefaultAgentID, 41)
@@ -340,7 +397,7 @@ func TestAFusedParentFoldsIntoALaterGroup(t *testing.T) {
 	}); err != nil || got.groups != 1 || got.topics != 2 || got.unusable != 0 {
 		t.Fatalf("first pass: %+v err=%v", got, err)
 	}
-	parent, err := core.ReadTopicSlot(engine, core.DefaultAgentID, core.ComputeTopicID(sceneID, 1000, 2001))
+	parent, err := core.ReadTopicSlot(engine, core.DefaultAgentID, core.ComputeFusedTopicID(sceneID, 1000, 2001, []uint64{61, 62}))
 	if err != nil {
 		t.Fatalf("read the fused parent: %v", err)
 	}
@@ -412,7 +469,7 @@ func TestFusedSummaryOutlivesTheTurnsItFolded(t *testing.T) {
 
 	PruneContentStage(ac, core.DefaultAgentID, &core.DreamReport{})
 
-	parentID := core.ComputeTopicID(sceneID, first.UnixMilli(), last.UnixMilli())
+	parentID := core.ComputeFusedTopicID(sceneID, first.UnixMilli(), last.UnixMilli(), []uint64{71, 72})
 	summary, err := core.ReadArchiveSlot(engine, core.DefaultAgentID, core.HashContent(parentID, core.SeqUser))
 	if err != nil {
 		t.Fatalf("the next pass took the summary this one wrote: %v", err)

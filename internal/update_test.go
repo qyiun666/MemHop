@@ -527,8 +527,8 @@ func TestUpdateRejectsForeignOrFusedTopic(t *testing.T) {
 	ac := testDefaultContext(db)
 
 	// A fused group: depth-2 child under a depth-1 fused parent, as Dream leaves it.
-	fusedParent := core.ComputeTopicID(sceneID, 500, 600)
-	fusedChild := newTopic(core.ComputeTopicID(sceneID, 100, 200), sceneID, 100, []string{"kw"})
+	fusedChild := newTopic(common.HashID("a topic no turn counter issued"), sceneID, 100, []string{"kw"})
+	fusedParent := core.ComputeFusedTopicID(sceneID, 500, 600, []uint64{fusedChild.ID})
 	fusedChild.Depth = 2
 	fusedChild.ParentID = &fusedParent
 	writeTopic(t, db.engine, core.DefaultAgentID, newTopic(fusedParent, sceneID, 500, []string{"kw"}))
@@ -581,7 +581,7 @@ func TestUpdateReplayKeepsASunkTurnSunk(t *testing.T) {
 	}
 
 	ac := testDefaultContext(db)
-	fusedParent := core.ComputeTopicID(sceneID, 500, 600)
+	fusedParent := core.ComputeFusedTopicID(sceneID, 500, 600, []uint64{topicID})
 	writeTopicCached(t, ac, db.engine, core.DefaultAgentID, newTopic(fusedParent, sceneID, 500, []string{"kw"}))
 	sunk, err := core.ReadTopicSlot(db.engine, core.DefaultAgentID, topicID)
 	if err != nil {

@@ -60,15 +60,16 @@ func TestDerivedIdNamespacesAreDisjoint(t *testing.T) {
 			}
 			return out
 		},
-		// Dream's fused-topic key is the one derivation with no prefix; it
-		// shares the turn family's (scene, number) space and must not land on
-		// any of it.
+		// A fused group's key spans the same (scene, number) space the turn family
+		// draws from, so its own prefix and its member set are what keep the two
+		// families apart.
 		"fused": func() []uint64 {
 			var out []uint64
 			for _, s := range scenes {
 				for _, a := range times {
 					for _, b := range times {
-						out = append(out, ComputeTopicID(s, a, b))
+						out = append(out, ComputeFusedTopicID(s, a, b, []uint64{1, 2}))
+						out = append(out, ComputeFusedTopicID(s, a, b, []uint64{3, 4}))
 					}
 				}
 			}

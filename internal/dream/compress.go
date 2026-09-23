@@ -158,17 +158,18 @@ func sharesMember(nodeHashes []uint64, claimed map[uint64]struct{}) bool {
 // wrote and returns the reason, so a group is either fully applied or leaves nothing
 // behind — except a rollback that itself fails, which is what its WARN exists to say.
 func applyOneGroup(ctx context.Context, ac *domain.Context, sceneID uint64, g llmops.L2Group, minTS, maxTS int64) error {
-	parentID := core.ComputeTopicID(sceneID, minTS, maxTS)
+	parentID := core.ComputeFusedTopicID(sceneID, minTS, maxTS, g.NodeHashes)
 	// An empty summary is not a group the engine can fuse: it would sink children
 	// under a parent carrying nothing. Refused ahead of the first record this group
 	// would own, so a rejected proposal leaves nothing to undo.
 	if strings.TrimSpace(g.MergedSummary) == "" {
 		return common.NewError(common.ErrLLM, "dream: merge group proposed an empty merged_summary", nil)
 	}
-	// The parent id is the group's timestamp bounds, so two disjoint groups sharing
-	// those bounds hash to the same one — likely when a host stamps a batch of turns
-	// with one timestamp. Landing the second would re-scope a parent over a different
-	// set of children.
+	// The parent id names its members, so two disjoint groups over the same bounds no
+	// longer hash to one id. What remains for this guard to catch is a genuine reuse of
+	// an address: the same member set proposed again (a replay of an applied group), or a
+	// 64-bit accident. Landing it would re-scope a parent over children another summary
+	// already claims, so it is refused — ahead of the first record this group would own.
 	switch stored, err := core.ReadTopicLenient(ac.Engine, ac.ID, parentID); {
 	case err != nil && common.CodeOf(err) != common.ErrNotFound:
 		return common.NewError(common.ErrIO, "dream: read the parent id this group would create", err)
@@ -202,7 +203,7 @@ func applyOneGroup(ctx context.Context, ac *domain.Context, sceneID uint64, g ll
 		return common.NewError(common.ErrLLM, "dream: extract keywords from merged summary", err)
 	}
 
-	if err := repo.CreateFusedTopicL2(ac.Engine, ac.ID, sceneID, keywords, minTS, maxTS); err != nil {
+	if err := repo.CreateFusedTopicL2(ac.Engine, ac.ID, sceneID, keywords, minTS, maxTS, g.NodeHashes); err != nil {
 		discardFusedGroup(ac, parentID)
 		return common.NewError(common.CodeOf(err), "dream: create fused topic", err)
 	}
