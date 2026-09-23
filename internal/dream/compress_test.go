@@ -15,6 +15,7 @@ import (
 	"github.com/qyiun666/MemHop/internal/domain"
 	"github.com/qyiun666/MemHop/internal/repo"
 	"github.com/qyiun666/MemHop/internal/repo/core"
+	"github.com/qyiun666/MemHop/internal/repo/index"
 )
 
 // anyKeywords answers every extraction with one keyword track, so a group is
@@ -559,6 +560,107 @@ func TestFusedGroupAgesIntoKeywordTracksNotSilence(t *testing.T) {
 		}
 		if len(child.FusedKeywords) == 0 {
 			t.Fatalf("turn %d lost the track that outlives its prose: %+v", id, child)
+		}
+	}
+}
+
+// TestAFoldedGroupCanItselfBeFolded covers the second consolidation pass folding a
+// group the first pass created. It does not open a third level: only surface rows are
+// ever sunk, so a sunk row sits at depth 2 whether or not it is itself a group, and the
+// scene read — which stops at depth 2 — therefore never hides a topic. The intermediate
+// group keeps its own summary and its own children still name it as their parent, which
+// is why a reader may skip it without losing a fact: what it said went into the later
+// summary, and every original is still on disk under it.
+func TestAFoldedGroupCanItselfBeFolded(t *testing.T) {
+	engine, err := core.Create(filepath.Join(t.TempDir(), "test.meh"))
+	if err != nil {
+		t.Fatalf("create engine: %v", err)
+	}
+	t.Cleanup(func() { _ = engine.Close() })
+
+	const sceneID = uint64(7)
+	base := time.Now().Add(-3 * time.Minute)
+	var turns []core.TopicSlot
+	for i, id := range []uint64{91, 92, 93} {
+		at := base.Add(time.Duration(i) * time.Minute)
+		topic := core.TopicSlot{
+			ID: id, SceneID: sceneID, Depth: 1, FusedKeywords: []string{"登录"},
+			UserTimestamp: at.UnixMilli(), AgentTimestamp: at.UnixMilli(),
+		}
+		if err := core.WriteTopicSlot(engine, core.DefaultAgentID, id, &topic); err != nil {
+			t.Fatalf("write turn %d: %v", id, err)
+		}
+		turns = append(turns, topic)
+	}
+	ac := domain.NewContext(core.DefaultAgentID, context.Background(), engine, anyKeywords{}, &config.MemHopDefaults{})
+
+	if got, err := applyGroups(context.Background(), ac, sceneID, turns[:2], &llmops.ConsolidationOutput{
+		L2Groups: []llmops.L2Group{{NodeHashes: []uint64{91, 92}, MergedSummary: "第一趟的组"}}}); err != nil || got.groups != 1 {
+		t.Fatalf("first fold: %+v err=%v", got, err)
+	}
+
+	ac.L2Meta = index.BuildL2MetaFromEngine(engine, core.DefaultAgentID)
+	surface := repo.ListTopicsL2(repo.TopicListQuery{MetaIdx: ac.L2Meta, SceneID: sceneID, Depth: 1})
+	if len(surface) != 2 {
+		t.Fatalf("after the first fold the scene shows %d surface topics, want the group and the turn left out: %+v", len(surface), surface)
+	}
+	firstGroupID := surface[0].ID // it carries the group's earliest user timestamp, so it leads
+	if got, err := applyGroups(context.Background(), ac, sceneID, surface, &llmops.ConsolidationOutput{
+		L2Groups: []llmops.L2Group{{NodeHashes: []uint64{firstGroupID, 93}, MergedSummary: "第二趟的组"}}}); err != nil || got.groups != 1 {
+		t.Fatalf("second fold: %+v err=%v", got, err)
+	}
+
+	ac.L2Meta = index.BuildL2MetaFromEngine(engine, core.DefaultAgentID)
+	all := repo.ListTopicsL2(repo.TopicListQuery{MetaIdx: ac.L2Meta, SceneID: sceneID, Depth: 2})
+	if len(all) != 5 {
+		t.Fatalf("the read's own depth cap hid a topic after two folds: %d rows, want all 5: %+v", len(all), all)
+	}
+	var second, first *core.TopicSlot
+	for i := range all {
+		row := &all[i]
+		switch row.ID {
+		case firstGroupID:
+			first = row
+		default:
+			if row.Depth == 1 && row.ParentID == nil &&
+				row.ID != 91 && row.ID != 92 && row.ID != 93 {
+				second = row
+			}
+		}
+	}
+	if second == nil || first == nil {
+		t.Fatalf("the two groups did not come back: second=%+v first=%+v", second, first)
+	}
+	if first.Depth != 2 || first.ParentID == nil || *first.ParentID != second.ID {
+		t.Fatalf("the first group is not sunk under the second: %+v", first)
+	}
+	// Skipping it is not losing it: its own summary is still readable, and the turns it
+	// swallowed still answer to it rather than to the later group.
+	for _, tc := range []struct {
+		who  string
+		id   uint64
+		want *uint64
+	}{
+		{"the first group, now sunk", first.ID, &second.ID},
+		{"a turn of the first group", 91, &firstGroupID},
+		{"a turn of the first group", 92, &firstGroupID},
+		{"the turn the second group swallowed", 93, &second.ID},
+	} {
+		row, err := core.ReadTopicSlot(engine, core.DefaultAgentID, tc.id)
+		if err != nil {
+			t.Fatalf("read %s: %v", tc.who, err)
+		}
+		if row.Depth != 2 {
+			t.Errorf("%s sits at depth %d, want 2 — only surface rows sink", tc.who, row.Depth)
+		}
+		if (row.ParentID == nil) != (tc.want == nil) || (tc.want != nil && *row.ParentID != *tc.want) {
+			t.Errorf("%s answers to %v, want %v", tc.who, row.ParentID, tc.want)
+		}
+	}
+	for _, id := range []uint64{first.ID, second.ID} {
+		summary, err := core.ReadArchiveSlot(engine, core.DefaultAgentID, core.HashContent(id, core.SeqUser))
+		if err != nil || summary.Role != core.RoleDream {
+			t.Fatalf("group %x lost its own summary: %+v err=%v", id, summary, err)
 		}
 	}
 }

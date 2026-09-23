@@ -392,7 +392,7 @@ What is left for the host is eight facts to know, not eight adapters to write:
   group is a depth-1 topic whose summary rides as its own utterance marked `Role: api.RoleDream`,
   and the turns that group swallowed are its depth-2 children — this read is the only one that names
   those children, and the only place their originals come back. So: (1) drop rows with `Depth > 1`,
-  those are originals a parent already summarized; (2) where `ChildCount > 0`, take that
+  those are the rows a surface row already absorbed — usually an original turn, but sometimes an earlier group that a later pass folded away (it keeps its own summary and its children still name it, while what it said went into the newer summary); sinking takes one surface row down exactly one level per pass, so this read's own depth cap cannot hide a topic from a reader — what it lists is everything the scene still holds; (2) where `ChildCount > 0`, take that
   `RoleDream` line as the memory's text; (3) otherwise take the turn's own `RoleUser`/`RoleAgent`
   lines; (4) date a memory by the row's own `UserTimestamp` — for a turn that is when its user
   message arrived, for a group the earliest turn it swallowed. Steps (1) and (2) are what
