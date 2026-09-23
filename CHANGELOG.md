@@ -94,6 +94,8 @@ README 的版本表与 git log。
 
 43. **`SceneContext` 的行序三键全部有断言了，指南也第一次把它写出来**：实现里排序是 `(UserTimestamp, 浅的在前, 话题 id)`——第二键不是装饰：融合组带的是它吞掉的第一轮的戳，并列是常态，而宿主的四条折叠判据按行线性读（组行若落在自己总结的原文中间，就等于没总结）。此前只有一处断言查主键（`test/api_interface_corpus_test.go`），次键只在实现注释与 `internal/agent.md` 第 14 条里；两份指南的 `SceneContext` 那行更是**根本没提行序**，于是宿主只能自己再排一次（换后端草案确实排了——可证是多余的）。现在：巩固那条重开测试把三个键逐项断言，并加一道「本次数据必须真的出现过并列」的守卫（否则次键等于没测）；**负例**＝把 `Depth` 次键反向，测试当场报 `at a timestamp tie the deeper row leads at 1, so a group does not introduce its own originals`；两份指南的 `SceneContext` 行补上这句顺序承诺；草案里那次 `slices.SortFunc` 随之删掉（宿主三包仍全绿）。零生产代码改动。
 
+44. **指南的可跑骨架现在被真的跑一遍**（`test/guide_skeleton_test.go`，零额度、随 `go test ./test/` 与 CI 一起走）：`make check-guides` 只把骨架编译一次——那只证明名字对得上，而宿主照的是文档不是测试：一个编得过、第一次调用就 `log.Fatal` 的 quickstart 它看不见。新测试用与 `check-guides` 相同的抽取规则取出两份指南里 `package main` 那块，照宿主的处境放进一个临时模块（`replace` 指向本仓、`GOPROXY=off`、从模块缓存解析依赖），构建后**以假端点跑起来**：四个环境变量指向包内的 mock LLM 与临时 `.meh`，要求退出码 0 且输出里没有 `panic:`。两份指南各自独立成子测试。**负例**：临时把骨架里一次 `Update` 的时间戳改成 0（正是本轮刚在 §12 写明「库不替你补表」的那条边界），测试当场报 `a positive timestamp is required` / `exit status 1`；还原后复绿，文件经 `git checkout` 回到提交状态（改完即核对工作树）。零生产代码改动。
+
 ## v1.6.5 — 2026-09-22 — MCP 面整体退役：对外只剩 Go module
 
 1. **`cmd/memhop-mcp` 整包删除**（14 个文件 3109 行）：25 个工具、多租户 HTTP（SSE 与 streamable-http 双传输）、按 `/mcp/<tenant>` 建/取域的租户注册表、`--tenants` 白名单与锚定 db-dir 的读入口一起消失。仓库不再有 server 形态、不再有后台进程，对外只剩「以 Go module 使用 `api`」一种接入。
