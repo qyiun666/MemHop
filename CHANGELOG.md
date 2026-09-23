@@ -104,6 +104,8 @@ README 的版本表与 git log。
 
 48. **保留窗的清扫读的是钟，不是轮的状态——这条此前被写反了**（`internal/dream_midturn_test.go` + 三处文档）：既有那条只测了**窗口内**的轮中记录（时间戳取「刚刚」），于是模块文档与本机 AGENTS 都把它写成「Dream 不扫开着那一轮已写的记录」。实测不成立：把 `ContentRetentionMs` 压到 1 秒、往开着的一轮里写一条钟在一小时前的记录，一趟 `Dream` 之后它就是 0 条——**过窗即扫，与轮开没开无关**；而这趟 Dream 也不接管那一轮：挂着的 `Update` 照样落在这个轮上（它自己写的两句是新钟，因此留下），收束成功后场景读正是 1 行 2 句。现在两个方向各有一条测试钉住，并把夸大处改准（`internal/agent.md` 第 30 行、两份指南的保留窗那一格明确写「开着的一轮也不例外」、既有测试的注释划回窗口内）。新测的**负例**：让清扫在有开轮时把 cutoff 归零（等价于豁免），它当场报 `the expired mid-round record survived the sweep`，而窗口内那条不受影响。零生产代码改动。
 
+49. **计划树要被豁免得同时满足两条，指南只写了一条**（`internal/dream/plan_prune_test.go` + 两份指南 §12 第 7 条）：实现里是「仍有未到终态的步」**且**「窗口内有过活动」才跳过整棵树（`internal/dream/prune.go` 的 `agg.HasNonDone && agg.LastActiveAt >= cutoff`），不豁免的树里每一步再各按自己的 `UpdatedAt` 计时；指南写的是「仍在进行的树豁免」，宿主据此会以为一棵被搁置的在途树永远留着——而那正是这一阶段存在理由的反面（L5 失去上界）。两个组合此前都没有测试钉着：既有那条（`TestPrunePlanStageSkipsWhenTheTreeIsIncomplete`）只测了被豁免的一侧。新用例一次摆三棵树（在途且窗口内活动 / 在途但静默 / 已完结且两步一旧一新），一趟裁剪后逐棵读回：第一棵 1 步全留，第二棵整棵没了，第三棵只留下窗口内那一步（4 条节点剪掉 2 条）。**负例**：把 `&&` 换成 `||`，后两条断言当场分别报 `an in-flight but silent tree survived the window, so L5 has no bound` 与 `a finished tree should lose only the stale step`，第一条不受影响——哪一条漏了都红在自己那个方向上。零生产代码改动。
+
 ## v1.6.5 — 2026-09-22 — MCP 面整体退役：对外只剩 Go module
 
 1. **`cmd/memhop-mcp` 整包删除**（14 个文件 3109 行）：25 个工具、多租户 HTTP（SSE 与 streamable-http 双传输）、按 `/mcp/<tenant>` 建/取域的租户注册表、`--tenants` 白名单与锚定 db-dir 的读入口一起消失。仓库不再有 server 形态、不再有后台进程，对外只剩「以 Go module 使用 `api`」一种接入。

@@ -861,7 +861,11 @@ func main() {
    opened or migrated.
 7. **Content and plans auto-expire**: Dream drops a topic's content past the
    retention window (seven days by default, configurable via
-   `Defaults.ContentRetentionMs`) and plan nodes past it (a tree still in flight is exempt);
+   `Defaults.ContentRetentionMs`) and plan nodes past it. A tree is exempt from
+   that sweep only while it is BOTH still in flight and was acted on inside the
+   window - an abandoned in-flight tree sweeps like anything else, which is exactly
+   what keeps L5 bounded; inside a tree that is not exempt, every step is measured
+   on its own clock, so a plan one late update touched loses only its stale steps;
    `DeleteTopic` / `DeleteScene` are the explicit corrections. Past the window a
    topic keeps its keyword track and its `Messages` come back empty or with gaps in
    `Seq` — a legal end state, not a failed read. A fused group's summary ages from

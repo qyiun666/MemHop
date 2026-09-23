@@ -63,7 +63,9 @@
 - 在途豁免读的是节点时钟：`HasNonDone && LastActiveAt >= cutoff`，其中
   `LastActiveAt` 是该树节点 `UpdatedAt` 的最大值。它保住的是**整棵活树**（含早已
   不更新的 done 父节点），而不是让高频写事件的树续命——一棵树该不该活着，只有对它
-  做过的提交能回答。
+  做过的提交能回答。两个方向各有一条断言钉着：`TestPrunePlanStageSkipsWhenTheTreeIsIncomplete`
+  保被豁免的那一侧，`TestPrunePlanStageNeedsBothConditionsToSpareATree` 保被扫掉的那一侧（在途但静默的树整棵走、
+  不豁免的树里只走过期的那一步）。
 - 可清扫单位就是 `repo.CollectPlanNodes` 给的按键聚合（键下无节点即不成聚合），没有
   独立的计划登记表。这一步读引擎而不读 `ac.Plans`：一次清扫不该被一份可能滞后的
   缓存塑形。它读的还是严格那份扫描——枚举不全就整轮不扫（报 `l5_prune` 的 error 后
