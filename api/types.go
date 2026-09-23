@@ -220,7 +220,11 @@ type ProfileInput struct {
 // deleted since still is until the next pass rebuilds the list. EdgeIDs name the
 // co-occurrence edges incident on the node; an edge has no read of its own, so those
 // ids are useful exactly one way — two nodes sharing one are a pair Dream judged
-// related. CreatedAt and UpdatedAt are milliseconds since the epoch.
+// related. CreatedAt is milliseconds since the epoch. UpdatedAt is too, and it is the
+// clock forgetting is measured from: it moves when the scene's topic set changes, when a
+// consolidation pass fades this node, and when a distillation stamps emotion values
+// different from the ones it holds — so it answers "when did this memory last matter",
+// not "when was it written".
 type SceneNodeView struct {
 	ID         string   `json:"id"`
 	SceneID    string   `json:"scene_id"`

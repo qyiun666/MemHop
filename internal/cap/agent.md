@@ -9,7 +9,10 @@
   （`BuildHyperedges`/`DecayNetwork`/`RebuildFromL2`）。一条已存在的边的权重只在
   某一端点**名下的轮次清单变了**（少一轮与多一轮同算）时才上升：`touched` 说的是这个，不是
   「关键词变了」——同一批轮次被再蒸馏一次，清单没变而重算出的相似度还是建边时那个值，按它
-  抬权等于每轮把衰减抹平。
+  抬权等于每轮把衰减抹平。节点这一侧没有独立的衰减钟字段：衰减读节点上的 `UpdatedAt`，并在算完之后
+  把同一格回戳到本趟时刻。读与回戳落在同一步，只有在**衰减可复合**时不打架——两趟各一小时必须落在
+  与一趟两小时同一个重要性上（`TestNodeDecayComposesAcrossPasses`：回戳停在本次时刻、两趟等于一趟、
+  区间里这口钟被推进过的节点不为整段买单）。
 - `llmops/`：三类 LLM 调用点的 prompt 契约、输出解析与自愈重试预算
   （`ExtractKeywords`/`Consolidate`/`Distill`）；传输经注入的 `Chat` 接口。
 - `profile/`：L0 画像的紧凑摘要（`Brief`）、蒸馏样本与排名（`Samples`）、蒸馏结果

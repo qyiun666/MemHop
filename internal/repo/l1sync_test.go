@@ -70,11 +70,22 @@ func TestSyncL1NodesFromL2(t *testing.T) {
 	if len(changed) != 0 {
 		t.Fatalf("want 0 changes, got %d", changed)
 	}
-	if node, err := core.ReadSceneNode(engine, core.DefaultAgentID, common.HashID("scene-node:"+common.FormatHash(sceneA))); err == nil && node.UpdatedAt != firstUpdatedAt {
-		t.Fatalf("no-op sync must not refresh UpdatedAt")
+	afterNoop, err := core.ReadSceneNode(engine, core.DefaultAgentID, common.HashID("scene-node:"+common.FormatHash(sceneA)))
+	if err != nil {
+		t.Fatalf("the no-op sync left the node unreadable: %v", err)
+	}
+	if afterNoop.UpdatedAt != firstUpdatedAt {
+		t.Fatalf("a no-op sync refreshed the clock decay measures from: %d, want %d",
+			afterNoop.UpdatedAt, firstUpdatedAt)
 	}
 
-	// A new topic in the scene updates the node in place.
+	// A new topic in the scene updates the node in place. The clock is parked on a
+	// sentinel first, so "the changed set moved it" is an equality rather than a race
+	// between two calls that can land in the same millisecond.
+	node.UpdatedAt = 1
+	if err := core.WriteSceneNode(engine, core.DefaultAgentID, node.IDHash, node); err != nil {
+		t.Fatalf("park the clock on a sentinel: %v", err)
+	}
 	mustCreateTurn(t, engine, sceneA, []string{"k3"}, 3000)
 	changed, err = SyncL1NodesFromL2(engine, core.DefaultAgentID)
 	if err != nil {
@@ -89,6 +100,10 @@ func TestSyncL1NodesFromL2(t *testing.T) {
 	}
 	if len(node.TopicIDs) != 3 || node.Importance != 1.0 {
 		t.Fatalf("node should keep importance and grow topic set: %+v", node)
+	}
+	if node.UpdatedAt == 1 {
+		t.Fatalf("a changed topic set left the clock on the sentinel, so decay would keep measuring from a value "+
+			"this scene stopped meaning: %+v", node)
 	}
 
 	// A second scene gets its own node.
