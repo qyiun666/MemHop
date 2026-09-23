@@ -255,7 +255,7 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    （`TestCreateTurnTopicL2ReplayKeepsSunkPosition`）。
 4. **巩固按单场景规模触发**：`consolidateScene` 在 depth-1 话题数超
    `Defaults.SceneDreamTopicThreshold` 时调度该场景 Dream（同一份表在装配处归一过，故
-   「没填」= 默认 24，`t <= 0` 只剩「宿主显式写了负数」这一种来路）；单个融合组是
+   「没填」= 默认 24，`t <= 0` 只剩「宿主显式写了负数」这一种来路）。被拒的那趟不改表层计数，于是下一次收轮仍然超阈、再问一次，而本库不记「上次拒过」——那要新造一份会出错的持久真相；这条花费的上界是每场景每趟一次巩固调用（`DreamInFlight` 吸收在飞期间的那几次收轮，`TestDeclinedConsolidationAsksOncePerScenePerPass` 数着调用次数钉住），而 `DreamCompressMinTopics` 判在问模型之前，默认 20 低于触发 24，所以它对已被触发的场景不构成第二道闸。单个融合组是
    "摘要内容 → 提炼关键词 → 建父话题 → 下沉子话题"的串写，任一步
    失败都回滚本组已写的记录（`dream.discardFusedGroup` 按父话题键整删它名下的
    内容与缓存——本组写过的东西全在父键底下，不必去数域里别的记录；一次下沉的
