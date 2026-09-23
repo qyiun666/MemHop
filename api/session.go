@@ -347,8 +347,10 @@ func (s *Session) Dream(ctx context.Context, sceneID string) (*DreamReport, erro
 // it is — so it is the read for showing or exporting a conversation, and the one a
 // loop can call again mid-round without spending a turn. An empty sceneID reads the
 // scene this domain is working, so a host running one agent over one library names
-// nothing to read it; a domain that has never been read answers ErrNotFound rather
-// than starting a conversation. Entries come in speaking order, each carrying its own
+// nothing to read it; a domain that has never spoken answers an empty transcript with
+// no scene named — "nothing has been said here yet" is a fact, not a failure, and this
+// call still writes nothing. A scene id the host names that is not there is ErrNotFound.
+// Entries come in speaking order, each carrying its own
 // L4 messages; depth-2 originals are included here (see SceneContext).
 func (s *Session) SceneContext(sceneID string) (*SceneContext, error) {
 	return s.session.SceneContext(sceneID)

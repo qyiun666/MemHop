@@ -209,17 +209,22 @@ func (db *DB) requireScenes(agentID uint64, ids ...uint64) error {
 // stopping at depth 1 (what Search returns) would hide them. Unknown scenes
 // return an error. An empty sceneID reads the scene this domain is working, so a
 // host that runs one agent over one library reads a conversation without holding
-// or naming anything; a domain with no scene yet is ErrNotFound, since minting one
-// is what opening a turn does and this call writes nothing.
+// or naming anything; a domain with no scene yet answers with an empty transcript and no
+// scene named — "nothing has been said here yet" is a fact, not a failure. Minting a scene
+// is still what opening a turn does, and a scene id the host names that is not there stays
+// ErrNotFound.
 func (db *DB) SceneContext(agentID uint64, sceneID string) (*SceneContext, error) {
 	ac, err := db.lockAgent(agentID)
 	if err != nil {
 		return nil, err
 	}
 	defer ac.Mu.Unlock()
-	sceneHash, err := db.readScene(ac, agentID, sceneID)
+	sceneHash, hasScene, err := db.readScene(ac, agentID, sceneID)
 	if err != nil {
 		return nil, err
+	}
+	if !hasScene {
+		return &SceneContext{Topics: []SceneContextTopic{}}, nil
 	}
 	scenes, err := repo.ListScenesL2(db.engine, agentID, []uint64{sceneHash})
 	if err != nil {

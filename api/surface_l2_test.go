@@ -133,13 +133,25 @@ func TestSurfaceRenameTopicRefusals(t *testing.T) {
 
 // The transcript read can name nothing at all: which scene this domain is working is
 // the library's own memory, so a loop that recalls between its rounds carries no id and
-// opens no turn to do it. A domain that has never been read answers ErrNotFound instead
-// of starting a conversation — creating one is what the read that opens a turn does.
+// opens no turn to do it. A domain that has never been read answers with an empty
+// transcript — "nothing has been said here yet" is a fact, not a failure, and a recall
+// port whose error terminates the round needs no special case for it. Starting a
+// conversation is still what the read that opens a turn does, and a scene the host *names*
+// that is not there is still ErrNotFound.
 func TestSurfaceSceneReadNeedsNoId(t *testing.T) {
 	db := openSurfaceDB(t)
 
-	if _, err := db.SceneContext(""); CodeOf(err) != ErrNotFound {
-		t.Fatalf("an unread domain: err = %v, want ErrNotFound", err)
+	unread, err := db.SceneContext("")
+	if err != nil {
+		t.Fatalf(`SceneContext("") on an unread domain: %v`, err)
+	}
+	if len(unread.Topics) != 0 || unread.SceneName != "" {
+		t.Fatalf("an unread domain answered %+v, want an empty transcript with no scene named", unread)
+	}
+	// The empty answer belongs to the read that named nothing; a named id that is not a
+	// scene is still a miss, and 0 is a scene id no library ever issued.
+	if _, err := db.SceneContext("0000000000000000"); CodeOf(err) != ErrNotFound {
+		t.Fatalf("a named scene that is not there: err = %v, want ErrNotFound", err)
 	}
 	res, err := db.Search(SearchQuery{})
 	if err != nil {

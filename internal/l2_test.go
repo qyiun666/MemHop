@@ -578,11 +578,18 @@ func TestSceneContextWithoutAnIdReadsTheDomainsScene(t *testing.T) {
 	srv := mockLLMServer(t, turnKeywords)
 	db := newSearchTestDB(t, srv.URL)
 
-	if _, err := db.SceneContext(core.DefaultAgentID, ""); common.CodeOf(err) != common.ErrNotFound {
-		t.Fatalf("an un-named read of an unread domain: err = %v, want ErrNotFound", err)
+	// A domain with no session yet answers with an empty transcript: "nothing has been said
+	// here" is a fact this read can give, and giving it writes nothing. Creating a scene is
+	// still what opening a turn does, so the record count stays at zero.
+	empty, err := db.SceneContext(core.DefaultAgentID, "")
+	if err != nil {
+		t.Fatalf("an un-named read of an unread domain: %v", err)
+	}
+	if len(empty.Topics) != 0 || empty.SceneName != "" {
+		t.Fatalf("the unread domain answered %+v, want no scene named and no topics", empty)
 	}
 	if n := countRecords(db.engine, core.DefaultAgentID, core.RecL2Scene); n != 0 {
-		t.Fatalf("the refused read created %d scenes, want none", n)
+		t.Fatalf("the empty answer created %d scenes, want none", n)
 	}
 
 	res, err := db.Search(core.DefaultAgentID, SearchQuery{})

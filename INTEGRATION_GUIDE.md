@@ -359,12 +359,13 @@ readable by that id before `Update` closes the turn.
 
 What is left for the host is eight facts to know, not eight adapters to write:
 
-- **A recall port turns "no scene yet" into an empty answer.** `SceneContext("")` refuses with
-  `ErrNotFound` on a domain that has never been read — it does not create a scene for a read.
-  That is the library's contract, but a decision-loop kernel reads memory *before* every model
-  call and treats an error from that port as ending the whole invocation, so a first round
-  would kill the agent that has nothing to remember yet. Check that one code and return no
-  records; pass any other error up, where it is a real fault.
+- **A domain that has never spoken answers a recall with nothing, not with an error.**
+  `SceneContext("")` on such a domain returns an empty transcript with no scene named, and it
+  still writes nothing — minting a scene stays what the read that opens a turn does. That is the
+  shape a decision-loop kernel needs: it reads memory *before* every model call and treats an
+  error from that port as ending the whole invocation, so the alternative was every host writing
+  the same "ignore that one code" special case. A scene id you *name* that is not there remains
+  `ErrNotFound`, and so does a read that genuinely failed.
 
 - **Closing one turn twice is a replay, not a continuation.** The two dialogue slots hold the
   pair the last close stated, while every ending stays as its own event —

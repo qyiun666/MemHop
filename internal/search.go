@@ -120,22 +120,26 @@ func (db *DB) ensureScene(ac *domain.Context, agentID uint64) error {
 }
 
 // readScene resolves the scene a write-free read is scoped to: the id the host named, or
-// the domain's own current one when it names none. That is the whole of the host's side
-// of a pure read — no id held, no turn opened, nothing written. A domain that has never
-// been read gets ErrNotFound rather than an empty transcript, because creating a scene
-// is what opening a turn does and this call promises not to do that.
-func (db *DB) readScene(ac *domain.Context, agentID uint64, sceneID string) (uint64, error) {
+// the domain's own current one when it names none. That is the whole of the host's side of
+// a pure read — no id held, no turn opened, nothing written.
+//
+// hasScene is false for one situation only: this domain has never had a conversation. That
+// is an answer the read can give without writing anything (minting a scene stays what
+// opening a turn does), so it is not folded into ErrNotFound, which a caller reads as "the
+// scene you named is not here". A named id passes through untouched, including a zero the
+// library never issued, so a named miss keeps being a miss.
+func (db *DB) readScene(ac *domain.Context, agentID uint64, sceneID string) (uint64, bool, error) {
 	if sceneID != "" {
-		return parseID("scene", sceneID)
+		id, err := parseID("scene", sceneID)
+		return id, true, err
 	}
 	if err := db.ensureScene(ac, agentID); err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	if ac.Scene == 0 {
-		return 0, common.NewError(common.ErrNotFound,
-			"this domain holds no scene to read: Search opens the first one")
+		return 0, false, nil
 	}
-	return ac.Scene, nil
+	return ac.Scene, true, nil
 }
 
 // sceneAnchor parses the project domain a created scene hangs on; an empty string
