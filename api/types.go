@@ -195,7 +195,10 @@ type ProfileSlot struct {
 // ProfileInput is the profile as a host writes it — the argument to Open, SubAgent
 // and UpdateL0. It holds exactly the fields the host owns. Name is required at all
 // three entries (a blank one is refused) because it is how the domain is addressed;
-// the other three may be left empty.
+// the other three may be left empty. Empty is not "leave it alone" for those three: a write
+// replaces the host half whole, so omitting Role clears it and Preferences becomes exactly the
+// table this call carries (nil means none). Merging per key would leave a preference with no
+// way to be deleted, so changing one entry means GetL0, edit, write back.
 //
 // The library-owned fields are absent rather than ignored. On an inbound record a
 // blank EmotionState or a zero UpdatedAtMs cannot be told apart from "leave what is

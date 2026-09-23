@@ -511,7 +511,13 @@ inherit: Dream's distillation replaces it with the personality summary the model
 derived from this domain's memories, so it reads back as whichever of the two ran
 last. An `UpdateL0` that leaves it empty therefore clears the distilled summary,
 and the next pass evolves it again — carry the value back from `GetL0` if you mean
-to keep it. `Name`, `Role` and `Preferences` have the host as their only writer.
+to keep it. `Name`, `Role` and `Preferences` have the host as their only writer — and that half is written
+**whole, not merged**: naming one preference drops the rest, omitting `Role` clears it, and a nil
+table means the same as an empty one. That is the price of being able to delete anything at all —
+a per-key merge would leave a preference with no way to go away — so changing one entry means
+reading the profile, editing the map, and writing it back (`TestUpdateL0WritesTheHostHalfWhole`
+pins the replacement and the read-merge-write path). The distilled half is inherited either way,
+so no host write can fade it.
 
 ### L2 scenes
 

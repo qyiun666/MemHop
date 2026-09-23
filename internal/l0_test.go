@@ -110,3 +110,70 @@ func TestUpdateL0RequiresName(t *testing.T) {
 		t.Fatalf("the refused edit must have written nothing, got %+v", got)
 	}
 }
+
+// The host's half of the profile is written whole, not merged: a call that names one
+// preference drops the others, and one that omits Role clears it. That is the price of
+// being able to delete anything at all — a per-key merge would leave a preference with no
+// way to go away — so it is pinned as the contract rather than left as a surprise, with
+// the read-merge-write path that follows from it.
+func TestUpdateL0WritesTheHostHalfWhole(t *testing.T) {
+	db := newTestDB(t, newTestEngine(t))
+	seed := &core.ProfileSlot{
+		Name: "cat", Role: "assistant", Personality: "steady",
+		Preferences:  map[string]string{"language": "zh", "tone": "terse"},
+		EmotionState: core.EmotionScore{Valence: 0.4, Arousal: 0.2, Dominance: 0.6},
+		MBTI:         core.MBTIScore{IE: 0.3, NS: 0.5, TF: 0.1, JP: 0.7, Type: "ESFP"},
+	}
+	if err := db.UpdateL0(core.DefaultAgentID, seed); err != nil {
+		t.Fatalf("seed profile: %v", err)
+	}
+
+	// One preference named, nothing else but the required Name: the rest of the host half goes.
+	if err := db.UpdateL0(core.DefaultAgentID, &core.ProfileSlot{
+		Name: "cat", Preferences: map[string]string{"language": "en"},
+	}); err != nil {
+		t.Fatalf("host edit: %v", err)
+	}
+	got, err := db.GetL0(core.DefaultAgentID)
+	if err != nil {
+		t.Fatalf("read after the edit: %v", err)
+	}
+	if len(got.Preferences) != 1 || got.Preferences["language"] != "en" {
+		t.Fatalf("Preferences survived the edit as %+v, want exactly the one this write named", got.Preferences)
+	}
+	if got.Role != "" || got.Personality != "" {
+		t.Fatalf("the host half merged instead of replaced: role=%q personality=%q, want both cleared",
+			got.Role, got.Personality)
+	}
+	if got.EmotionState.Valence != 0.4 || got.MBTI.Type != "ESFP" {
+		t.Fatalf("the distilled half has no host in it: %+v", got)
+	}
+
+	// The path a host actually needs: read the table, change it, write the whole thing back.
+	// That is how a single preference gets deleted.
+	remaining := map[string]string{}
+	for k, v := range got.Preferences {
+		remaining[k] = v
+	}
+	delete(remaining, "language")
+	if err := db.UpdateL0(core.DefaultAgentID, &core.ProfileSlot{
+		Name: got.Name, Role: got.Role, Personality: got.Personality, Preferences: remaining,
+	}); err != nil {
+		t.Fatalf("write the merged table back: %v", err)
+	}
+	after, err := db.GetL0(core.DefaultAgentID)
+	if err != nil {
+		t.Fatalf("read after the deletion: %v", err)
+	}
+	if len(after.Preferences) != 0 {
+		t.Fatalf("a preference could not be removed by the read-merge-write path: %+v", after.Preferences)
+	}
+
+	// Naming no table at all is the same answer as naming an empty one.
+	if err := db.UpdateL0(core.DefaultAgentID, &core.ProfileSlot{Name: "cat"}); err != nil {
+		t.Fatalf("write without a table: %v", err)
+	}
+	if last, err := db.GetL0(core.DefaultAgentID); err != nil || len(last.Preferences) != 0 {
+		t.Fatalf("a nil table read back as %+v (err %v), want no preferences", last.Preferences, err)
+	}
+}
