@@ -27,7 +27,7 @@ internal/{domain,scene,turn,dream,graph,plan,content}
 
 | 包 | 职责 |
 |---|---|
-| `domain` | 域状态容器 `Context`（Mu/L2Meta/L4/Plans/DreamInFlight/OpCtx，持 Engine/LLM/Defaults 注入）+ PlanCache + L2Meta 缓存维护（SyncL2Meta/RemoveTopicsFromIndices/RetargetL2Meta）；`L4` 是「话题 → 它名下的内容槽位（原文 + 事件）」的镜像。另有两个**自持字段** `Scene`/`Turn`（该域当前的场景与开着的那一轮），宿主因此不必持有也不必回传这两个 id；它们只在域锁内读写，维护口是 `ForgetScene`/`MoveScene`/`ForgetTurn`，Dream 各阶段不在其列——宿主把巩固挂在定时器上撞进开着的一轮，不丢轮也不扫它已写的记录（`TestDreamLeavesTheOpenTurnCloseable`）|
+| `domain` | 域状态容器 `Context`（Mu/L2Meta/L4/Plans/DreamInFlight/OpCtx，持 Engine/LLM/Defaults 注入）+ PlanCache + L2Meta 缓存维护（SyncL2Meta/RemoveTopicsFromIndices/RetargetL2Meta）；`L4` 是「话题 → 它名下的内容槽位（原文 + 事件）」的镜像。另有两个**自持字段** `Scene`/`Turn`（该域当前的场景与开着的那一轮），宿主因此不必持有也不必回传这两个 id；它们只在域锁内读写，维护口是 `ForgetScene`/`MoveScene`/`ForgetTurn`，Dream 各阶段不在其列——宿主把巩固挂在定时器上撞进开着的一轮，不丢轮——窗口**内**的记录也不被扫，挂着的收束照样落下（`TestDreamLeavesTheOpenTurnCloseable`）；但清扫量的是钟不是轮的状态：开着的一轮里钟已过窗的记录与普通记录一样被扫走，Dream 只是不接管那一轮（`TestDreamSweepsAnExpiredMidRoundRecordAndStillClosesTheTurn`）|
 | `scene` | L2 场景读写面：Create（没有场景可读时就在内部新建）/ResolveExisting（宿主点名一个场景时定位它）/CurrentScene（该域没有自持场景时，从记录里恢复轮次计数器跑得最远的那个）/SurfaceTopics/ContextTopic/DeleteCascade/DetachGraph；交回的都是场景 id，入参只收解好的数值 id |
 | `turn` | 轮次归属：SettleTarget（可沉淀的轮次范围）、ReadProfile（Search 的 L0 读面）；进来的 hex 键已在根上解析完，本包不碰内容 |
 | `dream` | 巩固阶段：SceneSet、PruneContentStage(`l4_prune`) 与 PrunePlanStage(`l5_prune`)（共用 `ContentRetention` 窗口、各读自己的时间戳）、CompressScenes(+组回滚)、StructureStages、L1 各阶段、distillL0Stage（私有）；调参常量随阶段在此 |

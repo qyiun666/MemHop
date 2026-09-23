@@ -102,6 +102,8 @@ README 的版本表与 git log。
 
 47. **两个 LLM 预算的「留空即默认」从一句话变成断言**（`internal/llm/provider.go` 抽出 `budgets` + `internal/llm/provider_test.go`）：`TimeoutSecs` 未填取 120 秒、`MaxOutputTokens` 未填取 8192——门面别名的注释早就这么写，此前却没有任何测试钉着。两个方向的失败都静默：0 输出上限会把每次回复截成空，而 0 HTTP 超时不是「立刻失败」是「永远等」，一次挂死的端点就能把一个域的锁一直占着。抽成纯函数只为可测，行为与门面面积一字未动（go-openai 这个版本没有读回 HTTP 客户端的访问器，故断言落在 `budgets` 与 `Provider.MaxOutputTokens()` 上）。同时补指南 §4 那两行：英文写的是「—」、中文写的是「否」，都没说留空会怎样——现在写明 120/8192 与「留空才是常态」；`internal/llm/agent.md` 补上这条参数语义。
 
+48. **保留窗的清扫读的是钟，不是轮的状态——这条此前被写反了**（`internal/dream_midturn_test.go` + 三处文档）：既有那条只测了**窗口内**的轮中记录（时间戳取「刚刚」），于是模块文档与本机 AGENTS 都把它写成「Dream 不扫开着那一轮已写的记录」。实测不成立：把 `ContentRetentionMs` 压到 1 秒、往开着的一轮里写一条钟在一小时前的记录，一趟 `Dream` 之后它就是 0 条——**过窗即扫，与轮开没开无关**；而这趟 Dream 也不接管那一轮：挂着的 `Update` 照样落在这个轮上（它自己写的两句是新钟，因此留下），收束成功后场景读正是 1 行 2 句。现在两个方向各有一条测试钉住，并把夸大处改准（`internal/agent.md` 第 30 行、两份指南的保留窗那一格明确写「开着的一轮也不例外」、既有测试的注释划回窗口内）。新测的**负例**：让清扫在有开轮时把 cutoff 归零（等价于豁免），它当场报 `the expired mid-round record survived the sweep`，而窗口内那条不受影响。零生产代码改动。
+
 ## v1.6.5 — 2026-09-22 — MCP 面整体退役：对外只剩 Go module
 
 1. **`cmd/memhop-mcp` 整包删除**（14 个文件 3109 行）：25 个工具、多租户 HTTP（SSE 与 streamable-http 双传输）、按 `/mcp/<tenant>` 建/取域的租户注册表、`--tenants` 白名单与锚定 db-dir 的读入口一起消失。仓库不再有 server 形态、不再有后台进程，对外只剩「以 Go module 使用 `api`」一种接入。
