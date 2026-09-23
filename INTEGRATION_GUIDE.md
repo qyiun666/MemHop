@@ -409,6 +409,11 @@ What is left for the host is eight facts to know, not eight adapters to write:
   flattened listing carries no parent pointer, so no reader can walk down a subtree to find them
   (`TestFusedGroupAgesIntoKeywordTracksNotSilence`). Rule (4) reads the row's own bounds for the same
   reason: once the messages are gone there is nothing else left to date it by.
+  One consequence worth naming: what `Update` writes when it closes a turn — the two utterances *and*
+  the `turn_outcome` event — carries that one call's timestamp, so a row that lost its prose lost its
+  outcome in the same sweep. A host's "did this round finish" field therefore comes back empty for
+  exactly those rows, and the honest reading is "unknown", not "unfinished". Mid-round `AppendArchive`
+  events date on their own clock, so an empty `Messages` list still does not mean the turn recorded nothing.
 
 - **A facade type that is *not* the engine's own is hiding something.** Most shapes here are
   aliases, so the struct filled at the call site is the struct the engine reads — a value
