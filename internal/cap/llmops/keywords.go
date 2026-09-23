@@ -72,8 +72,9 @@ func ExtractKeywords(ctx context.Context, chat Chat, text string) ([]string, err
 // extractOne runs the full attempt ladder for one prompt: three widening token
 // budgets (a reasoning model can spend the first on reasoning and truncate the
 // reply), then one format-constrained retry that restates the JSON-only rule. A
-// transport failure surfaces as itself; a model that never answered in JSON yields
-// errKeywordFormat. Whole texts and chunks alike both come through here.
+// transport failure surfaces as itself, a truncation with it — that is the answer
+// the host acts on by raising the ceiling. A model that answered but never answered
+// in JSON yields errKeywordFormat. Whole texts and chunks alike both come through here.
 func extractOne(ctx context.Context, chat Chat, user string) ([]string, error) {
 	widest := minTokens(chat.MaxOutputTokens(), ConsolidationMaxTokens)
 	budgets := []int{
@@ -95,9 +96,9 @@ func extractOne(ctx context.Context, chat Chat, user string) ([]string, error) {
 	}
 	response, err := chat.Chat(ctx, systemKeywords, user+keywordFormatRetry, widest)
 	if err != nil {
-		if errors.Is(err, common.ErrTruncated) {
-			return nil, errKeywordFormat
-		}
+		// The transport's own failure is what the host has to hear. A reply cut off by
+		// the output ceiling is not a model that cannot do structured output, and the
+		// two send the host to different fixes: raise MaxOutputTokens, or change model.
 		return nil, err
 	}
 	if keywords, ok := parseKeywords(response); ok {
@@ -115,9 +116,13 @@ func extractKeywordsChunked(ctx context.Context, chat Chat, trimmed string) ([]s
 	for i, chunk := range chunks {
 		keywords, err := extractOne(ctx, chat, "Extract keywords from:\n"+chunk)
 		if err != nil {
-			if errors.Is(err, errKeywordFormat) {
-				return nil, common.NewError(common.ErrLLM,
-					fmt.Sprintf("keyword extraction chunk %d returned no parseable JSON", i), err)
+			// Which chunk failed is this loop's knowledge and nobody else's, so it goes in
+			// the text; what the failure was stays in the cause, so a truncation still reads
+			// as a truncation and a cancellation as a cancellation. An error carrying no
+			// code is passed through rather than re-wrapped into one that reads as success.
+			if code := common.CodeOf(err); code != 0 {
+				return nil, common.NewError(code,
+					fmt.Sprintf("keyword extraction chunk %d of %d failed", i, len(chunks)), err)
 			}
 			return nil, err
 		}

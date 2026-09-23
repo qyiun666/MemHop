@@ -309,3 +309,67 @@ func TestTruncationRetryEscalatesToTheEndpointCeiling(t *testing.T) {
 		}
 	}
 }
+
+// A reply cut off by the output ceiling is not a model that cannot do structured output,
+// and the host tells the two apart only from this error: one is fixed by raising
+// MaxOutputTokens, the other by changing model. Keyword extraction is the call point a
+// reasoning model most often trips - the ladder's own comment says why - so the
+// truncation has to survive the whole ladder rather than be relabelled at the last step.
+type alwaysTruncated struct {
+	calls int
+}
+
+func (s *alwaysTruncated) Chat(_ context.Context, _, _ string, maxTokens int) (string, error) {
+	s.calls++
+	return "", common.NewError(common.ErrLLM,
+		fmt.Sprintf("llm response hit the output ceiling at max_tokens=%d", maxTokens),
+		common.ErrTruncated)
+}
+
+// Both call points make their first attempt through ChatWithRetry, so the two-budget seam
+// has to run through the same counting Chat.
+func (s *alwaysTruncated) ChatWithRetry(ctx context.Context, system, user string, primaryMax, _ int) (string, error) {
+	return s.Chat(ctx, system, user, primaryMax)
+}
+
+func (s *alwaysTruncated) MaxOutputTokens() int { return 8192 }
+
+func TestKeywordExtractionKeepsATruncationAsTheCeilingItIs(t *testing.T) {
+	spy := &alwaysTruncated{}
+	_, err := ExtractKeywords(context.Background(), spy, "the user asked to rebuild the auth module and add tests")
+	if err == nil {
+		t.Fatal("every attempt was truncated, so extraction must not report success")
+	}
+	if common.CodeOf(err) != common.ErrLLM {
+		t.Fatalf("the code has to stay the LLM one, got %v", err)
+	}
+	if !errors.Is(err, common.ErrTruncated) {
+		t.Fatalf("the truncation did not survive the ladder: %v", err)
+	}
+	if strings.Contains(err.Error(), "no parseable JSON") {
+		t.Fatalf("a ceiling failure was reported as a model that cannot answer in JSON: %v", err)
+	}
+	if spy.calls != 4 {
+		t.Fatalf("the ladder made %d calls, want 3 widening budgets plus the format retry", spy.calls)
+	}
+}
+
+// Which chunk failed is known only to the chunking loop, and the kind of failure has to
+// survive its wrapping: a truncated chunk is still a ceiling the host can act on, not a
+// complaint about JSON.
+func TestChunkedExtractionNamesTheChunkAndKeepsTheCause(t *testing.T) {
+	spy := &alwaysTruncated{}
+	if _, err := ExtractKeywords(context.Background(), spy, strings.Repeat("word ", 1000)); err == nil {
+		t.Fatal("a truncated chunk must fail the whole extraction, not skip that chunk")
+	} else {
+		if !strings.Contains(err.Error(), "chunk 0 of") {
+			t.Fatalf("the error does not name the chunk: %v", err)
+		}
+		if !errors.Is(err, common.ErrTruncated) {
+			t.Fatalf("the wrapping dropped the cause: %v", err)
+		}
+	}
+	if spy.calls != 4 {
+		t.Fatalf("the loop made %d calls, want the ladder to stop at the first failing chunk", spy.calls)
+	}
+}
