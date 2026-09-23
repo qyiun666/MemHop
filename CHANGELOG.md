@@ -96,6 +96,8 @@ README 的版本表与 git log。
 
 44. **指南的可跑骨架现在被真的跑一遍**（`test/guide_skeleton_test.go`，零额度、随 `go test ./test/` 与 CI 一起走）：`make check-guides` 只把骨架编译一次——那只证明名字对得上，而宿主照的是文档不是测试：一个编得过、第一次调用就 `log.Fatal` 的 quickstart 它看不见。新测试用与 `check-guides` 相同的抽取规则取出两份指南里 `package main` 那块，照宿主的处境放进一个临时模块（`replace` 指向本仓、`GOPROXY=off`、从模块缓存解析依赖），构建后**以假端点跑起来**：四个环境变量指向包内的 mock LLM 与临时 `.meh`，要求退出码 0 且输出里没有 `panic:`。两份指南各自独立成子测试。**负例**：临时把骨架里一次 `Update` 的时间戳改成 0（正是本轮刚在 §12 写明「库不替你补表」的那条边界），测试当场报 `a positive timestamp is required` / `exit status 1`；还原后复绿，文件经 `git checkout` 回到提交状态（改完即核对工作树）。零生产代码改动。
 
+45. **门面的每条公开方法都必须带注释，这条现在被机器守着**（`api/facade_docs_test.go`）：`internal` 不发布，`go doc …/api.Session` 是宿主唯一读得到的文本，一条没写注释的方法就等于宿主无法从文档学到它（正是「集成就能用」的反面）。扫描与指南符号门禁同一路子：`go/parser` 现读本包源码，要求 `Session`/`DB` 上每个导出方法都有 doc，并把数到的方法条数钉在 32（25+7）——否则解析走空也会「通过」。当前 32 条全部有注释。**负例**：删掉 `RenameTopic` 上面那七行注释块，测试当场点名 `(Session).RenameTopic is exported but carries no doc comment`；还原后复绿（改的是盘上真实文件——这条与符号门禁一样读源码而非编译器的覆盖层，所以 `-overlay` 骗不动它，第一次用 overlay 做的变异因此假绿，换成临时改+`cp` 还原后才拿到真红）。同一轮也把 AGENTS 里可机械核对的事实逐条对回代码：直接依赖 3 个、记录帧 `RecordHeaderSize = 26`、`FormatVersion = 0x0012`、`SnapshotVersion = 0x03`、平台文件 `filelock_unix/_windows` 齐——全部相符；并把三仓 e2e（14 条）与宿主换后端整棵树在 `c33fe43` 上重跑，均退出 0。零生产代码改动。
+
 ## v1.6.5 — 2026-09-22 — MCP 面整体退役：对外只剩 Go module
 
 1. **`cmd/memhop-mcp` 整包删除**（14 个文件 3109 行）：25 个工具、多租户 HTTP（SSE 与 streamable-http 双传输）、按 `/mcp/<tenant>` 建/取域的租户注册表、`--tenants` 白名单与锚定 db-dir 的读入口一起消失。仓库不再有 server 形态、不再有后台进程，对外只剩「以 Go module 使用 `api`」一种接入。
