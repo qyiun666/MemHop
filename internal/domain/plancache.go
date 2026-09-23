@@ -76,22 +76,27 @@ func (pc *PlanCache) Subtree(topicID uint64, root uint32) []uint32 {
 	return out
 }
 
-// NextSeq hands out the next ordinal of one topic's tree.
-// ponytail: derived from the live nodes, so any removal frees an ordinal, and an
-// emptied tree's key goes with it — that turn starts again at 1. An event ages on its
-// own clock and can outlive the step it names, so writing into an old turn key after
-// that tree was swept can meet an ordinal an event still points at. The upgrade path
-// is a persisted per-topic high-water record. Callers hold Context.Mu.
-func (pc *PlanCache) NextSeq(topicID uint64) uint32 {
-	agg := pc.plans[topicID]
-	if agg == nil {
-		return 1
-	}
+// NextSeq hands out the next ordinal of one topic's tree, above both the live nodes
+// and `reserved` — the highest ordinal this turn's surviving records still name. The
+// address (topic, ordinal) is shared by a step and the events bound to it, while the two
+// age on separate clocks: a step swept past the retention window leaves an event that
+// names it behind, and an ordinal taken from the live nodes alone would hand that event
+// to a new step — the new step would read as having done the dead step's work. So an
+// ordinal is free again only once nothing speaks of it.
+//
+// The cost is that a turn's numbering can carry a gap: an ordinal reserved by an orphan
+// event is skipped, never reused. Callers hold Context.Mu.
+func (pc *PlanCache) NextSeq(topicID uint64, reserved uint32) uint32 {
 	var top uint32
-	for _, n := range agg.Nodes {
-		if n.Seq > top {
-			top = n.Seq
+	if agg := pc.plans[topicID]; agg != nil {
+		for _, n := range agg.Nodes {
+			if n.Seq > top {
+				top = n.Seq
+			}
 		}
+	}
+	if reserved > top {
+		top = reserved
 	}
 	return top + 1
 }

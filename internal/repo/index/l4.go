@@ -30,6 +30,11 @@ type l4Entry struct {
 	IDHash    uint64
 	Kind      core.ArchiveKind
 	CreatedAt int64
+	// NodeSeq is the plan step an event names, 0 for a record bound to none. The
+	// plan's ordinal allocator reads it: the address (topic, ordinal) is shared by
+	// the step record and the events that name it, so a step may only be re-issued
+	// at an ordinal no surviving event still points at.
+	NodeSeq uint32
 }
 
 type L4Index struct {
@@ -50,7 +55,7 @@ func NewL4Index() *L4Index {
 func BuildL4FromEngine(engine *core.StorageEngine, agentID uint64) *L4Index {
 	idx := NewL4Index()
 	for _, arc := range core.CollectAllArchives(engine, agentID) {
-		idx.Append(arc.TopicID, arc.Seq, arc.IDHash, arc.Kind, arc.CreatedAt)
+		idx.Append(arc.TopicID, arc.Seq, arc.IDHash, arc.Kind, arc.CreatedAt, arc.NodeSeq)
 	}
 	return idx
 }
@@ -60,19 +65,35 @@ func BuildL4FromEngine(engine *core.StorageEngine, agentID uint64) *L4Index {
 // An utterance can land after the events of its turn (a caller records events
 // while it runs and settles the turn afterwards), so entries insert in Seq
 // order rather than at the tail.
-func (idx *L4Index) Append(topicID, seq, idHash uint64, kind core.ArchiveKind, createdAt int64) {
+func (idx *L4Index) Append(topicID, seq, idHash uint64, kind core.ArchiveKind, createdAt int64, nodeSeq uint32) {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 	entries := idx.byTopic[topicID]
 	at, _ := slices.BinarySearchFunc(entries, seq, func(e l4Entry, s uint64) int {
 		return cmp.Compare(e.Seq, s)
 	})
+	e := l4Entry{Seq: seq, IDHash: idHash, Kind: kind, CreatedAt: createdAt, NodeSeq: nodeSeq}
 	if at < len(entries) && entries[at].Seq == seq {
-		entries[at] = l4Entry{Seq: seq, IDHash: idHash, Kind: kind, CreatedAt: createdAt}
+		entries[at] = e
 		return
 	}
-	entries = slices.Insert(entries, at, l4Entry{Seq: seq, IDHash: idHash, Kind: kind, CreatedAt: createdAt})
+	entries = slices.Insert(entries, at, e)
 	idx.byTopic[topicID] = entries
+}
+
+// MaxNodeSeq returns the highest plan ordinal the topic's records name, 0 when none
+// does. Events age on their own clock and can outlive the step they bind to, so this
+// is how large the allocator must skip: an ordinal below it is still spoken of.
+func (idx *L4Index) MaxNodeSeq(topicID uint64) uint32 {
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	var top uint32
+	for _, e := range idx.byTopic[topicID] {
+		if e.NodeSeq > top {
+			top = e.NodeSeq
+		}
+	}
+	return top
 }
 
 // MaxSeq returns the highest Seq the topic holds, 0 when it holds nothing. It

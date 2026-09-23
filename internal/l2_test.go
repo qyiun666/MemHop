@@ -223,7 +223,7 @@ func TestDeleteTopicRemovesSubtreeAndArchives(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	ac.L4.Append(parentID, core.SeqUser, arcID, core.KindUtterance, 1500)
+	ac.L4.Append(parentID, core.SeqUser, arcID, core.KindUtterance, 1500, 0)
 	ac.L2Meta.Update(index.L2MetaFromTopic(&parent))
 	ac.L2Meta.Update(index.L2MetaFromTopic(&child))
 
@@ -355,7 +355,7 @@ func TestDeleteSceneRemovesEverything(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	ac.L4.Append(t1.ID, core.SeqUser, arcID, core.KindUtterance, 1500)
+	ac.L4.Append(t1.ID, core.SeqUser, arcID, core.KindUtterance, 1500, 0)
 	for _, topic := range []core.TopicSlot{t1, t2, t3} {
 		if err := core.WriteTopicSlot(engine, core.DefaultAgentID, topic.ID, &topic); err != nil {
 			t.Fatal(err)

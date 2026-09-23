@@ -28,10 +28,10 @@ func eqIDs(t *testing.T, name string, got, want []uint64) {
 func TestL4IndexSeparatesKindsBySeqOrder(t *testing.T) {
 	idx := NewL4Index()
 	const topic = uint64(7)
-	idx.Append(topic, core.SeqUser, 11, core.KindUtterance, 1000)
-	idx.Append(topic, core.SeqAgent, 12, core.KindUtterance, 1001)
-	idx.Append(topic, 3, 13, core.KindEvent, 1002)
-	idx.Append(topic, 4, 14, core.KindEvent, 1003)
+	idx.Append(topic, core.SeqUser, 11, core.KindUtterance, 1000, 0)
+	idx.Append(topic, core.SeqAgent, 12, core.KindUtterance, 1001, 0)
+	idx.Append(topic, 3, 13, core.KindEvent, 1002, 0)
+	idx.Append(topic, 4, 14, core.KindEvent, 1003, 0)
 
 	eqIDs(t, "utterances", idx.IDs(topic, core.KindUtterance), []uint64{11, 12})
 	eqIDs(t, "events", idx.IDs(topic, core.KindEvent), []uint64{13, 14})
@@ -41,16 +41,43 @@ func TestL4IndexSeparatesKindsBySeqOrder(t *testing.T) {
 	}
 }
 
+// An event names a plan step by ordinal, and the two records age separately: the step
+// can be swept while the event that names it survives. The mirror is what the allocator
+// reads to learn which ordinals are still spoken of, so the highest bound one has to be
+// visible here — and a pruned record must stop reserving it.
+func TestL4IndexTracksBoundOrdinals(t *testing.T) {
+	idx := NewL4Index()
+	const topic = uint64(7)
+	idx.Append(topic, core.SeqUser, 11, core.KindUtterance, 1000, 0)
+	idx.Append(topic, 3, 13, core.KindEvent, 1002, 2)
+	idx.Append(topic, 4, 14, core.KindEvent, 1003, 5)
+
+	if got := idx.MaxNodeSeq(topic); got != 5 {
+		t.Fatalf("MaxNodeSeq = %d, want the highest ordinal an event names", got)
+	}
+	if got := idx.MaxNodeSeq(99); got != 0 {
+		t.Fatalf("an unknown topic reserves %d, want nothing", got)
+	}
+	idx.RemoveIDs(topic, []uint64{14})
+	if got := idx.MaxNodeSeq(topic); got != 2 {
+		t.Fatalf("after pruning the binder MaxNodeSeq = %d, want the one still recorded", got)
+	}
+	idx.RemoveTopic(topic)
+	if got := idx.MaxNodeSeq(topic); got != 0 {
+		t.Fatalf("after the topic is gone MaxNodeSeq = %d, want nothing left reserved", got)
+	}
+}
+
 // Events are appended while the turn runs and the utterances settle afterwards,
 // so an utterance's Seq 1/2 must insert ahead of events already recorded rather
 // than land at the tail and reorder the transcript.
 func TestL4IndexInsertsAnEarlierSeq(t *testing.T) {
 	idx := NewL4Index()
 	const topic = uint64(7)
-	idx.Append(topic, 3, 13, core.KindEvent, 1002)
-	idx.Append(topic, 4, 14, core.KindEvent, 1003)
-	idx.Append(topic, core.SeqUser, 11, core.KindUtterance, 1000)
-	idx.Append(topic, core.SeqAgent, 12, core.KindUtterance, 1001)
+	idx.Append(topic, 3, 13, core.KindEvent, 1002, 0)
+	idx.Append(topic, 4, 14, core.KindEvent, 1003, 0)
+	idx.Append(topic, core.SeqUser, 11, core.KindUtterance, 1000, 0)
+	idx.Append(topic, core.SeqAgent, 12, core.KindUtterance, 1001, 0)
 
 	eqIDs(t, "all after settle", idx.AllIDs(topic), []uint64{11, 12, 13, 14})
 	eqIDs(t, "events stay ordered", idx.IDs(topic, core.KindEvent), []uint64{13, 14})
@@ -61,8 +88,8 @@ func TestL4IndexInsertsAnEarlierSeq(t *testing.T) {
 func TestL4IndexAppendSameSeqReplaces(t *testing.T) {
 	idx := NewL4Index()
 	const topic = uint64(7)
-	idx.Append(topic, core.SeqUser, 11, core.KindUtterance, 1000)
-	idx.Append(topic, core.SeqUser, 11, core.KindUtterance, 2000)
+	idx.Append(topic, core.SeqUser, 11, core.KindUtterance, 1000, 0)
+	idx.Append(topic, core.SeqUser, 11, core.KindUtterance, 2000, 0)
 
 	if got := idx.AllIDs(topic); len(got) != 1 || got[0] != 11 {
 		t.Fatalf("re-writing Seq 1 grew the topic: %v", got)
@@ -80,12 +107,12 @@ func TestL4IndexMaxSeqSpansKinds(t *testing.T) {
 	if got := idx.MaxSeq(topic); got != 0 {
 		t.Fatalf("unknown topic MaxSeq = %d, want 0", got)
 	}
-	idx.Append(topic, core.SeqUser, 11, core.KindUtterance, 1000)
-	idx.Append(topic, core.SeqAgent, 12, core.KindUtterance, 1001)
+	idx.Append(topic, core.SeqUser, 11, core.KindUtterance, 1000, 0)
+	idx.Append(topic, core.SeqAgent, 12, core.KindUtterance, 1001, 0)
 	if got := idx.MaxSeq(topic); got != core.LastUtteranceSeq {
 		t.Fatalf("MaxSeq over two utterances = %d, want %d", got, core.LastUtteranceSeq)
 	}
-	idx.Append(topic, 5, 15, core.KindEvent, 1002)
+	idx.Append(topic, 5, 15, core.KindEvent, 1002, 0)
 	if got := idx.MaxSeq(topic); got != 5 {
 		t.Fatalf("MaxSeq = %d, want 5", got)
 	}
@@ -96,10 +123,10 @@ func TestL4IndexMaxSeqSpansKinds(t *testing.T) {
 // live record as gone.
 func TestL4IndexExpiredBeforeReadsOnly(t *testing.T) {
 	idx := NewL4Index()
-	idx.Append(1, core.SeqUser, 11, core.KindUtterance, 1000)
-	idx.Append(1, 3, 12, core.KindEvent, 900)
-	idx.Append(1, 4, 13, core.KindEvent, 5000)
-	idx.Append(2, core.SeqUser, 21, core.KindUtterance, 100)
+	idx.Append(1, core.SeqUser, 11, core.KindUtterance, 1000, 0)
+	idx.Append(1, 3, 12, core.KindEvent, 900, 0)
+	idx.Append(1, 4, 13, core.KindEvent, 5000, 0)
+	idx.Append(2, core.SeqUser, 21, core.KindUtterance, 100, 0)
 
 	expired := idx.ExpiredBefore(2000)
 	eqIDs(t, "topic 1 expired", expired[1], []uint64{11, 12})
@@ -123,7 +150,7 @@ func TestL4IndexExpiredBeforeReadsOnly(t *testing.T) {
 // addresses an empty entry as if the topic still held content.
 func TestL4IndexRemoveAllIDsDropsTopic(t *testing.T) {
 	idx := NewL4Index()
-	idx.Append(1, core.SeqUser, 11, core.KindUtterance, 1000)
+	idx.Append(1, core.SeqUser, 11, core.KindUtterance, 1000, 0)
 	idx.RemoveIDs(1, []uint64{11})
 	if got := idx.AllIDs(1); got != nil {
 		t.Fatalf("emptied topic still listed: %v", got)

@@ -276,10 +276,14 @@ func (s *Session) AppendArchive(in ArchiveInput) (uint64, error) {
 //
 // The returned ordinal is the library's to hand out and the host's to keep: never
 // derived from a title, and no two steps of one turn are ever live at the same
-// ordinal. It is not permanently unique — a retention sweep frees the ordinals it
-// removed, and an event that outlived the step it names keeps that number — so a host
-// returning to a turn older than the retention window treats an ordinal it held
-// before as a new step's address, not as the same step.
+// ordinal. It is issued above both this turn's live steps and the highest ordinal its
+// surviving events still name — a step and the events bound to it share one address,
+// while the two age separately — so an ordinal is free again only once nothing speaks
+// of it. A turn's numbering can therefore carry a gap, and density is not something a
+// host may read back out of it. It is still not unique across turns: a retention sweep
+// frees a swept step's ordinal once the events naming it go too, so a host returning
+// to a turn older than the retention window treats an ordinal it held before as a new
+// step's address, not as the same step.
 //
 // One refusal is durable rather than one-shot: if the address the next ordinal names
 // holds a record the engine cannot read back, this call reports that read's own code,

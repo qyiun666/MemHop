@@ -160,15 +160,34 @@ func TestPlanCacheSubtreeWalksParentLinks(t *testing.T) {
 // row never collide — and a turn with no plan starts at 1.
 func TestPlanCacheNextSeq(t *testing.T) {
 	pc := &PlanCache{plans: make(map[uint64]*repo.PlanAggregate)}
-	if got := pc.NextSeq(9); got != 1 {
+	if got := pc.NextSeq(9, 0); got != 1 {
 		t.Fatalf("an empty tree's next step = %d, want 1", got)
 	}
 	pc.UpsertNode(9, tnode(9, 1, 0, core.StatusInProgress, 100))
 	pc.UpsertNode(9, tnode(9, 2, 1, core.StatusInProgress, 100))
-	if got := pc.NextSeq(9); got != 3 {
+	if got := pc.NextSeq(9, 0); got != 3 {
 		t.Fatalf("next step = %d, want one above the highest held", got)
 	}
-	if got := pc.NextSeq(10); got != 1 {
+	if got := pc.NextSeq(10, 0); got != 1 {
 		t.Fatalf("another turn's next step = %d, want 1", got)
+	}
+	// The shape the reserved floor exists for: the tree was swept, so the live nodes
+	// say nothing, while an event written for its first step is still on record.
+	pc.RemoveTopic(9)
+	if got := pc.NextSeq(9, 0); got != 1 {
+		t.Fatalf("an emptied tree = %d, want the numbering to start again", got)
+	}
+	if got := pc.NextSeq(9, 4); got != 5 {
+		t.Fatalf("next step above an ordinal an event still names = %d, want 5", got)
+	}
+	// Both sources count, whichever is higher: a live tree is not moved down by a
+	// floor below its own top, nor left behind by a floor above it.
+	pc.UpsertNode(9, tnode(9, 1, 0, core.StatusInProgress, 100))
+	pc.UpsertNode(9, tnode(9, 2, 1, core.StatusInProgress, 100))
+	if got := pc.NextSeq(9, 1); got != 3 {
+		t.Fatalf("a live tree above the floor = %d, want one above the nodes", got)
+	}
+	if got := pc.NextSeq(9, 7); got != 8 {
+		t.Fatalf("a floor above the live nodes = %d, want one above the floor", got)
 	}
 }

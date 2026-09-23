@@ -605,9 +605,12 @@ topic id** — the one `Search` minted and now holds — and the same key addres
 turn's content in L4. A step is addressed by a **per-turn
 ordinal** (`Seq`, a `uint32` the library hands out from 1 and the host only ever echoes
 back: the create calls return it), and `ParentSeq` says which step it hangs under
-(`0` = a root). There is no plan id and no path string to mint, the plan calls name no
-topic id (they act on the turn `Search` opened), and `PlanState()` is how a tree comes
-back.
+(`0` = a root). An ordinal is issued above everything that still names one — the surviving
+steps and this turn's surviving events bound to a step — so a turn's numbering can carry a gap:
+an ordinal an event still speaks of is never handed to a new step (the two age separately, and a
+step swept by the retention window can leave an event naming it). There is no plan id and no path
+string to mint, the plan calls name no topic id (they act on the turn `Search` opened), and
+`PlanState()` is how a tree comes back.
 
 | Call | Meaning |
 |---|---|

@@ -30,7 +30,7 @@ func AppendArchiveL4(engine *core.StorageEngine, agentID uint64, idx *index.L4In
 	if err := core.WriteArchiveSlot(engine, agentID, arc.IDHash, arc); err != nil {
 		return err
 	}
-	idx.Append(arc.TopicID, arc.Seq, arc.IDHash, arc.Kind, arc.CreatedAt)
+	idx.Append(arc.TopicID, arc.Seq, arc.IDHash, arc.Kind, arc.CreatedAt, arc.NodeSeq)
 	return nil
 }
 

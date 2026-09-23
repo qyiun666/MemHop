@@ -730,6 +730,57 @@ func TestDreamPrunePlanNodesAndContent(t *testing.T) {
 	}
 }
 
+// The swept tree and the event that names one of its steps age on separate clocks, and
+// both address the turn by the same ordinal. So the next step of that turn must be issued
+// above the ordinal the surviving event still names — otherwise the new step reads as
+// having done the dead step's work, and no host could tell the two apart.
+func TestPlanOrdinalSkipsAnEventThatOutlivedItsStep(t *testing.T) {
+	db := newTestDB(t, newTestEngine(t))
+	old := time.Now().Add(-dream.ContentRetention - time.Hour).UnixMilli()
+	now := time.Now().UnixMilli()
+
+	_, turnHex, topic := newTurnKey(t, db)
+	first := add(t, db, 0, "step one")
+	restate(t, db, first, PlanDone, "done")
+	if _, err := db.AppendArchive(core.DefaultAgentID, onStep(ev("old_work", now), first)); err != nil {
+		t.Fatal(err)
+	}
+	node, err := core.ReadPlanNode(db.engine, core.DefaultAgentID, core.HashPlanNode(topic, first))
+	if err != nil {
+		t.Fatalf("read the created step: %v", err)
+	}
+	node.UpdatedAt = old
+	if err := repo.WritePlanNode(db.engine, core.DefaultAgentID, node); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.RunDream(context.Background(), core.DefaultAgentID, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := core.ReadPlanNode(db.engine, core.DefaultAgentID, core.HashPlanNode(topic, first)); err == nil {
+		t.Fatal("fixture: the all-done tree silent past the window should have been swept")
+	}
+	if events, err := db.eventsOf(core.DefaultAgentID, turnHex); err != nil || len(events) != 1 {
+		t.Fatalf("fixture: the bound event should have survived its tree, got %v (%v)", events, err)
+	}
+
+	// The turn is still the one the domain holds, so the host keeps writing into it.
+	useTurn(t, db, topic)
+	second := add(t, db, 0, "step two")
+	if second == first {
+		t.Fatalf("ordinal %d was reissued while an event still names it", second)
+	}
+
+	// What a host reads back by step must be that step's own work.
+	kind := core.KindEvent
+	bound, err := db.SearchL4(core.DefaultAgentID, L4Query{TopicID: &turnHex, Kind: &kind, NodeSeq: second})
+	if err != nil {
+		t.Fatalf("read the new step's events: %v", err)
+	}
+	if len(bound) != 0 {
+		t.Fatalf("the new step inherited %d event(s) written for the swept step: %+v", len(bound), bound)
+	}
+}
+
 // An event append is forced to content-of-kind-event semantics: the topic it belongs
 // to and the slot it lands in are the library's, and so are the speaker and the
 // medium an event has no use for — an append cannot smuggle a record into the
