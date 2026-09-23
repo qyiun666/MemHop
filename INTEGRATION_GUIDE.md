@@ -350,6 +350,12 @@ and it is needed only to read this round's own event track while the round is st
 (`SearchL4{TopicID, Kind: event}`) or to retract it (`DeleteTopic`). The plan tree does not even
 need that: `PlanState` reads the turn the library holds open. An event appended mid-round is
 readable by that id before `Update` closes the turn.
+  The other half of that arrangement is what makes a mid-round recall safe: **the round in
+  progress is not in the scene read at all.** A turn's topic row is created by the close, not by the
+  open — `Search` only mints its id — so `SceneContext("")` lists settled rounds and nothing else. A loop
+  that recalls four times before finishing never feeds its own half-written round back to the model, and
+  what it recorded with `AppendArchive` arrives as that turn's own lines once `Update` settles it
+  (`TestOpenTurnIsAbsentUntilItSettles`).
 
 What is left for the host is eight facts to know, not eight adapters to write:
 
