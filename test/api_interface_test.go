@@ -42,7 +42,7 @@ func testLLM(url string) memhop.LlmConfig {
 // openMockDB opens a database backed by the mock LLM at path. Opening a file
 // that is not there yet needs a primary profile, so every scenario supplies the
 // same fixture one. Opts tweak the tuning knobs per scenario.
-func openMockDB(t *testing.T, path, llmURL string, opts ...func(*memhop.MemHopDefaults)) *memhop.DB {
+func openMockDB(t testing.TB, path, llmURL string, opts ...func(*memhop.MemHopDefaults)) *memhop.DB {
 	t.Helper()
 	defaults := memhop.DefaultMemHopDefaults
 	for _, opt := range opts {
@@ -57,7 +57,7 @@ func openMockDB(t *testing.T, path, llmURL string, opts ...func(*memhop.MemHopDe
 }
 
 // newTestDB binds a session on the file's primary domain to an opened DB.
-func newTestDB(t *testing.T, m *memhop.DB) *testDB {
+func newTestDB(t testing.TB, m *memhop.DB) *testDB {
 	t.Helper()
 	sess, err := m.Primary()
 	if err != nil {

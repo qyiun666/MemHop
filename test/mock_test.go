@@ -28,7 +28,7 @@ type mockLLM struct {
 	offContract string
 }
 
-func newMockLLM(t *testing.T) *mockLLM {
+func newMockLLM(t testing.TB) *mockLLM {
 	t.Helper()
 	m := &mockLLM{calls: map[string]int{}}
 	m.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
