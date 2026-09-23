@@ -401,10 +401,13 @@ What is left for the host is eight facts to know, not eight adapters to write:
   row: `Depth`, `ChildCount`, `Role`.
   One more case, and it is the common one after a week: **content ages out while the topic rows
   stay**. A group whose `RoleDream` summary the retention window swept is then a surface row with
-  no prose of its own, and what survived of the memory it folded are the children's keyword tracks
-  — so rule (1) is conditional: skip depth-2 rows while their parent still speaks, and once the
-  parent has no prose, fall back to `Keywords` down that subtree rather than dropping the memory.
-  An empty `Messages` list is an expired end state, not a lost line (`TestFusedGroupAgesIntoKeywordTracksNotSilence`).
+  no prose of its own, and what survived of it is a keyword track sitting on that very row —
+  `Keywords` is folded out of the members when the group is created, and topic rows never age.
+  So the skip in rule (1) is conditional: while the summary is there, drop the depth-2 children;
+  once it is not, render that row's own `Keywords` instead of dropping the memory. It has to be
+  on the row, not one hop away: the flattened listing carries no parent pointer, so a reader
+  cannot walk down a subtree. An empty `Messages` list is an expired end state, not a lost line
+  (`TestFusedGroupAgesIntoKeywordTracksNotSilence`).
 
 - **A facade type that is *not* the engine's own is hiding something.** Most shapes here are
   aliases, so the struct filled at the call site is the struct the engine reads — a value

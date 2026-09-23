@@ -482,11 +482,11 @@ func TestFusedSummaryOutlivesTheTurnsItFolded(t *testing.T) {
 
 // What a scene read holds once a fused group's summary has aged out — the case the recall
 // contract has to answer, because the group's children are the rows a host is told to skip.
-// The prose goes and nothing else goes with it: the parent row stays on the surface naming
-// its children, and each swallowed turn keeps its own keyword track. So "this group is now
-// silent" is a state a reader can detect, and the durable words are one hop away rather
-// than gone — a host that drops depth-2 rows unconditionally would render nothing at all
-// for a scene it still has memory of.
+// The prose goes and nothing else goes with it: the parent row stays on the surface, still
+// naming its children and still carrying the track folded out of them, and each swallowed
+// turn keeps its own track too. So a depth-1 row with no summary is a state a reader can
+// detect, and the group's words are on that same row — which is the only place they can be
+// asked for, since the flattened listing carries no parent pointer for a reader to walk down.
 func TestFusedGroupAgesIntoKeywordTracksNotSilence(t *testing.T) {
 	engine, err := core.Create(filepath.Join(t.TempDir(), "test.meh"))
 	if err != nil {
@@ -542,6 +542,12 @@ func TestFusedGroupAgesIntoKeywordTracksNotSilence(t *testing.T) {
 	}
 	if parent.Depth != 1 {
 		t.Fatalf("a fused group's row should stay on the surface, got depth %d", parent.Depth)
+	}
+	// The group's own track is what a reader falls back to once the summary is gone,
+	// and unlike the summary it never ages: keyword extraction refusing to yield a
+	// track is what stops the group from being written at all.
+	if len(parent.FusedKeywords) == 0 {
+		t.Fatalf("the aged group kept no track of its own: %+v", parent)
 	}
 	for _, id := range []uint64{81, 82} {
 		child, err := core.ReadTopicSlot(engine, core.DefaultAgentID, id)
