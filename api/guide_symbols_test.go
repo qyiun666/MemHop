@@ -7,7 +7,9 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io/fs"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -233,4 +235,119 @@ func publishedTypes(tb testing.TB) map[string]bool {
 		tb.Fatalf("only %d exported types parsed — the walk stopped working", len(out))
 	}
 	return out
+}
+
+// documentedAbsence lists the names the guides mention precisely to say they do not exist;
+// they are the only identifiers allowed not to resolve.
+var documentedAbsence = map[string]bool{
+	"FormatID": true, "ParseID": true,
+}
+
+// Every identifier a guide wraps in backticks is something a host may type. The symbol gate
+// above covers `api.X` and handle.Method(); names written bare - a DTO field in a table's
+// "returns" column, a constant in prose - are where a rename quietly leaves a document
+// describing a field that no longer exists. So each one must resolve to a package name, a
+// method, or a struct field of this package.
+func TestGuideIdentifiersResolve(t *testing.T) {
+	known := publishedIdents(t)
+
+	quoted := regexp.MustCompile("`([A-Z][A-Za-z0-9_]{2,})`")
+	for _, guide := range []string{"../INTEGRATION_GUIDE.md", "../INTEGRATION_GUIDE.zh.md"} {
+		raw, err := os.ReadFile(guide)
+		if err != nil {
+			t.Fatalf("read guide %s: %v", guide, err)
+		}
+		unknown := map[string]bool{}
+		for _, m := range quoted.FindAllStringSubmatch(string(raw), -1) {
+			name := m[1]
+			if known[name] || documentedAbsence[name] {
+				continue
+			}
+			unknown[name] = true
+		}
+		var list []string
+		for n := range unknown {
+			list = append(list, n)
+		}
+		sort.Strings(list)
+		if len(list) > 0 {
+			t.Errorf("%s mentions identifiers the repository does not define: %v", guide, list)
+		}
+	}
+}
+
+// publishedIdents returns every exported name, method name, struct field name, and test
+// function name the repository declares. The facade's DTOs are aliases of internal types, so
+// scanning the api package alone would report a field of `config.MemHopDefaults` as unknown;
+// test names count too, because a guide citing the case that proves a claim is pointing at
+// something a host can go and read.
+func publishedIdents(tb testing.TB) (names map[string]bool) {
+	tb.Helper()
+	names = map[string]bool{}
+	root := ".."
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if name := d.Name(); name == ".git" || name == "docs" || name == "notes" || name == "benches" {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		name := d.Name()
+		if !strings.HasSuffix(name, ".go") {
+			return nil
+		}
+		isTest := strings.HasSuffix(name, "_test.go")
+		file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.SkipObjectResolution)
+		if err != nil {
+			tb.Fatalf("parse %s: %v", path, err)
+		}
+		ast.Inspect(file, func(n ast.Node) bool {
+			switch d := n.(type) {
+			case *ast.FuncDecl:
+				if isTest {
+					if strings.HasPrefix(d.Name.Name, "Test") || strings.HasPrefix(d.Name.Name, "Benchmark") {
+						names[d.Name.Name] = true
+					}
+				} else if d.Recv == nil && d.Name.IsExported() {
+					names[d.Name.Name] = true
+				} else if !isTest {
+					names[d.Name.Name] = true // method names are cited bare in tables
+				}
+			case *ast.TypeSpec:
+				if !isTest && d.Name.IsExported() {
+					names[d.Name.Name] = true
+				}
+				if st, ok := d.Type.(*ast.StructType); ok && !isTest {
+					for _, fl := range st.Fields.List {
+						for _, nm := range fl.Names {
+							if nm.IsExported() {
+								names[nm.Name] = true
+							}
+						}
+					}
+				}
+			case *ast.ValueSpec:
+				if isTest {
+					return true
+				}
+				for _, nm := range d.Names {
+					if nm.IsExported() {
+						names[nm.Name] = true
+					}
+				}
+			}
+			return true
+		})
+		return nil
+	})
+	if err != nil {
+		tb.Fatalf("walk the repository: %v", err)
+	}
+	if len(names) < 300 {
+		tb.Fatalf("the identifier set looks too small to be real: %d names", len(names))
+	}
+	return names
 }

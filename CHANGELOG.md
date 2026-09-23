@@ -98,6 +98,8 @@ README 的版本表与 git log。
 
 45. **门面的每条公开方法都必须带注释，这条现在被机器守着**（`api/facade_docs_test.go`）：`internal` 不发布，`go doc …/api.Session` 是宿主唯一读得到的文本，一条没写注释的方法就等于宿主无法从文档学到它（正是「集成就能用」的反面）。扫描与指南符号门禁同一路子：`go/parser` 现读本包源码，要求 `Session`/`DB` 上每个导出方法都有 doc，并把数到的方法条数钉在 32（25+7）——否则解析走空也会「通过」。当前 32 条全部有注释。**负例**：删掉 `RenameTopic` 上面那七行注释块，测试当场点名 `(Session).RenameTopic is exported but carries no doc comment`；还原后复绿（改的是盘上真实文件——这条与符号门禁一样读源码而非编译器的覆盖层，所以 `-overlay` 骗不动它，第一次用 overlay 做的变异因此假绿，换成临时改+`cp` 还原后才拿到真红）。同一轮也把 AGENTS 里可机械核对的事实逐条对回代码：直接依赖 3 个、记录帧 `RecordHeaderSize = 26`、`FormatVersion = 0x0012`、`SnapshotVersion = 0x03`、平台文件 `filelock_unix/_windows` 齐——全部相符；并把三仓 e2e（14 条）与宿主换后端整棵树在 `c33fe43` 上重跑，均退出 0。零生产代码改动。
 
+46. **指南里每个被反引号包住的标识符都要有出处**（`api/guide_symbols_test.go` 新增第三条检查）：符号门禁只管 `api.X` 与 `handle.Method()`，而正文与速查表里更多是**裸名字**——字段、常量、枚举模式。这些位置正是改名后会悄悄留下假话的地方。现在扫描 `api` 与 `internal` 全部源码，把包级名、方法名、结构体字段与（供文档引用的）测试函数名合成一套合法出处，指南里每个反引号内的大写标识符必须在其中；唯一白名单是文档刻意说「不存在」的那两个名字（`FormatID`/`ParseID`）。**它当场抓到两处会坑宿主的写法**：枚举清单写成 `L3ImportSkip` / `Merge` / `Overwrite`——实际名是 `L3ImportMerge`/`L3ImportOverwrite`，宿主照抄 `api.Merge` 直接编不过（中英各一处，另一处是 `ImportL3` 的 `Merge` 模式）；还有一处把状态词写成 `Done` 反引号（并非任何常量，已改为「状态为 done」）。**负例**：把清单里一个名字改成 `L3ImportMerged`，门禁当场点名。零生产代码改动，两条指南骨架照常编译与运行。
+
 ## v1.6.5 — 2026-09-22 — MCP 面整体退役：对外只剩 Go module
 
 1. **`cmd/memhop-mcp` 整包删除**（14 个文件 3109 行）：25 个工具、多租户 HTTP（SSE 与 streamable-http 双传输）、按 `/mcp/<tenant>` 建/取域的租户注册表、`--tenants` 白名单与锚定 db-dir 的读入口一起消失。仓库不再有 server 形态、不再有后台进程，对外只剩「以 Go module 使用 `api`」一种接入。

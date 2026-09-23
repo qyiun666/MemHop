@@ -413,7 +413,7 @@ res, err := db.ImportL3([]api.L3ImportItem{{
 边种类以 `ErrInvalidQuery` 拒绝——写侧本就拒收它，而滤出一个空子图会被宿主读成「这张图
 没有这种边」。
 
-`QueryL3Nodes` 的条件之间是 **AND**（`IDs` / `Keyword` / `NodeType`），所以只填 `GraphID` 即列出该图全部节点，`Keyword` 忽略大小写——与 L4 的关键词一致。L3 的每一份读都按 id 升序返回（图里的节点、边，`ListL3` 的图槽），`Limit` 取的是这条确定顺序的前 N 个，所以同一个查询每次给出的都是同一份清单。`DeleteL3` 连节点带边整图删掉，再清掉本文件里每个域中指向它的场景锚点；改一个错事实走 `ImportL3` 的 `Merge` 模式，不做节点级删除。
+`QueryL3Nodes` 的条件之间是 **AND**（`IDs` / `Keyword` / `NodeType`），所以只填 `GraphID` 即列出该图全部节点，`Keyword` 忽略大小写——与 L4 的关键词一致。L3 的每一份读都按 id 升序返回（图里的节点、边，`ListL3` 的图槽），`Limit` 取的是这条确定顺序的前 N 个，所以同一个查询每次给出的都是同一份清单。`DeleteL3` 连节点带边整图删掉，再清掉本文件里每个域中指向它的场景锚点；改一个错事实走 `ImportL3` 的 `L3ImportMerge` 模式，不做节点级删除。
 
 库发出的每个 L3 id 都只对应一种记录：`GetL3(节点 id)`、`UpdateL3(节点 id, …)`、`UpdateScene(scene, ScenePatch{L3ID: &节点 id})` 一律 `ErrNotFound`，不会跨种类读到、更不会写到。
 
@@ -474,7 +474,7 @@ _, err := db.AppendArchive(api.ArchiveInput{
 |---|---|
 | `seq, err := db.PlanNodeAdd(0, title)` | 用第一个根步骤开出本轮的计划树，并交回此后指认该步的序号。一轮的树起初一个步骤也没有，所以本轮第一次有计划也走这个调用；没有单独的「建树」调用 |
 | `seq, err := db.PlanNodeAdd(parentSeq, title)` | 给树加一个步骤并拿到它的序号。`parentSeq` 为 `0` 即把该步挂在顶层，这也是一个森林再加一个根；其他取值必须指认这棵树上已有的步骤——父序号不在树上即 `ErrNotFound`，且不会顺手长出这个父。新建的步骤就是 `in_progress`，所以这里不索要状态；标题可以先留空、之后由 `PlanNodeUpdate` 补，留空时视图按序号显示这一步 |
-| `err := db.PlanNodeUpdate(api.PlanStep{Seq: seq, Status: api.PlanStatusDone, Summary: s})` | 重述一个步骤：它的 `Status` 加上本节点自己的 `Title`/`Summary`。`Status` 每次都必须给出（没有「保持原样」的写法），而 `Title`/`Summary` 留空即保留现值——改一步既不会倒退它的标题，也不会抹掉已折进来的摘要。一步到达终态就记下 `FinishedAt`；把一个已定的步骤重述成 `in_progress` 会把它重新打开，并清掉那个完成时间。一个 `Done` 父节点的**直接子全部到达终态**后，它的摘要由孩子们折上来。词表外的状态、本轮从未建出的序号（`ErrNotFound`）都在**动节点之前**被拒，树保持得和拒之前一模一样。这个调用不写任何内容 |
+| `err := db.PlanNodeUpdate(api.PlanStep{Seq: seq, Status: api.PlanStatusDone, Summary: s})` | 重述一个步骤：它的 `Status` 加上本节点自己的 `Title`/`Summary`。`Status` 每次都必须给出（没有「保持原样」的写法），而 `Title`/`Summary` 留空即保留现值——改一步既不会倒退它的标题，也不会抹掉已折进来的摘要。一步到达终态就记下 `FinishedAt`；把一个已定的步骤重述成 `in_progress` 会把它重新打开，并清掉那个完成时间。一个状态为 done 的父节点，其**直接子全部到达终态**后，它的摘要由孩子们折上来。词表外的状态、本轮从未建出的序号（`ErrNotFound`）都在**动节点之前**被拒，树保持得和拒之前一模一样。这个调用不写任何内容 |
 | `tree, err := db.PlanState()` | 读森林视图（`PlanTree.Roots` + `DoneCount` / `TotalCount`，两个计数按**每棵树的每一步**汇总，不是只数根；每个 `PlanNodeView` 带 `Seq` / `ParentSeq` / `Status` / `Summary` / `Children`）——重启恢复计划树也走这个 |
 | `db.AppendArchive(ev)`（`ev.NodeSeq` 非 0） | 把事件绑到**本轮树上已有的某一步**。那一步必须先存在：一个谁都没建出来的序号会让整条记录被拒（`ErrInvalidQuery`）且零留痕——事件指了一个计划里没有的步骤，就是计划与记录对不上，树是 `PlanNodeAdd` 的事；写错的序号也因此静悄悄多不开一棵树。`EventType` **由宿主自定**，与裸轮次事件同口径——引擎不按它分支，只经 `SearchL4` 原样回显那个名字，空值即 `ErrInvalidQuery`。惯例名（给读者的共享词表，不是许可集）：`plan_step`、`llm_request`、`llm_output`、`tool_call`、`tool_result`、`subagent_spawn`、`subagent_done`、`context_inject`、`ask_user`、`user_reply` |
 
@@ -498,7 +498,7 @@ _, err := db.AppendArchive(api.ArchiveInput{
 | 文件诊断 | **`DBStats`**（`FileBytes` / `RecordCount`） | `DB.Stats()` 的答复，也是决定要不要 `CompactTo` 的那一对数：两者的差就是压缩能还回来的字节 |
 | 错误 | `Code` + 各 `Err*` 常量，用 `CodeOf(err)` 取回数字码 | 错误串背后的那一层分类 |
 
-枚举常量同样导出：`L3ImportSkip` / `Merge` / `Overwrite`、`EdgeRelated`…`EdgeCustom`、
+枚举常量同样导出：`L3ImportSkip` / `L3ImportMerge` / `L3ImportOverwrite`、`EdgeRelated`…`EdgeCustom`、
 `ContentText`…`ContentOther`、`KindUtterance` / `KindEvent`、`RoleUser` / `RoleAgent` /
 `RoleSystem` / `RoleDream`、`PlanStatusInProgress` / `PlanStatusDone` / `PlanStatusFailed`。
 
