@@ -14,7 +14,7 @@ README 的版本表与 git log。
 7. **时间单位在写边界判**：`AppendArchive` 与 `TurnEnd` 的毫秒保留窗拒掉秒级（1e9–1e11）与微秒级（>1e14）两段值（两条边界各一条用例：`TestAppendArchiveRefusesATimestampInTheWrongUnit`、`TestUpdateRefusesATimestampInTheWrongUnit`，后者另钉住「拒在 LLM 之前、零留痕、这一轮仍开着」）——保留窗按毫秒算 cutoff，一个秒级值写进去既会被下一次 Dream 当成过期扫掉，又永远命不中时间过滤。这条是跨仓端到端集成实测撞出来的：三仓同为毫秒之后，宿主侧不再有任何一次单位换算。
 8. **读回来的角色重新有名可指**：`api.RoleDream` 上架（v1.6.3 曾随「宿主不该写它」一起下架）。写侧一字未松——`content.ValidateAppend` 照旧拒任何带它的记录，那两条用例仍在；被撤掉的只是一个名字，而 `SceneContext` 与 `SearchL4` 都会把它交回来（巩固组的摘要就是靠它和一轮的两句原文区分）。宿主因此不必写 `m.Role == 3` 这种魔数来决定往模型前摆哪几行——命名不授予写能力，边界才是。
 9. **磁盘格式 `0x0012` 不变**：自持的两个字段不落新记录也不加新键，轮次计数器就是场景记录上原本就有的 `turn_seq`，旧文件照常打开。测试脚手架顺带收形：7 个 mock LLM server 的同一套骨架收成三处；本轮语义由离线接口面 `TestInterface*` 逐条钉住（不花额度），另有 `TestSecondLibraryOpenedMidRound` 与 `TestEachDomainHoldsItsOwnTurn` 钉住「中途再开一个库也不串、各域各持自己那一轮」，`TestDreamLeavesTheOpenTurnCloseable` 钉住「定时巩固撞在开着的那一轮上：既不掉那一轮，也不扫掉它已写的记录」，`TestIdleReclaimRefusesTheDroppedRound` 钉住另一头：空闲回收跨过一轮的中途时，那一轮的写入与收束被拒到宿主重开一轮为止。
-10. **接入指南补上第七条「宿主要知道的事实」**：一次召回读要把 `SceneContext("")` 在「这个域还没读过」时报的 `ErrNotFound` 翻成一次空答案——内核把记忆端口上的错误当作整次调用的终止，于是「还没有任何东西可记」的第一轮反而会被打死。这条是拿宿主真实的决策循环跑出来的，写进 `INTEGRATION_GUIDE*.md` §6.5；同一处顺带把 `api.RoleDream` 的两段旧文（「不作公开常量」/ "deliberately not exported"）改口，两份指南的版本头随本轮取 v1.6.6。
+10. **接入指南补上第七条「宿主要知道的事实」**：一次召回读要把 `SceneContext("")` 在「这个域还没读过」时报的 `ErrNotFound` 翻成一次空答案——内核把记忆端口上的错误当作整次调用的终止，于是「还没有任何东西可记」的第一轮反而会被打死。这条是拿宿主真实的决策循环跑出来的，写进 `INTEGRATION_GUIDE*.md` §6.5；同一处顺带把 `api.RoleDream` 的两段旧文（「不作公开常量」/ "deliberately not exported"）改口，两份指南的版本头随本轮取 v1.6.6。同一节还记下召回读的成本形状（300 轮 / 900 条记录的域上，`SceneContext("")` 一次交出全部话题实测 1.4–2.2 ms，按话题补一次读每条 43–64 µs，五次跑）：「为每条召回项再查一次结局」付的是 N × 数十微秒，所以**不加新读面**——那条按 N 个话题批量取的口子在被证明需要之前不存在。
 
 ## v1.6.5 — 2026-09-22 — MCP 面整体退役：对外只剩 Go module
 
