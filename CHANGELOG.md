@@ -65,6 +65,8 @@ README 的版本表与 git log。
     第 3 条把话题上的两个时间界写成「其内容的最早与最晚」——也不准：`settleLocked` 取的是**原文**的跨度，轮中事件各按自己的时刻存在，不撑宽那两个界（`TestTurnTopicBoundsIgnoreMidRoundEvents`；负例＝把事件并进取界的那次读取，当场报 `1000/9000, want 1000/1000`）。
     两处都是宿主据以排 prompt 与保留窗的判断句。零生产代码改动。
 
+31. **形状承诺补上编码那一半**（`api/json_shape_test.go`）：「宿主可见的列表恒为 `[]`、map 恒为 `{}`」此前只在 Go 值上钉过，而宿主真正存盘、转发、喂模型的通常是 `json.Marshal` 之后的形状——那里一个没填的集合会变成 `null`，是第三种谁也没要的答复，宿主再解回自己的类型时就得为它加分支。字段名由 `go/ast` 现读本包结构体得出，且**只认「凡声明它的类型都把它声明成 slice/map」的那些 json 键**，所以刻意可缺的标量（`parent_id`、锚点）不会被牵连。跑在未收束过任何东西的库与写过一轮之后的同一批读上。**负例**：摘掉门面对 `Preferences` 的补空映射，测试当场点名 `GetL0.preferences` 与 `Search.profile.preferences`。零生产代码改动。
+
 ## v1.6.5 — 2026-09-22 — MCP 面整体退役：对外只剩 Go module
 
 1. **`cmd/memhop-mcp` 整包删除**（14 个文件 3109 行）：25 个工具、多租户 HTTP（SSE 与 streamable-http 双传输）、按 `/mcp/<tenant>` 建/取域的租户注册表、`--tenants` 白名单与锚定 db-dir 的读入口一起消失。仓库不再有 server 形态、不再有后台进程，对外只剩「以 Go module 使用 `api`」一种接入。
