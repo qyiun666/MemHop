@@ -197,8 +197,9 @@ func TestMergeScenesPrimaryInSecondary(t *testing.T) {
 	}
 }
 
-// TestDeleteTopicRemovesSubtreeAndArchives deleting a topic removes its
-// subtree, the L4 archives it owns, and its L2Meta entries.
+// TestDeleteTopicRemovesSubtreeAndArchives deleting a topic removes its subtree and
+// every record the subtree's topics own - archives and plan nodes alike, including the
+// ones hanging off a child that was never named - plus their cache entries.
 func TestDeleteTopicRemovesSubtreeAndArchives(t *testing.T) {
 	engine := newTestEngine(t)
 	db := newTestDB(t, engine)
@@ -223,7 +224,29 @@ func TestDeleteTopicRemovesSubtreeAndArchives(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	// The child owns records of its own: an archive and a plan step. A cascade that walks only
+	// the id it was handed drops the two topics and leaves these unreachable - invisible until a
+	// reopen rebuilds the counts from records.
+	childArc := core.HashContent(childID, core.SeqUser)
+	if err := core.WriteArchiveSlot(engine, core.DefaultAgentID, childArc, &core.ArchiveSlot{
+		IDHash: childArc, Kind: core.KindUtterance, Seq: core.SeqUser,
+		TopicID: childID, Content: "子话题的原文", CreatedAt: 2500,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	planOf := func(topicID uint64, seq uint32) uint64 {
+		id := core.HashPlanNode(topicID, seq)
+		if err := core.WritePlanNode(engine, core.DefaultAgentID, id, &core.PlanNode{
+			IDHash: id, TopicID: topicID, Seq: seq, Title: "step", Status: core.StatusInProgress,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	parentPlan, childPlan := planOf(parentID, 1), planOf(childID, 1)
+
 	ac.L4.Append(parentID, core.SeqUser, arcID, core.KindUtterance, 1500, 0)
+	ac.L4.Append(childID, core.SeqUser, childArc, core.KindUtterance, 2500, 0)
 	ac.L2Meta.Update(index.L2MetaFromTopic(&parent))
 	ac.L2Meta.Update(index.L2MetaFromTopic(&child))
 
@@ -238,8 +261,15 @@ func TestDeleteTopicRemovesSubtreeAndArchives(t *testing.T) {
 			t.Errorf("l2meta entry %d should be removed", id)
 		}
 	}
-	if arcs, err := core.ReadArchiveSlot(engine, core.DefaultAgentID, arcID); err == nil && arcs != nil {
-		t.Error("archive should be deleted")
+	for _, a := range []uint64{arcID, childArc} {
+		if arcs, err := core.ReadArchiveSlot(engine, core.DefaultAgentID, a); err == nil && arcs != nil {
+			t.Errorf("archive %d should be deleted", a)
+		}
+	}
+	for _, plan := range []uint64{parentPlan, childPlan} {
+		if node, err := core.ReadPlanNode(engine, core.DefaultAgentID, plan); err == nil && node != nil {
+			t.Errorf("plan node %d should go with the subtree it hangs on", plan)
+		}
 	}
 	// The scene record survives a topic deletion.
 	if _, err := core.ReadSceneSlot(engine, core.DefaultAgentID, scene.SceneID); err != nil {
