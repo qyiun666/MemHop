@@ -141,7 +141,7 @@ func TestAppendArchiveBudgets(t *testing.T) {
 // with it while the sweep reports nothing, and a microsecond-scale one never expires.
 // Both leave nothing behind, and the same instant in milliseconds is stored and found
 // by a millisecond window.
-func TestAppendArchiveRefusesATimestampInTheWrongUnit(t *testing.T) {
+func TestAppendArchiveRefusesAnAbsentOrWrongUnitTimestamp(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	_, hex, topicID := newTurnKey(t, db)
 	now := time.Now()
@@ -151,6 +151,8 @@ func TestAppendArchiveRefusesATimestampInTheWrongUnit(t *testing.T) {
 	}{
 		{"seconds since the epoch", now.Unix()},
 		{"microseconds since the epoch", now.UnixMicro()},
+		{"no stamp at all", 0},
+		{"negative stamp", -5},
 	} {
 		_, err := db.AppendArchive(core.DefaultAgentID, core.ArchiveSlot{
 			Kind: core.KindUtterance, Role: core.RoleUser, Content: "a turn", CreatedAt: tc.ts,

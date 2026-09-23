@@ -836,6 +836,10 @@ func main() {
    namespaces — and none of it can be addressed under the current rules.
 3. **Timestamps in Unix ms**, `<= 0` → `ErrInvalidQuery` on every record you append;
    a turn's topic is stamped with the earliest and latest timestamps among its **utterances** — an event recorded mid-round does not widen those bounds.
+   Two clocks, one rule: the content you append and the round you close carry **your** millisecond stamp, and the library never
+   substitutes one for a missing `CreatedAt` — that value is what the retention window measures, so guessing it on a caller's
+   behalf would silently expire or immortalise someone's transcript. What the library derives instead (a plan step's own
+   timestamps, a profile's `UpdatedAtMs`, a graph's content clock) it stamps itself, on the same millisecond scale.
 4. **IDs are opaque 16-hex strings**: never splice/truncate them; response ids
    feed back as-is; the facade exposes no hex ⇄ integer bridge.
 5. **`Search` writes no memory content**: it opens one turn (advancing the

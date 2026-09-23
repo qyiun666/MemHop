@@ -418,6 +418,13 @@ internal/{domain,scene,turn,dream,graph,plan,content}
     读会点名，要等保留窗扫掉。所以「开了没沉淀的轮不留残渣」这句是错的——放弃一本记了东西的轮花的是空间，
     不是零（`TestAbandonedRoundKeepsItsRecords`）。
 
+16. **两口时钟，分工写死**：宿主写的记录（`AppendArchive` 的每一条、`Update` 收的那一轮）带的是**调用方**
+    的毫秒戳，留空（0 或负）与秒级/微秒级带内取值都在写边界被拒——**库不替谁补一个表**，因为保留窗量的就是
+    这个值，替宿主盖钟等于替宿主决定一份转录何时作废。库自己派生的时间戳（计划节点的三个、画像的
+    `UpdatedAtMs`、图槽的内容钟）才由库盖，同一刻度。两个写口共用 `content.checkTimestamp` 一道闸，所以
+    「一个入口补表、另一个拒」这种分叉不可能出现（`TestAppendArchiveRefusesAnAbsentOrWrongUnitTimestamp`、
+    `TestUpdateRefusesAnAbsentOrWrongUnitTimestamp`；负例＝让它在 `<= 0` 时盖当前毫秒，两格当场红）。
+
 ## 修改者义务
 
 改动锁纪律、Dream 阶段划分或域生命周期时，必须同步更新本文件与

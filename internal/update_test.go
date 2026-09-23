@@ -264,11 +264,12 @@ func TestUpdateRefusesWhenNoTurnIsOpen(t *testing.T) {
 }
 
 // The close boundary checks the host's timestamp the same way the append boundary
-// does, and checks it before anything is spent or stored: a seconds-scale stamp would
+// does — including an absent one, which is refused rather than filled in — and checks
+// it before anything is spent or stored: a seconds-scale stamp would
 // settle a turn whose originals the next Dream reads as long expired, and the host
 // would find out only when the transcript is gone. A refusal leaves the turn open, so
 // the same close carrying a millisecond instant still settles it.
-func TestUpdateRefusesATimestampInTheWrongUnit(t *testing.T) {
+func TestUpdateRefusesAnAbsentOrWrongUnitTimestamp(t *testing.T) {
 	srv, calls := countingLLMServer(t, turnKeywords)
 	db := newSearchTestDB(t, srv.URL)
 	_, topicID := openTurn(t, db)
@@ -279,6 +280,11 @@ func TestUpdateRefusesATimestampInTheWrongUnit(t *testing.T) {
 	}{
 		{"seconds since the epoch", 1_700_000_000},
 		{"microseconds since the epoch", 1_700_000_000_000_000},
+		// A port that carries no clock at all is the shape an adapter meets: the close
+		// boundary has to refuse an absent stamp, not substitute its own, or every
+		// round a host forgot to time would expire on the library's clock instead.
+		{"no stamp at all", 0},
+		{"negative stamp", -5},
 	} {
 		err := endTurn(db, tc.ts)
 		if common.CodeOf(err) != common.ErrInvalidQuery {
