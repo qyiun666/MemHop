@@ -96,3 +96,47 @@ func TestOpenSettlesThePrimaryAndCreatesSubAgents(t *testing.T) {
 		t.Fatalf("the sub-agent domain did not survive the restart: %+v %v", back, err)
 	}
 }
+
+// One file, one holder — and the lock does not soften inside a single process: a second
+// `Open` of a file this process already holds is refused exactly as another process's would
+// be. That is the failure a host meets when it hands two agents one path (a worker's file
+// path came out of a model), and it reads as "pick another path", not as damage: the holder
+// keeps working untouched, and a second path opens fine alongside it. That is how "one
+// library per agent" grows at runtime rather than only at start-up.
+func TestOpenRefusesAFileThisProcessAlreadyHolds(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "held.meh")
+	llm := LlmConfig{APIURL: "http://127.0.0.1:1", APIKey: "k", Model: "m"}
+	profile := &ProfileInput{Name: "Meow", Role: "assistant"}
+
+	db, err := Open(path, llm, DefaultMemHopDefaults, profile)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	second, err := Open(path, llm, DefaultMemHopDefaults, profile)
+	if err == nil {
+		_ = second.Close()
+		t.Fatal("a second Open of a file this process holds must be refused")
+	}
+	if code := CodeOf(err); code != ErrIO {
+		t.Fatalf("the refusal carries code %d (%v), want ErrIO", code, err)
+	}
+
+	sess, err := db.Primary()
+	if err != nil {
+		t.Fatalf("Primary: %v", err)
+	}
+	if _, err := sess.Search(SearchQuery{}); err != nil {
+		t.Fatalf("the held database's own read after the refused open: %v", err)
+	}
+
+	worker, err := Open(filepath.Join(dir, "worker.meh"), llm, DefaultMemHopDefaults, profile)
+	if err != nil {
+		t.Fatalf("a second file while the first is held: %v", err)
+	}
+	if err := worker.Close(); err != nil {
+		t.Fatalf("close the worker file: %v", err)
+	}
+}

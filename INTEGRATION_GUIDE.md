@@ -327,7 +327,10 @@ through a tool call gets its own file, its own kernel and its own session handle
 nothing in the table above changes for it: the library keeps no process-wide state to be
 shared, so two such stacks running in one process neither see each other's turns nor reach
 the same id. The one thing the host supplies is a bound on where a worker's file may go —
-that path came out of a model (§5).
+that path came out of a model (§5). Two stacks can also be handed the same path by mistake, and
+that is the one collision the library refuses on the host's behalf: `Open` of a file already held —
+by this very process included — answers `ErrIO`, the holder is untouched, and the move is to pick
+another path rather than read the file as damaged (`TestOpenRefusesAFileThisProcessAlreadyHolds`).
 
 A decision-loop kernel's memory port has this shape: a recall before the model is consulted,
 and a remember once at the round's terminal point on every exit arm. The two are not
