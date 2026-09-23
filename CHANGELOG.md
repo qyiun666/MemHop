@@ -48,6 +48,9 @@ README 的版本表与 git log。
 `the first recall answered with an error` 红。引擎两处、门面注释、两份指南、AGENTS 与 agent.md 同
 批；`readScene` 多出一个 `hasScene` 返回值，签名不外露。公开面方法数、磁盘格式一字未动。
 
+26. **把「宿主可见的列表恒为 `[]`」从承诺变成门禁**（`api/surface_shape_nil_test.go`）：AGENTS 那条「列表恒为 `[]`、map 恒为 `{}`」此前没有任何测试覆盖——它靠门面那一个 `mapSlice`（`make([]U, len(in))`）与 `cloneStrings` 成立，改坏它没有任何检查会红。新测试反射走完 **每条读的返回形状，两遍**：一本全新的库（什么都没写过，空集合最容易露出 `nil` 的地方）与一轮已收束＋一步计划＋一张图之后的同一批读。
+    **负例**：把 `mapSlice` 在空输入时的构造换成 `var out []U`＋`append`，该测试当场点名七条越山的 `nil`（`ListL1`、`ListScenes`、`ListL3`、`SearchL4`、`Search.Topics`、`PlanState.Roots` 以及已填充那一遍的 `ListL1`）。零生产代码改动。
+
 ## v1.6.5 — 2026-09-22 — MCP 面整体退役：对外只剩 Go module
 
 1. **`cmd/memhop-mcp` 整包删除**（14 个文件 3109 行）：25 个工具、多租户 HTTP（SSE 与 streamable-http 双传输）、按 `/mcp/<tenant>` 建/取域的租户注册表、`--tenants` 白名单与锚定 db-dir 的读入口一起消失。仓库不再有 server 形态、不再有后台进程，对外只剩「以 Go module 使用 `api`」一种接入。
