@@ -335,7 +335,12 @@ symmetric — a kernel that works through tool calls recalls several times per r
 mapping is one read that opens the turn (`Search`, on the kernel's once-per-invocation hook,
 not on the recall port), one pure read for every recall in between (`SceneContext("")` — no id
 named, no turn consumed), and one close (`Update`). What an adapter holds is a session handle and the kernel's own name for how
-the round ended; no id travels through any of it.
+the round ended. Nothing there is carried by the host's memory: the write calls take no id
+at all. The one key a loop may hold is `NewTopicID` — the name the round-opening read returned —
+and it is needed only to read this round's own event track while the round is still running
+(`SearchL4{TopicID, Kind: event}`) or to retract it (`DeleteTopic`). The plan tree does not even
+need that: `PlanState` reads the turn the library holds open. An event appended mid-round is
+readable by that id before `Update` closes the turn.
 
 What is left for the host is six facts to know, not six adapters to write:
 
