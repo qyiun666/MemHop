@@ -330,7 +330,10 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    又由它派生，所以两道写口都不接受空标签——导入条目缺 `Domain` 即拒，`UpdateL3`
    改名给空串也拒（`nil` 才是「不改名」），改到别的图已占用的标签同样拒。
    `ImportL3` 结果带 `GraphIDs`
-   （图 id = `hash(Domain)`，没有别的公开调用能渲染它）。全部 L3 记录住保留公共域
+   （图 id = `hash(Domain)`，没有别的公开调用能渲染它）。图槽的 `UpdatedAt` 是**内容变化钟**：
+   一次批次只给它真写过节点或边的图盖一次钟，`GraphIDs` 报的是「解析到的图」，与这份
+   「改过的图」是两个集合；读口一概不盖，改标签算一次变化（`TestGraphSlotClockAnswersChangeNotAccess`
+   四个方向各钉一条）。全部 L3 记录住保留公共域
    `core.SharedPoolAgentID`（文件级公共池：`contextFor`/空闲回收/域注册表
    三处豁免，域发号时跳过它与默认域，宿主因此拿不到也绑不上这个 id）。
    `DeleteL3` 两阶段：公共锁内删图，释放后遍历「默认域 + 注册表」逐域

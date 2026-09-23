@@ -106,6 +106,8 @@ README 的版本表与 git log。
 
 49. **计划树要被豁免得同时满足两条，指南只写了一条**（`internal/dream/plan_prune_test.go` + 两份指南 §12 第 7 条）：实现里是「仍有未到终态的步」**且**「窗口内有过活动」才跳过整棵树（`internal/dream/prune.go` 的 `agg.HasNonDone && agg.LastActiveAt >= cutoff`），不豁免的树里每一步再各按自己的 `UpdatedAt` 计时；指南写的是「仍在进行的树豁免」，宿主据此会以为一棵被搁置的在途树永远留着——而那正是这一阶段存在理由的反面（L5 失去上界）。两个组合此前都没有测试钉着：既有那条（`TestPrunePlanStageSkipsWhenTheTreeIsIncomplete`）只测了被豁免的一侧。新用例一次摆三棵树（在途且窗口内活动 / 在途但静默 / 已完结且两步一旧一新），一趟裁剪后逐棵读回：第一棵 1 步全留，第二棵整棵没了，第三棵只留下窗口内那一步（4 条节点剪掉 2 条）。**负例**：把 `&&` 换成 `||`，后两条断言当场分别报 `an in-flight but silent tree survived the window, so L5 has no bound` 与 `a finished tree should lose only the stale step`，第一条不受影响——哪一条漏了都红在自己那个方向上。零生产代码改动。
 
+50. **图槽的 `updated_at` 是内容变化钟，这句话第一次有了断言**（`internal/l3_graph_clock_test.go` + `api/types.go` 的注释补上漏掉的那一半）：宿主按「最近改过的知识」排一张图清单时读的就是这个字段。实现里一次批量导入维护两个集合——把某个域解析到了哪几张图（`GraphIDs` 交回的就是这一份），以及真写过节点或边的有哪几张（只有这一份会被盖钟）——四个方向此前都没有测试：读口盖不盖钟、什么都没写的批次盖不盖、只被解析到没被写过的图盖不盖、真写过的图盖没盖。新用例先把两张图的钟倒回 1000 与 2000，再逐项验：`ListL3`、`GetL3`、`QueryL3Subgraph` 之后仍是 1000 与 2000；一趟 `Skip` 批次把两个域都解析到、四条节点全部跳过、`GraphIDs` 仍点名两张图，而两口钟一动不动；只改写其中一张图那两个节点的那一趟，让那张图的钟前进、另一张精确停在 2000；改标签也算一次变化，同样盖钟。钟是从记录本身读的，所以「前进的那一口」不是被上一次列举顺手盖出来的。**四条负例各红在自己那条断言上**：让 `ListL3` 顺手盖钟 → `reads advanced the clocks`；把 `Skip` 也算成变化 → `a batch that wrote nothing advanced the clocks`；把盖章范围从「写过的图」换成「解析到的图」→ 同一条报出来；不再把任何图标记为已改 → `the graph this batch wrote kept its old clock`。门面那条注释此前写的是「改了会动、没改不动」，漏了「读也不动」，补上。零生产代码改动，公开面与磁盘格式一字未动。
+
 ## v1.6.5 — 2026-09-22 — MCP 面整体退役：对外只剩 Go module
 
 1. **`cmd/memhop-mcp` 整包删除**（14 个文件 3109 行）：25 个工具、多租户 HTTP（SSE 与 streamable-http 双传输）、按 `/mcp/<tenant>` 建/取域的租户注册表、`--tenants` 白名单与锚定 db-dir 的读入口一起消失。仓库不再有 server 形态、不再有后台进程，对外只剩「以 Go module 使用 `api`」一种接入。

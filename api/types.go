@@ -275,8 +275,8 @@ type SearchResult struct {
 
 // HypergraphSlot is one L3 graph's container metadata. UpdatedAt is the graph's change
 // clock: an import that writes a node or an edge here moves it, as does a rename, while
-// a batch that changed nothing leaves it where it was. Both timestamps are milliseconds
-// since the epoch.
+// a batch that changed nothing leaves it where it was — and so does every read, however
+// many graphs it lists. Both timestamps are milliseconds since the epoch.
 type HypergraphSlot struct {
 	ID        string `json:"id"`
 	Name      string `json:"name"`
