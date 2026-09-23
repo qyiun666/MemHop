@@ -342,7 +342,7 @@ and it is needed only to read this round's own event track while the round is st
 need that: `PlanState` reads the turn the library holds open. An event appended mid-round is
 readable by that id before `Update` closes the turn.
 
-What is left for the host is seven facts to know, not seven adapters to write:
+What is left for the host is eight facts to know, not eight adapters to write:
 
 - **A recall port turns "no scene yet" into an empty answer.** `SceneContext("")` refuses with
   `ErrNotFound` on a domain that has never been read — it does not create a scene for a read.
@@ -378,6 +378,19 @@ What is left for the host is seven facts to know, not seven adapters to write:
   and a per-topic follow-up (`SearchL4{TopicID}`) took 43-64 microseconds each. So an adapter
   that looks up the ending of each recalled turn pays N x 50 us, and no additional read is needed
   to keep the recall cheap at that size.
+- **Folding a scene read into prompt lines is four decisions, and they are stated here once.**
+  `SceneContext("")` lists a scene's topics **flattened to depth ≤ 2 on purpose**: a consolidated
+  group is a depth-1 topic whose summary rides as its own utterance marked `Role: api.RoleDream`,
+  and the turns that group swallowed are its depth-2 children — this read is the only one that names
+  those children, and the only place their originals come back. So: (1) drop rows with `Depth > 1`,
+  those are originals a parent already summarized; (2) where `ChildCount > 0`, take that
+  `RoleDream` line as the memory's text; (3) otherwise take the turn's own `RoleUser`/`RoleAgent`
+  lines; (4) date a memory by its earliest message rather than its last. Steps (1) and (2) are what
+  keep one fact from reaching the model twice: render the list as it arrives and a consolidated
+  group shows up as its summary *and* again as every turn it replaced. The engine renders no prose
+  — that is the host's — but which row *is* which is the library's to say, and it says it on the
+  row: `Depth`, `ChildCount`, `Role`.
+
 - **A facade type that is *not* the engine's own is hiding something.** Most shapes here are
   aliases, so the struct filled at the call site is the struct the engine reads — a value
   crosses that boundary with no conversion step at all. The exceptions withhold a thing
