@@ -361,3 +361,89 @@ func TestSubAgentRefusedWhileATenantKeyWillNotResolve(t *testing.T) {
 		t.Fatalf("the worker domain reads %+v/%v, want the profile it was created with", got, err)
 	}
 }
+
+// What AgentIdleTTLMs costs a host that pauses mid-round, and what it does not. An open
+// turn lives only in memory — the read that opened it wrote the scene's counter, not a
+// topic record — so a reclaim between that read and the close drops the turn. What this
+// pins is the shape of the failure: every later write on that round is refused with "no
+// turn is open" rather than silently landing on a fresh turn, so the host re-opens and
+// nothing is mis- attributed. The price is bounded and one-way: what the round had
+// already appended stays stored under a topic no read surface names, because that turn
+// never settled. A TTL a round can outlive (a tool waiting on a person) therefore drops
+// trajectories: keep it longer than the longest round, or disable the sweep with 0.
+func TestIdleReclaimRefusesTheDroppedRound(t *testing.T) {
+	srv := mockLLMServer(t, turnKeywords)
+	defaults := DefaultMemHopDefaults
+	defaults.AgentIdleTTLMs = 100 // longer than the gap inside a step, shorter than a pause
+	db, err := OpenDB(filepath.Join(t.TempDir(), "midround.meh"),
+		LlmConfig{APIURL: srv.URL, APIKey: "test", Model: "mock"},
+		defaults, primaryProfile("primary"))
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+
+	sub, err := db.SubAgent(LlmConfig{APIURL: srv.URL, APIKey: "test", Model: "mock"},
+		core.ProfileSlot{Name: "worker"})
+	if err != nil {
+		t.Fatalf("SubAgent: %v", err)
+	}
+	abandoned, err := sub.Search(SearchQuery{})
+	if err != nil {
+		t.Fatalf("open the round: %v", err)
+	}
+	if _, err := sub.AppendArchive(core.ArchiveSlot{
+		Kind: core.KindUtterance, Role: core.RoleUser, Content: "first half",
+		CreatedAt: time.Now().UnixMilli(),
+	}); err != nil {
+		t.Fatalf("append before the pause: %v", err)
+	}
+
+	time.Sleep(300 * time.Millisecond) // the round pauses longer than the TTL
+
+	err = func() error {
+		_, err := sub.AppendArchive(core.ArchiveSlot{
+			Kind: core.KindEvent, EventType: "tool_result", Content: "second half",
+			CreatedAt: time.Now().UnixMilli(),
+		})
+		return err
+	}()
+	if common.CodeOf(err) != common.ErrInvalidQuery {
+		t.Fatalf("writing after the domain was reclaimed: code=%d err=%v, want the refusal",
+			common.CodeOf(err), err)
+	}
+	if _, err := sub.Update(TurnEnd{Input: "first half", Output: "second half", CreatedAt: 1000}); common.CodeOf(err) != common.ErrInvalidQuery {
+		t.Fatalf("closing the dropped round: code=%d err=%v, want the refusal",
+			common.CodeOf(err), err)
+	}
+
+	// The host's way out is to open a round again; it lands on the same scene, one turn
+	// further, and nothing carries the abandoned turn's identity over.
+	next, err := sub.Search(SearchQuery{})
+	if err != nil {
+		t.Fatalf("search after the reclaim: %v", err)
+	}
+	if next.NewTopicID == abandoned.NewTopicID {
+		t.Fatalf("the reclaimed domain resumed the turn it dropped (%d)", next.NewTopicID)
+	}
+
+	// What it left behind is stored and unreachable: on disk under the abandoned topic,
+	// absent from every read, since that topic was never settled.
+	var kept []core.ArchiveSlot
+	for _, arc := range core.CollectAllArchives(db.engine, sub.agentID) {
+		if arc.TopicID == abandoned.NewTopicID {
+			kept = append(kept, arc)
+		}
+	}
+	if len(kept) != 1 {
+		t.Fatalf("the abandoned turn kept %d records, want the one appended before the pause",
+			len(kept))
+	}
+	sc, err := sub.SceneContext("")
+	if err != nil {
+		t.Fatalf("SceneContext: %v", err)
+	}
+	if len(sc.Topics) != 0 {
+		t.Fatalf("scene context = %+v, want no topic for a turn that never closed", sc.Topics)
+	}
+}

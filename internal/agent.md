@@ -83,7 +83,11 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    摘除与 `ac.Reclaimed` 打标在**同一个持锁区间内**完成：调用方可能已经取到上下文、
    却在取锁前被调度出去，超过 TTL 后回收就会插进这两步之间——没有这个标记，那次操作
    会写在一份已作废的缓存上，而 `lockAgent` 复检到标记就重取域。回收时不快照任何东西：
-   L2Meta 在下次访问时从记录重建，数据始终在文件里。
+   L2Meta 在下次访问时从记录重建，数据始终在文件里。两个自持字段里只有 `ac.Scene` 可重建
+   （`scene.CurrentScene` 取轮次计数器跑得最远的那条）；**`ac.Turn` 不可重建**——开着的那一轮
+   在盘上没有任何痕迹。于是回收跨过一轮的中途时，那一轮剩下的写入与收束一律被拒到宿主
+   重开一轮为止（`TestIdleReclaimRefusesTheDroppedRound`）：不会静默写到新轮上，代价是那之前
+   已写的记录留在一个从未沉淀的话题下，读面不再点名它。
 5. **planCache 域内索引**：L5 计划聚合缓存 `ac.Plans`（`domain` 包）
    **不内置锁**，完全依赖 `ac.Mu` 串行（区别于自带 RWMutex 的 `L4Index`）。
    所有计划写路径（节点增删改、Dream 清理）必须先取 `ac.Mu` 再同步缓存；
