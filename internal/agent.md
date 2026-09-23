@@ -338,7 +338,9 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    清锚前」窗口内同名重导入（图 id = hash(Domain) 同 id）的锚点会被清成
    未锚定，可经 `UpdateScene` 重挂。`scene.L3ID` 是 L3 图唯一的入边（图槽上没有
    反向清单），所以清锚只能按域扫场景；漏清锚的可见后果是 `ListScenes(l3ID)`
-   继续列出解不开的会话。图槽的 `UpdatedAt` 是**这张图内容的变化钟**：一批导入
+   继续列出解不开的会话。遍历的对象必须是**注册表**而不是当前活上下文映射——被空闲回收的域记录仍在盘上，
+   锚同样得清；而注册表在 Open 时由记录重建、也不随回收删项，「回收过的域不会被漏」这件事才成立
+   （`TestDeleteL3DetachesAnchorsInReclaimedDomains`；把它变异成只遍历活上下文，另一条只测活域的用例仍全绿）。图槽的 `UpdatedAt` 是**这张图内容的变化钟**：一批导入
    结束时，由根对「本批真写过东西」的每张图各推进一次（`batch.StampChanged`，
    一个图一次写而不是每条记录一次），改名走同一个偏更新原语（`name=nil`），
    只读到没写过的图不动它——skip 模式重导同一批节点因此不会让这张图看起来变新。
