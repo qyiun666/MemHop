@@ -350,7 +350,9 @@ func (s *Session) Dream(ctx context.Context, sceneID string) (*DreamReport, erro
 // nothing to read it; a domain that has never spoken answers an empty transcript with
 // no scene named — "nothing has been said here yet" is a fact, not a failure, and this
 // call still writes nothing. A scene id the host names that is not there is ErrNotFound.
-// Entries come in speaking order, each carrying its own
+// Rows arrive ordered: user timestamp, then shallower-first at a tie (a fused group carries
+// the timestamp of the first turn it swallowed, so ties are the norm), then topic id - a
+// host reads the listing linearly and never re-sorts it. Each row carries its own
 // L4 messages; depth-2 originals are included here (see SceneContext).
 func (s *Session) SceneContext(sceneID string) (*SceneContext, error) {
 	return s.session.SceneContext(sceneID)

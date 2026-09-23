@@ -83,6 +83,32 @@ func TestInterfaceConsolidationSurvivesReopen(t *testing.T) {
 		if groups == 0 || sunk == 0 {
 			t.Fatalf("%s: the consolidated state is missing from the listing (groups %d, sunk %d)", label, groups, sunk)
 		}
+		// The documented order is (user timestamp, shallower first, id). The secondary key
+		// is not decoration: a fused group carries the timestamp of the first turn it
+		// swallowed, so ties are the normal case, and the host's collapse rules read this
+		// listing linearly - a group that lands among its own originals summarises nothing.
+		ties := 0
+		for i := 1; i < len(s2.Topics); i++ {
+			prev, cur := s2.Topics[i-1], s2.Topics[i]
+			if cur.UserTimestamp == prev.UserTimestamp {
+				ties++
+			}
+			if cur.UserTimestamp < prev.UserTimestamp {
+				t.Fatalf("%s: rows out of speaking order at %d (%d < %d)", label, i, cur.UserTimestamp, prev.UserTimestamp)
+			}
+			if cur.UserTimestamp == prev.UserTimestamp && cur.Depth < prev.Depth {
+				t.Fatalf("%s: at a timestamp tie the deeper row leads at %d, so a group does not introduce its own originals: %+v then %+v",
+					label, i, prev, cur)
+			}
+			if cur.UserTimestamp == prev.UserTimestamp && cur.Depth == prev.Depth && cur.TopicID < prev.TopicID {
+				t.Fatalf("%s: rows sharing timestamp and depth are not id-ordered at %d (%s after %s)", label, i, cur.TopicID, prev.TopicID)
+			}
+		}
+		// Without a tie the two secondary keys above assert nothing, and consolidation
+		// guarantees one: a group carries the first swallowed turn's timestamp.
+		if ties == 0 {
+			t.Fatalf("%s: no two rows shared a timestamp, so the tie-breaking keys went untested", label)
+		}
 		raw, err := json.Marshal(s2)
 		if err != nil {
 			t.Fatalf("%s marshal: %v", label, err)
