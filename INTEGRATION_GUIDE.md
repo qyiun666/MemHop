@@ -164,6 +164,10 @@ primary domain's profile:
   invented id cannot open an empty memory in a real domain's place. A host that wants to
   keep exactly one identifier per memory keeps this id rather than a name; the primary's
   own id is the implicit zero one and addresses the primary.
+- **The id is scoped to its file.** Every file has its own primary and every primary is the
+  zero domain, so the same 16 zeros name different memories in different `.meh` files. A
+  host that deploys one file per agent keys across files by the path (path plus id at most);
+  a map keyed on id alone would fold two agents' memories together.
 - Both refusals happen before anything touches the filesystem, so a refused `Open`
   leaves no file behind for the next attempt to trip over.
 - Explicit flush: `lib.Checkpoint()`.
@@ -473,7 +477,7 @@ summary is the one record whose type and role the library fixes — `text`, role
 
 ## 8. Layer API quick reference
 
-The 25 session methods split by audience:
+The 26 session methods split by audience:
 
 - **Runtime/task face (18)** — the host drives these every turn and LLM tools bind to them: `Search` / `AppendArchive` / `Update` / `Dream` (the host-driven loop), `GetL0` / `UpdateL0`, `ListL1`, `ListScenes` / `SceneContext`, `GetL3` / `ListL3` / `ImportL3` / `QueryL3Nodes` / `QueryL3Subgraph`, `SearchL4`, `PlanNodeAdd` / `PlanNodeUpdate` / `PlanState`.
 - **Assembly/admin face (8)** — host code at session boundaries and management channels only, never an LLM tool: `UpdateScene` / `RenameTopic` / `MergeScenes` / `DeleteScene` / `DeleteTopic`, `UpdateL3` / `DeleteL3`, `AgentID`.
@@ -865,7 +869,8 @@ func main() {
 6. **One file, many agent domains**: all tenants live inside one `.meh` file —
    `api.Open` settles the domain the file was opened on, `DB.SubAgent(llm,
    profile)` creates or returns one under it by name, and `DB.Agent(llm, id)` returns the
-   same domain by the id `Session.AgentID` issued — fully isolated per domain
+   same domain by the id `Session.AgentID` issued (an id is scoped to its own file, since
+   every file's primary is the zero one) — fully isolated per domain
    except the file-wide L3 pool; legacy files (`FormatVersion < 0x0012`) cannot be
    opened or migrated.
 7. **Content and plans auto-expire**: Dream drops a topic's content past the

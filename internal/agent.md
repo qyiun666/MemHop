@@ -132,7 +132,10 @@ internal/{domain,scene,turn,dream,graph,plan,content}
   `SubAgent(llm, profile)` 按 `profile.Name` 幂等建/取一个注册域并挂上它自己的
   LLM 端点，`Agent(llm, agentID)` 按 `Session.AgentID` 交出的那个 id 取回同一个域——它只走
   `CheckSession` 的准入（注册表认不出即 `ErrAgentNotFound`，不许顺手建一个空域顶上去），
-  因此既不注册也不写画像，剩下的锁序与 `SubAgent` 那一条相同。`SubAgent` 的顺序是硬约束：注册（`agentsMu`）→ 挂端点（`agentsMu`）
+  因此既不注册也不写画像，剩下的锁序与 `SubAgent` 那一条相同。域 id 的作用域**是一个文件**：
+  每个文件的主域都是那个隐式零号域，所以同样的 16 个 0 在另一个文件里指另一份记忆；宿主按
+  「一个 agent 一个文件」部署时跨文件的键是路径（`TestAnAgentIDAddressesADomainInsideOneFile`
+  两头各钉一条）。`SubAgent` 的顺序是硬约束：注册（`agentsMu`）→ 挂端点（`agentsMu`）
   → 取会话句柄（`CheckSession` 读注册表，`agentsMu`）→ **最后**才 `lockAgent`
   拿域锁，在锁内把这次的端点装到域上下文上、再写画像。反过来就是 `ac.Mu` 之下取
   `agentsMu`，正是本文件域锁纪律第 2 条禁止的那个环。写画像用 ensure 语义（已有就不动），所以注册记录写完、画像没写完

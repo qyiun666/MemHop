@@ -162,7 +162,8 @@ func (db *DB) SubAgent(llmCfg LlmConfig, profile core.ProfileSlot) (*Session, er
 // the way SubAgent does. It creates nothing: an id nobody registered is refused with
 // ErrAgentNotFound, so a mistyped or invented id cannot open an empty memory over somebody
 // else's. The primary is addressed by its own id too (the implicit zero one), which is the
-// same domain Primary hands back.
+// same domain Primary hands back — and since every file's primary is that zero value, an id
+// scopes to one file, never across files.
 func (db *DB) Agent(llmCfg LlmConfig, agentIDHex string) (*Session, error) {
 	if err := llmCfg.Validate(); err != nil {
 		return nil, err

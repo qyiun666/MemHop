@@ -322,12 +322,18 @@ func (s *Session) PlanState() (*PlanTree, error) {
 	return &out, nil
 }
 
-// AgentID is the unique id of the domain this handle is bound to, as 16 hex characters.
-// The library issues it — a sub-agent's when that domain is created, and the primary's is
-// the implicit zero domain the file was opened on — and DB.Agent takes this string back to
-// reach the same domain again. A host that keeps one identifier per memory should keep
-// this one: it survives reopening, and it is the only id here that addresses a domain
-// rather than a record inside one. Round-trip it; never construct or parse it.
+// AgentID is the id of the domain this handle is bound to, as 16 hex characters, and inside
+// this file it names exactly one domain. The library issues it — a sub-agent's when that
+// domain is created, and the primary's is the implicit zero domain the file was opened on —
+// and DB.Agent takes this string back to reach the same domain again. A host that wants one
+// identifier per memory keeps this one: it survives reopening, and it is the only id here
+// that addresses a domain rather than a record inside one.
+//
+// Scope, since the deployed shape is one file per agent: every file's primary is the zero
+// domain, so the same 16 zeros mean different memories in different files. Across files the
+// key is the path (or path plus id); a global map keyed on id alone would fold two agents
+// together (TestAnAgentIDAddressesADomainInsideOneFile). Round-trip it; never construct or
+// parse it.
 func (s *Session) AgentID() string { return formatID(s.session.AgentID()) }
 
 // ---- Promoted surface, documented ----

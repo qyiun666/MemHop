@@ -82,9 +82,11 @@ func (d *DB) SubAgent(llm LlmConfig, profile ProfileInput) (*Session, error) {
 	return &Session{s}, nil
 }
 
-// Agent returns the handle of a domain this file already holds, addressed by the unique id
+// Agent returns the handle of a domain this file already holds, addressed by the id
 // Session.AgentID handed out for it, and points that domain at ll — the same endpoint
-// replacement SubAgent performs, minus the name and minus creation.
+// replacement SubAgent performs, minus the name and minus creation. The id names a domain
+// of this file: every file has its own primary, and every primary is the implicit zero
+// domain, so the same string means another memory in another .meh.
 //
 // It creates nothing: an id that is not this file's primary and not a registered tenant is
 // refused with ErrAgentNotFound, so a mistyped or invented id cannot open an empty memory
@@ -92,7 +94,8 @@ func (d *DB) SubAgent(llm LlmConfig, profile ProfileInput) (*Session, error) {
 // Primary returns, with llm now as its endpoint. A domain whose profile was lost to a crash
 // between registration and the profile is healed by SubAgent (its name is the key that
 // carries the profile); this call hands back the handle either way, and GetL0 on it reports
-// what the domain holds.
+// what the domain holds. A host that deploys one file per agent keys across files by the
+// path — id alone is unique only inside a file.
 func (d *DB) Agent(llm LlmConfig, agentID string) (*Session, error) {
 	s, err := d.db.Agent(llm, agentID)
 	if err != nil {

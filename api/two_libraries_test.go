@@ -136,3 +136,68 @@ func keys(m map[string]bool) []string {
 	}
 	return out
 }
+
+// How far a domain id reaches is the question a host multiplies: one `.meh` per agent means
+// many files, and each file has its own primary — the implicit zero domain, so its id is the
+// same 16 zeros everywhere. Inside one file an id addresses exactly one domain, which is
+// what `DB.Agent` needs to be unambiguous; across files it is not a key, and the pair
+// (file, id) is. Pinning this is cheaper than watching a host build a global map on the id
+// alone and quietly merge two agents' memories.
+func TestAnAgentIDAddressesADomainInsideOneFile(t *testing.T) {
+	dir := t.TempDir()
+	llm := stubLLM()
+	t.Cleanup(llm.Close)
+	cfg := surfaceLLM(llm.URL)
+
+	first, err := Open(filepath.Join(dir, "first.meh"), cfg, DefaultMemHopDefaults,
+		&ProfileInput{Name: "first-primary", Role: "assistant"})
+	if err != nil {
+		t.Fatalf("Open the first library: %v", err)
+	}
+	t.Cleanup(func() { _ = first.Close() })
+	second, err := Open(filepath.Join(dir, "second.meh"), cfg, DefaultMemHopDefaults,
+		&ProfileInput{Name: "second-primary", Role: "assistant"})
+	if err != nil {
+		t.Fatalf("Open the second library: %v", err)
+	}
+	t.Cleanup(func() { _ = second.Close() })
+
+	firstPrimary, err := first.Primary()
+	if err != nil {
+		t.Fatalf("first Primary: %v", err)
+	}
+	secondPrimary, err := second.Primary()
+	if err != nil {
+		t.Fatalf("second Primary: %v", err)
+	}
+	if firstPrimary.AgentID() != secondPrimary.AgentID() {
+		t.Fatalf("the two primaries reported %q and %q, want the same id: both are the zero domain of their own file",
+			firstPrimary.AgentID(), secondPrimary.AgentID())
+	}
+
+	// The same string therefore has to be answered by each file for itself.
+	byID, err := second.Agent(cfg, secondPrimary.AgentID())
+	if err != nil {
+		t.Fatalf("second Agent by the primary id: %v", err)
+	}
+	slot, err := byID.GetL0()
+	if err != nil {
+		t.Fatalf("GetL0 through the id door: %v", err)
+	}
+	if slot.Name != "second-primary" {
+		t.Fatalf("the id reached %q in the second file, want its own primary", slot.Name)
+	}
+
+	// Inside one file, a sub-agent's id differs from the primary's, so a host's map of that
+	// file has no collisions to design around.
+	sub, err := first.SubAgent(cfg, ProfileInput{Name: "worker", Role: "helper"})
+	if err != nil {
+		t.Fatalf("first SubAgent: %v", err)
+	}
+	if sub.AgentID() == firstPrimary.AgentID() {
+		t.Fatalf("a sub-agent shares the primary's id %q, so the id would not name a domain", firstPrimary.AgentID())
+	}
+	if _, err := first.Agent(cfg, sub.AgentID()); err != nil {
+		t.Fatalf("Agent by the sub-agent id: %v", err)
+	}
+}
