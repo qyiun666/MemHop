@@ -62,9 +62,11 @@ func (e *engineBench) round(b testing.TB, newScene bool) {
 	}
 }
 
-// seedEngineBench opens a file and settles scenes*turns rounds into it. Turn text is short
-// and fixed-width on purpose: these numbers are about rounds and bytes, not about how much
-// prose a round happens to carry.
+// seedEngineBench opens a file and settles scenes*turns rounds into it: one scene per group
+// of `turns`, each opened by the round that asks for it (`NewScene` — an unnamed read
+// continues the session the domain is on, so asking for scenes is what makes them). Turn
+// text is short and fixed-width on purpose: these numbers are about rounds and bytes, not
+// about how much prose a round happens to carry.
 func seedEngineBench(b testing.TB, url string, scenes, turns int) *engineBench {
 	b.Helper()
 	return seedEngineBenchAt(b, filepath.Join(b.TempDir(), "engine.meh"), url, scenes, turns)
@@ -83,7 +85,7 @@ func seedEngineBenchAt(b testing.TB, path, url string, scenes, turns int) *engin
 		stamp: time.Now().Add(-time.Hour).UnixMilli()}
 	for s := 0; s < scenes; s++ {
 		for t := 0; t < turns; t++ {
-			e.round(b, s == 0 && t == 0)
+			e.round(b, t == 0)
 		}
 	}
 	return e
