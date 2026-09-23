@@ -84,6 +84,8 @@ README 的版本表与 git log。
 
 38. **合并要活过重开，这条此前没人测**（`test/api_interface_merge_reopen_test.go`）：合并是唯一会**改写记录归属**的纠错口（被并场景的每个话题把 `scene_id` 换成活下来的那个），而它原有的那条用例只看活着的答复——缓存改了、记录没改，它照样绿。新用例走完「甲两书 + 乙一书 → 合并 → 关掉重开」，重开后必须仍只看得到一个场景、三行、六句原文一字不差、每行关键词轨非空，且被并进来的那一轮按它自己的话题 id 还能读出两条归档。**负例**：让 `MergeScenesL2` 只搬缓存、把话题记录原样写回（`scene_id` 仍指着已删场景），新用例当场报 `the surviving scene lists 2 rows after reopen`，而既有那条 `TestInterfaceMergeScenes` 在同一变异下全绿——盲区被证实，不是预防性加测。零生产代码改动。
 
+39. **删场景之后，文件必须与『从没建过这一场景』的文件逐层等量**（`internal/delete_scene_orphans_test.go`）：级联漏删任何一层都不会被现有测试抓到，因为它们都只查活着的答复；被缓存不再显示、但日志仍留着的记录，会在下一次重开时（索引由记录重建）原样回来。新测试不枚举『 cascade 应该删什么』，而是拿两份文件做对照：X 建两场景（2 轮 + 1 轮）删掉前者，Y 只建那个活下来的场景，两边都关掉重开，四层计数必须逐项相同（场景、话题、归档、计划节点）——期望于是变成算术而不是信念。**L1 有意排除**：被删场景的共现超边按设计留给下一次 Dream 的衰减剪（`internal/agent.md` 已写明），而它不是任何宿主读得回来的记录。**负例**：让 `DeleteCascade` 跳过计划节点那一步，测试当场报 `deleted-file {… planNodes 3} vs never-had {… planNodes 1}`。零生产代码改动。
+
 ## v1.6.5 — 2026-09-22 — MCP 面整体退役：对外只剩 Go module
 
 1. **`cmd/memhop-mcp` 整包删除**（14 个文件 3109 行）：25 个工具、多租户 HTTP（SSE 与 streamable-http 双传输）、按 `/mcp/<tenant>` 建/取域的租户注册表、`--tenants` 白名单与锚定 db-dir 的读入口一起消失。仓库不再有 server 形态、不再有后台进程，对外只剩「以 Go module 使用 `api`」一种接入。
