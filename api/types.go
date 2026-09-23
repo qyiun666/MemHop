@@ -23,7 +23,11 @@ type (
 	LlmConfig = internal.LlmConfig
 	// MemHopDefaults holds the host-facing business knobs (consolidation
 	// thresholds, the idle-domain TTL and the content retention window);
-	// engine tuning constants are package-private.
+	// engine tuning constants are package-private. One vocabulary across all four:
+	// leave a knob at 0 and the library default answers, as it does for
+	// `LlmConfig`'s two budgets; a negative is the explicit "switch this off",
+	// except the content window, which has no off spelling because retention is
+	// what bounds the file.
 	MemHopDefaults = internal.MemHopDefaults
 )
 

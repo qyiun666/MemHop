@@ -109,7 +109,7 @@ func OpenDB(path string, llmCfg LlmConfig, defaults MemHopDefaults, primary *cor
 	if err != nil {
 		return nil, err
 	}
-	db := assemble(engine, &MemHopConfig{DBPath: path, LLM: llmCfg, Defaults: defaults})
+	db := assemble(engine, &MemHopConfig{DBPath: path, LLM: llmCfg, Defaults: defaults.Normalized()})
 	has, err := repo.HasProfileL0(engine, core.DefaultAgentID)
 	if err != nil {
 		return nil, abandon(db, err)

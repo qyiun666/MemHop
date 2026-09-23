@@ -78,7 +78,8 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    在 `llmops` 里按块走，块数随这一轮转录的长度增长，所以退出点是一块而不是一整轮，而一轮能在锁内
    串起任意多块——内容侧那两条上限量的是单条记录，不量一轮。
 4. **空闲回收**：无后台定时器；`contextFor` 顺带清扫超
-   `Defaults.AgentIdleTTLMs` 未访问的域（默认域与共享 L3 域豁免），回收前先对域锁
+   `Defaults.AgentIdleTTLMs` 未访问的域（宿主留 0 已在装配处折成默认值，这里见到 `<= 0`
+   就是宿主显式关掉的）（默认域与共享 L3 域豁免），回收前先对域锁
    `TryLock`：锁被占用（在飞操作）或 `ac.DreamInFlight` 非空则跳过，留待下轮。
    摘除与 `ac.Reclaimed` 打标在**同一个持锁区间内**完成：调用方可能已经取到上下文、
    却在取锁前被调度出去，超过 TTL 后回收就会插进这两步之间——没有这个标记，那次操作
@@ -253,7 +254,8 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    自己的原文回到 surface，与取代它的那份组摘要并排出现、组还少一个子
    （`TestCreateTurnTopicL2ReplayKeepsSunkPosition`）。
 4. **巩固按单场景规模触发**：`consolidateScene` 在 depth-1 话题数超
-   `Defaults.SceneDreamTopicThreshold` 时调度该场景 Dream；单个融合组是
+   `Defaults.SceneDreamTopicThreshold` 时调度该场景 Dream（同一份表在装配处归一过，故
+   「没填」= 默认 24，`t <= 0` 只剩「宿主显式写了负数」这一种来路）；单个融合组是
    "摘要内容 → 提炼关键词 → 建父话题 → 下沉子话题"的串写，任一步
    失败都回滚本组已写的记录（`dream.discardFusedGroup` 按父话题键整删它名下的
    内容与缓存——本组写过的东西全在父键底下，不必去数域里别的记录；一次下沉的

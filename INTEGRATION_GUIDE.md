@@ -92,13 +92,15 @@ the stage that reads it and is not configurable: the L1 decay lambdas and edge
 similarity floor sit beside the Dream stages, the prompt output budgets beside the
 LLM calls in `internal/cap/llmops`, the distillation sample limits in
 `internal/cap/profile`. Hosts should not need to tune them; if you think you do,
-open an issue.
+open an issue. One vocabulary across the four: **0 means "not filled"** and the library
+default answers; a negative is the explicit "switch this off" (the retention window has no
+off spelling, only a larger window).
 
 | Field | Default | Meaning |
 |---|---|---|
-| SceneDreamTopicThreshold | 24 | Once a scene's depth-1 topic count passes this, `Update` schedules that scene's Dream in the background. **0 disables the trigger** (relevant when building a partial literal). |
-| DreamCompressMinTopics | 20 | Topics per scene before Dream will compress. |
-| AgentIdleTTLMs | 3600000 | An agent domain whose context has been idle this long is freed from memory (it rebuilds from its records on next use). 0 disables the sweep. The default domain and the shared L3 pool are never reclaimed. One fact is not rebuildable: the turn that was open. A domain reclaimed mid-round refuses that round's remaining writes and its close until the host opens a new turn — nothing lands silently on the fresh turn — and what the round had already appended stays stored under a topic no read names, since it never settled. Keep this longer than your longest round, or set 0. |
+| SceneDreamTopicThreshold | 24 | Once a scene's depth-1 topic count passes this, `Update` schedules that scene's Dream in the background. A negative disables the trigger. |
+| DreamCompressMinTopics | 20 | Topics per scene before Dream will compress. It is also the number the model is told to converge toward, so a negative — no floor, merge as far as the model's own rules allow — is the aggressive spelling, not the conservative one. |
+| AgentIdleTTLMs | 3600000 | An agent domain whose context has been idle this long is freed from memory (it rebuilds from its records on next use). A negative disables the sweep. The default domain and the shared L3 pool are never reclaimed. One fact is not rebuildable: the turn that was open. A domain reclaimed mid-round refuses that round's remaining writes and its close until the host opens a new turn — nothing lands silently on the fresh turn — and what the round had already appended stays stored under a topic no read names, since it never settled. Keep this longer than your longest round, or set a negative. |
 | ContentRetentionMs | 604800000 (7 days) | How long a turn's records (L4 content and L5 plan nodes) outlive it before a Dream sweeps them. 0 or less means the library default. There is no "keep everything" spelling: raise the window rather than turning the sweep off. The window is wall-clock, not round-count: records stamped older than it (a backfill, a test seed) are swept by the first Dream that runs, before any read gets a chance at them. |
 
 ---
@@ -850,10 +852,12 @@ func main() {
    Each `Search` opens exactly one turn: a host that reads a scene twice and
    updates once simply skips a turn number — gaps cost nothing, and no read
    ever reissues an id already given out.
-9. **`SceneDreamTopicThreshold` defaults to 24**: a partial `MemHopDefaults`
-    literal leaves it 0, which **disables** automatic consolidation — assign
-    `api.DefaultMemHopDefaults` first, then override. Context size is held in
-    check only by Dream converging each scene towards `DreamCompressMinTopics`
-    (default 20) — a target a pass aims at, not a ceiling a scene is kept under
-    — so switching automatic consolidation off lets the injected context grow
-    without limit.
+9. **A knob left at 0 is a knob you did not fill**: `MemHopDefaults` is read that way
+    everywhere, exactly as `LlmConfig`'s two budgets already were, so a partial literal
+    cannot silently switch automatic consolidation off any more. Turning a knob off takes
+    the explicit negative spelling — and for `DreamCompressMinTopics` a negative is the
+    *lossy* direction, since that number is what the consolidation prompt asks the scene
+    to converge toward. Context size is held in check only by Dream converging each scene
+    towards `DreamCompressMinTopics` (default 20) — a target, not a ceiling a scene is kept
+    under — so disabling automatic consolidation lets the injected context grow without
+    limit.

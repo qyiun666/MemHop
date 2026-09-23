@@ -196,3 +196,17 @@ func TestOpenDBRefusesIncompleteArguments(t *testing.T) {
 		t.Fatalf("a refused open left %d files behind", len(entries))
 	}
 }
+
+// An all-zero defaults table is what a host writes when it copies the shortest example,
+// so the entry point answers it exactly as it answers DefaultMemHopDefaults: nothing is
+// silently switched off, and nothing asks the model to compress a scene toward zero.
+func TestOpenTakesUnfilledDefaultsAsTheLibraryDefaults(t *testing.T) {
+	db, err := OpenDB(filepath.Join(t.TempDir(), "zero.meh"), testLLMConfig(), MemHopDefaults{}, primaryProfile("primary"))
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if db.config.Defaults != DefaultMemHopDefaults {
+		t.Fatalf("the zero table reached the engine as %+v, want %+v", db.config.Defaults, DefaultMemHopDefaults)
+	}
+}

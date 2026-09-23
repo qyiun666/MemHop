@@ -40,6 +40,8 @@ type DB struct {
 // its primary; a new file always needs one, because "whose memory is this" has no other
 // answer. Name is required and trimmed. llm is validated before the path is touched,
 // and there is no fallback for a call it cannot make.
+// defaults may be the zero value: every knob left at 0 takes the library default, so
+// tuning one field does not require copying the whole table first.
 func Open(path string, llm LlmConfig, defaults MemHopDefaults, profile *ProfileInput) (*DB, error) {
 	var primary *internal.ProfileSlot
 	if profile != nil {

@@ -147,8 +147,9 @@ func byCreatedAt(a, b core.ArchiveSlot) int {
 // consolidateScene keeps one scene's read surface bounded: once its depth-1
 // topic count passes the threshold, a background Dream compresses it (the
 // scene is compressed by a later hit if this Dream is already in flight).
-// Best-effort and asynchronous — closing a turn never waits on the pipeline. A zero
-// threshold disables the trigger.
+// Best-effort and asynchronous — closing a turn never waits on the pipeline. The
+// trigger is off only when the threshold was filled in negative; an unfilled one takes
+// the library default at the open.
 func (db *DB) consolidateScene(ac *domain.Context, sceneID uint64) {
 	t := db.config.Defaults.SceneDreamTopicThreshold
 	if t <= 0 || len(scene.SurfaceTopics(ac, sceneID)) <= t {
