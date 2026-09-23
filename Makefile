@@ -1,4 +1,4 @@
-.PHONY: build test test-e2e test-integration test-unit test-affected bench lint fmt clean help doctor
+.PHONY: build test test-e2e test-integration test-unit test-affected bench lint check-guides fmt clean help doctor
 
 # --- Prerequisites -------------------------------------------------------
 # `make test-unit` is fully offline: the api/internal suites plus the mock-backed
@@ -47,6 +47,24 @@ bench:
 lint:
 	go vet ./...
 
+## compile the runnable skeleton both integration guides embed in §11 — a host that
+## copies the example should not meet a compile error. Fully offline: the extracted
+## programs build in a throwaway module whose MemHop requirement is replaced by this
+## checkout, and GOPROXY stays off so nothing reaches the network.
+check-guides:
+	@dir=$$(mktemp -d); trap 'rm -rf $$dir' EXIT; \
+	printf 'module memhop.guidecheck\n\ngo 1.27\n\nrequire github.com/qyiun666/MemHop v0.0.0\n\nreplace github.com/qyiun666/MemHop => %s\n' "$$(pwd)" > $$dir/go.mod; \
+	fail=0; i=0; \
+	for guide in INTEGRATION_GUIDE.md INTEGRATION_GUIDE.zh.md; do \
+	  i=$$((i+1)); mkdir -p $$dir/skel$$i; \
+	  awk '/^```go$$/{inb=1; buf=""; next} /^```$$/{if (inb && buf ~ /^package /) printf "%s", buf; inb=0; next} inb{buf = buf $$0 "\n"}' \
+	    $$guide > $$dir/skel$$i/main.go; \
+	  test -s $$dir/skel$$i/main.go || { echo "$$guide: no package-main skeleton"; fail=1; }; \
+	done; \
+	GOFLAGS=-mod=mod GOPROXY=off go build -C $$dir ./... || fail=1; \
+	test $$fail -eq 0 && echo "guide skeletons build (2 guides)"; \
+	exit $$fail
+
 fmt:
 	gofmt -w api internal test
 
@@ -72,6 +90,7 @@ help:
 	@echo "  test-integration  run integration tests (needs Ollama + LLM)"
 	@echo "  bench             run benchmarks (needs Ollama)"
 	@echo "  lint              go vet across all packages"
+	@echo "  check-guides      compile the runnable skeleton embedded in both integration guides"
 	@echo "  fmt               gofmt -w api internal test"
 	@echo "  clean             remove build artefacts"
 	@echo "  doctor            check development environment (Go version)"
