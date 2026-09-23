@@ -686,8 +686,9 @@ topic id (`SearchL4{TopicID}`, `RenameTopic`, `DeleteTopic`) reject it.
 | entry & handles | **`Open`** → `*DB`, then `DB.Primary()` / `DB.SubAgent(llm, profile)` → `*Session` | the only ways in; an agent domain is held as a handle, never named by an id |
 | config | **`LlmConfig`** / `MemHopDefaults` + `DefaultMemHopDefaults` | the endpoint and tuning arguments `Open` takes |
 | input shapes | **`ProfileInput`** / `SearchQuery` / `TurnEnd` / `ScenePatch` / `L3ImportItem` / `L3Relation` / `L3ImportMode` / `L3NodeQuery` / `L4Query` / `PlanStep` / `ArchiveInput` (the L4 write shape; a read returns `ArchiveSlot`) | inputs; `ProfileInput` is the only profile a host may write, and of its four fields only `Name` is required |
-| response DTOs | `ProfileSlot` / `SceneNodeView` / `SceneSlot` / `TopicSlot` / `SceneContext` / `SceneContextTopic` / `SceneMessage` / `SearchResult` / `HypergraphSlot` / `HypergraphNode` / `HypergraphEdge` / `L3Graph` / `L3Subgraph` / `L3ImportResult` / `PlanTree` / `PlanNodeView` / `DreamReport` / `DreamStage` | every id field is a 16-char hex string, and every one of them was issued by the library |
+| response DTOs | `ProfileSlot` / `SceneNodeView` / `SceneSlot` / `TopicSlot` / `SceneContext` / `SceneContextTopic` / `SceneMessage` / `SearchResult` / `DreamReport` + `DreamStage` / `HypergraphSlot` / `HypergraphNode` / `HypergraphEdge` / `L3Graph` / `L3Subgraph` / `L3ImportResult` / `PlanTree` / `PlanNodeView` / `DreamReport` / `DreamStage` | every id field is a 16-char hex string, and every one of them was issued by the library |
 | enums | `GraphEdgeKind` / `ContentType` / `ArchiveKind` / `PlanStatus` / `AgentTypePrimary` + `AgentTypeSub` | the vocabulary a call is written in |
+| file diagnostics | **`DBStats`** (`FileBytes` / `RecordCount`) | what `DB.Stats()` answers, and the pair a `CompactTo` decision is made from: the gap between the two is what compaction gives back |
 | errors | `Code` + the `Err*` constants, read with `CodeOf(err)` | the numeric code behind an error string |
 
 Enum constants are exported too: `L3ImportSkip` / `Merge` / `Overwrite`,

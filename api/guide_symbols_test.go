@@ -156,3 +156,81 @@ func unresolved(apiNames, methodNames []string, pkgs, methods map[string]bool) [
 	sort.Strings(bad)
 	return bad
 }
+
+// The same pairing in the other direction: a type the package publishes but neither guide
+// names is a capability a host cannot discover from its entry document — it will not guess
+// that `DB.Stats()` exists, and a surface that must be read out of `go doc` is not
+// "integrate and use". A type absent from both guides fails this; add a row to §9, do not
+// delete the type to make it pass.
+func TestEveryPublishedTypeIsDocumented(t *testing.T) {
+	types := publishedTypes(t)
+	for _, guide := range []string{"../INTEGRATION_GUIDE.md", "../INTEGRATION_GUIDE.zh.md"} {
+		raw, err := os.ReadFile(guide)
+		if err != nil {
+			t.Fatalf("read guide %s: %v", guide, err)
+		}
+		if missing := undocumentedTypes(string(raw), types); len(missing) > 0 {
+			t.Fatalf("%s never mentions %v — the published types a host cannot discover from it",
+				guide, missing)
+		}
+	}
+}
+
+// The detector, pointed at a text that leaves two published types out: a check that cannot
+// name the missing one is a list comparison, not a gate.
+func TestUndocumentedTypesNamesTheGap(t *testing.T) {
+	text := "mentions ProfileSlot and TopicSlot and nothing else"
+	missing := undocumentedTypes(text, map[string]bool{
+		"ProfileSlot": true, "TopicSlot": true, "ArchiveSlot": true, "L3ImportItem": true,
+	})
+	if len(missing) != 2 || missing[0] != "ArchiveSlot" || missing[1] != "L3ImportItem" {
+		t.Fatalf("missing %v, want [ArchiveSlot L3ImportItem]", missing)
+	}
+}
+
+func undocumentedTypes(text string, types map[string]bool) []string {
+	var missing []string
+	for name := range types {
+		if !strings.Contains(text, name) {
+			missing = append(missing, name)
+		}
+	}
+	sort.Strings(missing)
+	return missing
+}
+
+// publishedTypes parses this package's files for exported type declarations.
+func publishedTypes(tb testing.TB) map[string]bool {
+	tb.Helper()
+	out := map[string]bool{}
+	fset := token.NewFileSet()
+	files, err := os.ReadDir(".")
+	if err != nil {
+		tb.Fatalf("read package dir: %v", err)
+	}
+	for _, f := range files {
+		name := f.Name()
+		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(fset, name, nil, parser.SkipObjectResolution)
+		if err != nil {
+			tb.Fatalf("parse %s: %v", name, err)
+		}
+		for _, decl := range file.Decls {
+			gd, ok := decl.(*ast.GenDecl)
+			if !ok {
+				continue
+			}
+			for _, spec := range gd.Specs {
+				if ts, ok := spec.(*ast.TypeSpec); ok && ts.Name.IsExported() {
+					out[ts.Name.Name] = true
+				}
+			}
+		}
+	}
+	if len(out) < 20 {
+		tb.Fatalf("only %d exported types parsed — the walk stopped working", len(out))
+	}
+	return out
+}

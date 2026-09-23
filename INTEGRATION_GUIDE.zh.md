@@ -493,8 +493,9 @@ _, err := db.AppendArchive(api.ArchiveInput{
 | 入口与句柄 | **`Open`** → `*DB`，再由 `DB.Primary()` / `DB.SubAgent(llm, profile)` → `*Session` | 只有这两条进来路；agent 域是握在手里的句柄，从不以 id 命名 |
 | 配置 | **`LlmConfig`** / `MemHopDefaults` + `DefaultMemHopDefaults` | `Open` 要的端点与调参入参 |
 | 入参形状 | **`ProfileInput`** / `SearchQuery` / `TurnEnd` / `ScenePatch` / `L3ImportItem` / `L3Relation` / `L3ImportMode` / `L3NodeQuery` / `L4Query` / `PlanStep` / `ArchiveInput`（L4 的写形状；读回是 `ArchiveSlot`） | 宿主唯一能写的画像形状就是 `ProfileInput`，它四项里只有 `Name` 必填 |
-| 响应 DTO | `ProfileSlot` / `SceneNodeView` / `SceneSlot` / `TopicSlot` / `SceneContext` / `SceneContextTopic` / `SceneMessage` / `SearchResult` / `HypergraphSlot` / `HypergraphNode` / `HypergraphEdge` / `L3Graph` / `L3Subgraph` / `L3ImportResult` / `PlanTree` / `PlanNodeView` / `DreamReport` / `DreamStage` | 每个 id 字段都是 16 位 hex 字符串，且每一个都由库发号 |
+| 响应 DTO | `ProfileSlot` / `SceneNodeView` / `SceneSlot` / `TopicSlot` / `SceneContext` / `SceneContextTopic` / `SceneMessage` / `SearchResult` / `DreamReport` + `DreamStage` / `HypergraphSlot` / `HypergraphNode` / `HypergraphEdge` / `L3Graph` / `L3Subgraph` / `L3ImportResult` / `PlanTree` / `PlanNodeView` / `DreamReport` / `DreamStage` | 每个 id 字段都是 16 位 hex 字符串，且每一个都由库发号 |
 | 枚举 | `GraphEdgeKind` / `ContentType` / `ArchiveKind` / `PlanStatus` / `AgentTypePrimary` + `AgentTypeSub` | 一次调用写在里面的词汇 |
+| 文件诊断 | **`DBStats`**（`FileBytes` / `RecordCount`） | `DB.Stats()` 的答复，也是决定要不要 `CompactTo` 的那一对数：两者的差就是压缩能还回来的字节 |
 | 错误 | `Code` + 各 `Err*` 常量，用 `CodeOf(err)` 取回数字码 | 错误串背后的那一层分类 |
 
 枚举常量同样导出：`L3ImportSkip` / `Merge` / `Overwrite`、`EdgeRelated`…`EdgeCustom`、
