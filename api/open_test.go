@@ -140,3 +140,59 @@ func TestOpenRefusesAFileThisProcessAlreadyHolds(t *testing.T) {
 		t.Fatalf("close the worker file: %v", err)
 	}
 }
+
+// The L3 pool is per file, not per domain, and that is the boundary a host decides on when
+// it spawns a worker: a second *domain* of the same file inherits the project knowledge with
+// no re-import, while a second *file* starts with an empty pool of its own. So "one library
+// per agent" carries the graph along only in the sub-agent shape — a worker on its own path
+// brings nothing over, and that is the library's rule rather than a bug it can be talked out
+// of (`TestKnowledgeGraphStaysInsideItsFile` exists so the two shapes cannot drift).
+func TestKnowledgeGraphStaysInsideItsFile(t *testing.T) {
+	dir := t.TempDir()
+	llm := LlmConfig{APIURL: "http://127.0.0.1:1", APIKey: "k", Model: "m"}
+	profile := &ProfileInput{Name: "Meow", Role: "assistant"}
+
+	db, err := Open(filepath.Join(dir, "parent.meh"), llm, DefaultMemHopDefaults, profile)
+	if err != nil {
+		t.Fatalf("Open the parent file: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	parent, err := db.Primary()
+	if err != nil {
+		t.Fatalf("Primary: %v", err)
+	}
+	if _, err := parent.ImportL3([]L3ImportItem{
+		{Title: "auth", Domain: "proj", NodeType: "package", Content: "who logs in"},
+	}, L3ImportOverwrite); err != nil {
+		t.Fatalf("ImportL3: %v", err)
+	}
+
+	helper, err := db.SubAgent(llm, ProfileInput{Name: "worker", Role: "helper"})
+	if err != nil {
+		t.Fatalf("SubAgent: %v", err)
+	}
+	if got, err := helper.ListL3(); err != nil || len(got) != 1 {
+		t.Fatalf("a second domain of the same file sees %+v (err %v), want the one graph the file holds", got, err)
+	}
+
+	workerDB, err := Open(filepath.Join(dir, "worker.meh"), llm, DefaultMemHopDefaults, profile)
+	if err != nil {
+		t.Fatalf("Open the worker file: %v", err)
+	}
+	t.Cleanup(func() { _ = workerDB.Close() })
+	worker, err := workerDB.Primary()
+	if err != nil {
+		t.Fatalf("worker Primary: %v", err)
+	}
+	if got, err := worker.ListL3(); err != nil || len(got) != 0 {
+		t.Fatalf("a second file inherited the first one's knowledge graph: %+v (err %v)", got, err)
+	}
+	if res, err := worker.ImportL3([]L3ImportItem{
+		{Title: "auth", Domain: "proj", NodeType: "package", Content: "its own take"},
+	}, L3ImportOverwrite); err != nil || len(res.GraphIDs) != 1 {
+		t.Fatalf("the worker file cannot build its own graph: %+v (%v)", res, err)
+	}
+	if got, err := parent.ListL3(); err != nil || len(got) != 1 || got[0].Name != "proj" {
+		t.Fatalf("the worker's import disturbed the parent file: %+v (err %v)", got, err)
+	}
+}

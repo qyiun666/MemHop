@@ -331,6 +331,10 @@ that path came out of a model (§5). Two stacks can also be handed the same path
 that is the one collision the library refuses on the host's behalf: `Open` of a file already held —
 by this very process included — answers `ErrIO`, the holder is untouched, and the move is to pick
 another path rather than read the file as damaged (`TestOpenRefusesAFileThisProcessAlreadyHolds`).
+The same choice decides what a worker knows about the project: L3 is a pool **per file**, so a worker
+opened on its own path starts from an empty graph, while one created as a sub-agent domain of the parent's
+file inherits that graph with nothing to re-import (`TestKnowledgeGraphStaysInsideItsFile`). Which of the
+two a worker is is the host's call — the engine will not guess it.
 
 A decision-loop kernel's memory port has this shape: a recall before the model is consulted,
 and a remember once at the round's terminal point on every exit arm. The two are not
