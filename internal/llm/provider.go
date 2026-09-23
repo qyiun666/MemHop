@@ -34,16 +34,25 @@ type Provider struct {
 	maxOutputTokens int
 }
 
-// New 从一份 LLM 配置创建 Provider。
-func New(llm config.LlmConfig) *Provider {
-	timeoutSecs := llm.TimeoutSecs
+// budgets reads the two budgets the same way every other tuning argument here is read: an
+// unfilled value (0 or below) takes the library default. Neither may fall through as a zero,
+// because each one fails silently in the other direction: a zero output ceiling truncates
+// every answer to nothing, and a zero HTTP timeout means no timeout at all - which would
+// hold a domain's lock open on a hung endpoint indefinitely.
+func budgets(llm config.LlmConfig) (timeoutSecs, maxOutputTokens int) {
+	timeoutSecs, maxOutputTokens = llm.TimeoutSecs, llm.MaxOutputTokens
 	if timeoutSecs <= 0 {
 		timeoutSecs = defaultTimeoutSecs
 	}
-	maxTokens := llm.MaxOutputTokens
-	if maxTokens <= 0 {
-		maxTokens = defaultMaxOutputTokens
+	if maxOutputTokens <= 0 {
+		maxOutputTokens = defaultMaxOutputTokens
 	}
+	return timeoutSecs, maxOutputTokens
+}
+
+// New 从一份 LLM 配置创建 Provider。
+func New(llm config.LlmConfig) *Provider {
+	timeoutSecs, maxTokens := budgets(llm)
 	oc := openai.DefaultConfig(llm.APIKey)
 	oc.BaseURL = normalizeBaseURL(llm.APIURL)
 	oc.HTTPClient = &http.Client{Timeout: time.Duration(timeoutSecs) * time.Second}

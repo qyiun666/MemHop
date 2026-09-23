@@ -100,6 +100,8 @@ README 的版本表与 git log。
 
 46. **指南里每个被反引号包住的标识符都要有出处**（`api/guide_symbols_test.go` 新增第三条检查）：符号门禁只管 `api.X` 与 `handle.Method()`，而正文与速查表里更多是**裸名字**——字段、常量、枚举模式。这些位置正是改名后会悄悄留下假话的地方。现在扫描 `api` 与 `internal` 全部源码，把包级名、方法名、结构体字段与（供文档引用的）测试函数名合成一套合法出处，指南里每个反引号内的大写标识符必须在其中；唯一白名单是文档刻意说「不存在」的那两个名字（`FormatID`/`ParseID`）。**它当场抓到两处会坑宿主的写法**：枚举清单写成 `L3ImportSkip` / `Merge` / `Overwrite`——实际名是 `L3ImportMerge`/`L3ImportOverwrite`，宿主照抄 `api.Merge` 直接编不过（中英各一处，另一处是 `ImportL3` 的 `Merge` 模式）；还有一处把状态词写成 `Done` 反引号（并非任何常量，已改为「状态为 done」）。**负例**：把清单里一个名字改成 `L3ImportMerged`，门禁当场点名。零生产代码改动，两条指南骨架照常编译与运行。
 
+47. **两个 LLM 预算的「留空即默认」从一句话变成断言**（`internal/llm/provider.go` 抽出 `budgets` + `internal/llm/provider_test.go`）：`TimeoutSecs` 未填取 120 秒、`MaxOutputTokens` 未填取 8192——门面别名的注释早就这么写，此前却没有任何测试钉着。两个方向的失败都静默：0 输出上限会把每次回复截成空，而 0 HTTP 超时不是「立刻失败」是「永远等」，一次挂死的端点就能把一个域的锁一直占着。抽成纯函数只为可测，行为与门面面积一字未动（go-openai 这个版本没有读回 HTTP 客户端的访问器，故断言落在 `budgets` 与 `Provider.MaxOutputTokens()` 上）。同时补指南 §4 那两行：英文写的是「—」、中文写的是「否」，都没说留空会怎样——现在写明 120/8192 与「留空才是常态」；`internal/llm/agent.md` 补上这条参数语义。
+
 ## v1.6.5 — 2026-09-22 — MCP 面整体退役：对外只剩 Go module
 
 1. **`cmd/memhop-mcp` 整包删除**（14 个文件 3109 行）：25 个工具、多租户 HTTP（SSE 与 streamable-http 双传输）、按 `/mcp/<tenant>` 建/取域的租户注册表、`--tenants` 白名单与锚定 db-dir 的读入口一起消失。仓库不再有 server 形态、不再有后台进程，对外只剩「以 Go module 使用 `api`」一种接入。

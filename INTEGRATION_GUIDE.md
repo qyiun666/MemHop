@@ -82,8 +82,8 @@ endpoint is checked before the path is touched).
 | APIURL | ✅ | OpenAI-compatible endpoint URL. |
 | APIKey | ✅ | API key (inject from env vars, never hardcode). |
 | Model | ✅ | Model name. |
-| TimeoutSecs | — | LLM call timeout. |
-| MaxOutputTokens | — | Max output tokens. |
+| TimeoutSecs | 0 = not filled | Whole HTTP call budget in seconds; unfilled answers 120. A zero is never "no timeout" - that would hold a domain lock open on a dead endpoint. |
+| MaxOutputTokens | 0 = not filled | Cap on one reply; unfilled answers 8192. The prompt budgets are computed against this ceiling, so leaving it unset is the normal case. |
 
 ### `MemHopDefaults` — common overrides
 

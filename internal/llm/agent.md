@@ -14,6 +14,10 @@
   常量，接口从 4 个参数变成 6 个而没有任何一处真的在选。
 - `New` 只吃一份 `LlmConfig`，不吃整份库配置：它读的本来就只有那五个字段，收窄之后
   「给一个端点另配一份」不必伪造一份带 DBPath 与 Defaults 的配置。
+- 两个预算按「没填＝库默认」读：`TimeoutSecs` 未填取 120 秒、`MaxOutputTokens` 未填取
+  8192（`budgets`；`TestBudgetsTakeUnfilledValuesAsDefaults`）。两处都不许让 0 原样落下：
+  0 输出上限等于把每次回复截成空，而 0 HTTP 超时的语义不是「立刻」是「永远等」，
+  一次挂死的端点就会把一个域的锁一直占着。
 - 一次调用的结论分三档：端点拒绝或回复不成形 → `ErrLLM`；回复被输出上限截断 →
   `ErrLLM` 且 cause 为 `ErrTruncated`（升级预算的重试靠这个判定）；调用方的上下文
   已尽 → `ErrCancelled`，cause 留着 `ctx.Err()`。第三种不是端点的失败：一次被撤掉的

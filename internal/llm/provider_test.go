@@ -133,3 +133,32 @@ func TestUpstreamErrorBodyIsEchoedBounded(t *testing.T) {
 		t.Fatalf("a body within the budget must come back verbatim, got %v", err)
 	}
 }
+
+// The two budgets follow the vocabulary the tuning knobs use: an unfilled value takes the
+// library default. Both directions of failure are silent, which is why this is asserted -
+// a zero output ceiling would truncate every answer to nothing, and a zero HTTP timeout is
+// not "instant" but "forever", holding a domain's lock open on an endpoint that never
+// answers. A host that fills in only the endpoint therefore gets a working client.
+func TestBudgetsTakeUnfilledValuesAsDefaults(t *testing.T) {
+	for _, tc := range []struct {
+		name                       string
+		in                         config.LlmConfig
+		wantTimeout, wantMaxTokens int
+	}{
+		{"nothing filled", config.LlmConfig{APIURL: "http://x", APIKey: "k", Model: "m"}, defaultTimeoutSecs, defaultMaxOutputTokens},
+		{"negative values", config.LlmConfig{TimeoutSecs: -1, MaxOutputTokens: -1}, defaultTimeoutSecs, defaultMaxOutputTokens},
+		{"one filled, one not", config.LlmConfig{TimeoutSecs: 7}, 7, defaultMaxOutputTokens},
+		{"both filled", config.LlmConfig{TimeoutSecs: 30, MaxOutputTokens: 1024}, 30, 1024},
+	} {
+		timeout, maxTokens := budgets(tc.in)
+		if timeout != tc.wantTimeout || maxTokens != tc.wantMaxTokens {
+			t.Errorf("%s: budgets(%+v) = (%d, %d), want (%d, %d)",
+				tc.name, tc.in, timeout, maxTokens, tc.wantTimeout, tc.wantMaxTokens)
+		}
+	}
+	// The construction path must actually carry them: what the prompt budget arithmetic
+	// reads back is the provider's own ceiling, not the caller's zero.
+	if got := New(config.LlmConfig{APIURL: "http://x", APIKey: "k", Model: "m"}).MaxOutputTokens(); got != defaultMaxOutputTokens {
+		t.Errorf("an unset MaxOutputTokens reached the provider as %d, want %d", got, defaultMaxOutputTokens)
+	}
+}
