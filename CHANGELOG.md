@@ -3,6 +3,17 @@
 MemHop 遵循语义化版本。本文件记录每个版本的核心改动；完整历史见
 README 的版本表与 git log。
 
+## v1.6.6 — 2026-09-23 — 一轮只剩一次收束：场景与轮次由域自持，轮中写入不再收宿主填的归属字段
+
+1. **`Settle` 退役，一轮的终点只剩一次 `Update(TurnEnd{Input, Output, Outcome, CreatedAt})`**：Input 与 Output 落在该轮话题预留的 Seq 1 / Seq 2（对话主干的两个槽位，所以重关一轮是原地覆写而不是累积），Outcome 作为一条 `turn_outcome` 事件按调用次数追加——一次挂起加一次恢复本就是两条事实（`TestTwoClosesOfOneTurnKeepBothEndingsAndTheLastDialogue`、`TestUpdateWritesTheTurnEndItIsGiven`）。轮末照旧蒸一次关键词轨，并把 `fused_keywords` 随话题交回。
+2. **场景与轮次这两个 id 改由域上下文自持、不再回传宿主**：`Search(SearchQuery{})` 续用该域当前的场景，并为「即将进行的这一轮」铸出 topic id（`NewScene:true` 才另开一条会话；跨进程重启从记录里恢复，靠的是场景上原有的 `turn_seq` 计数器——这是读路径唯一的写入，也是 load-bearing 字段）。`SceneContext("")` 是同一条会话的**纯读**：不吃轮次、不点名，也不替从没读过的域新建场景（`ErrNotFound`）。一轮里「问模型之前」的读可以发生很多次，只有开轮那一次前进计数——否则带工具调用的决策循环会让计数替根本没发生过的轮白跳，而那把计数正是轮次 id 的派生依据（`TestSearchContinuesItsSceneUnlessAskedForANewOne`、`TestSearchOpensOneTurnPerRead`、`TestSceneContextOpensNoTurn`、`TestSceneContextWithoutAnIdReadsTheDomainsScene`、`TestSearchContinuesTheDomainScene`）。
+3. **锚点只能由会新建场景的那一读采纳**：续用一条会话时递来 `L3ID` 一律拒——不静默丢弃，也不拿它当作「另起一条会话」的暗示（`TestSearchRefusesAnAnchorWhileContinuingItsScene`）。
+4. **写形状与读形状分开**：轮中逐条写入的入参换成 `ArchiveInput`，八个字段全是宿主的决定；读回形状 `ArchiveSlot` 上那两个归属字段（`id`/`topic_id`）在写侧**没有位置**——是「没有位置可传」而不是「传了不采信」（与 `ProfileInput` 同一条标准），于是「写到宿主没在做的轮上」这条路被形状关死。返回该条占用的槽位 Seq；没有开着轮时写入即拒（`TestArchiveInputCarriesNoAddress`、`TestAppendArchiveCannotAddressATurnTheLibraryDidNotOpen`、`TestTurnWritesRefuseWhenNoTurnIsOpen`）。
+5. **自持字段与删除/合并同步**：`DeleteScene` 与 `DeleteTopic` 摘掉指向被删记录的那一半，`MergeScenes` 把被吞场景的轮次清空（轮次 id 由场景派生，跨合并活不下来），所以一个已毁的轮不可能被下一次 `Update` 继续写。一轮的键若真撞上保留的全零值，`Search` 直接报损坏而不是收下：那个值同时是「没有开着轮」的哨兵，静默收下等于让宿主写到别人的轮上。
+6. **宿主的 hex id 只在一处跨界**：渲染走 `internal.FormatID`，解析走 `internal.parseID`（它命名自己读的是哪个字段），根的大方法把 hex 换成 uint64 之后才往下传，第 3 层以下不再收 id 字符串。公开面维持 `Session` 25 + `DB` 7；`TestTurnWritesCarryNoId` 与 `TestPublicSignaturesCarryNoNumericIds` 钉住「形状里没有宿主该持有的键」。
+7. **时间单位在写边界判**：`AppendArchive` 与 `TurnEnd` 的毫秒保留窗拒掉秒级（1e9–1e11）与微秒级（>1e14）两段值（`TestAppendArchiveRefusesATimestampInTheWrongUnit`）——保留窗按毫秒算 cutoff，一个秒级值写进去既会被下一次 Dream 当成过期扫掉，又永远命不中时间过滤。这条是跨仓端到端集成实测撞出来的：三仓同为毫秒之后，宿主侧不再有任何一次单位换算。
+8. **磁盘格式 `0x0012` 不变**：自持的两个字段不落新记录也不加新键，轮次计数器就是场景记录上原本就有的 `turn_seq`，旧文件照常打开。测试脚手架顺带收形：7 个 mock LLM server 的同一套骨架收成三处；本轮语义由离线接口面 `TestInterface*` 逐条钉住（不花额度），另有 `TestSecondLibraryOpenedMidRound` 与 `TestEachDomainHoldsItsOwnTurn` 钉住「中途再开一个库也不串、各域各持自己那一轮」。
+
 ## v1.6.5 — 2026-09-22 — MCP 面整体退役：对外只剩 Go module
 
 1. **`cmd/memhop-mcp` 整包删除**（14 个文件 3109 行）：25 个工具、多租户 HTTP（SSE 与 streamable-http 双传输）、按 `/mcp/<tenant>` 建/取域的租户注册表、`--tenants` 白名单与锚定 db-dir 的读入口一起消失。仓库不再有 server 形态、不再有后台进程，对外只剩「以 Go module 使用 `api`」一种接入。
