@@ -51,6 +51,8 @@ README 的版本表与 git log。
 26. **把「宿主可见的列表恒为 `[]`」从承诺变成门禁**（`api/surface_shape_nil_test.go`）：AGENTS 那条「列表恒为 `[]`、map 恒为 `{}`」此前没有任何测试覆盖——它靠门面那一个 `mapSlice`（`make([]U, len(in))`）与 `cloneStrings` 成立，改坏它没有任何检查会红。新测试反射走完 **每条读的返回形状，两遍**：一本全新的库（什么都没写过，空集合最容易露出 `nil` 的地方）与一轮已收束＋一步计划＋一张图之后的同一批读。
     **负例**：把 `mapSlice` 在空输入时的构造换成 `var out []U`＋`append`，该测试当场点名七条越山的 `nil`（`ListL1`、`ListScenes`、`ListL3`、`SearchL4`、`Search.Topics`、`PlanState.Roots` 以及已填充那一遍的 `ListL1`）。零生产代码改动。
 
+27. **列表读口的顺序从此是答案的一部分**（`internal/repo/core/engine.go` 一处 + `api/surface_order_test.go`）：引擎把索引快照交给遍历前不排序，而快照来自 map 键——同一份文件、同一个库，`ListScenes` 每次调用交回的顺序都不一样（实测：同一只猫六个场景，第二次调用就把首个场景挪到了末尾）。修在唯一的那一处：`iterSnapshot` 交出 id 升序，于是一切走枚举的读（`ListScenes`/`ListL3`/`QueryL3Nodes`/`GetL3` 的节点与边/无话题过滤的 `SearchL4`）一起定下来；要别的顺序的调用方照旧自己排（`GroupPlanNodes` 按话题、场景读按时间）。新测试把 12 条纯读各取 8 次、要求编码逐字节相同，**负例**＝撤掉那一句排序，它当场报 `ListScenes answered differently on repeat 1`。id 升序不是宿主眼中的相关性顺序，它是「每次一样」这件事本身；开销在实测里看不见（同一台机器：一轮 ≈20.1ms / 1352 B、纯场景读 ≈0.29ms、重开 ≈0.54ms，与改动前同量级）。公开面形状、磁盘格式一字未动。
+
 ## v1.6.5 — 2026-09-22 — MCP 面整体退役：对外只剩 Go module
 
 1. **`cmd/memhop-mcp` 整包删除**（14 个文件 3109 行）：25 个工具、多租户 HTTP（SSE 与 streamable-http 双传输）、按 `/mcp/<tenant>` 建/取域的租户注册表、`--tenants` 白名单与锚定 db-dir 的读入口一起消失。仓库不再有 server 形态、不再有后台进程，对外只剩「以 Go module 使用 `api`」一种接入。

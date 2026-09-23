@@ -100,6 +100,11 @@ func (e *StorageEngine) iterSnapshot(snapshot func() []uint64) iter.Seq[uint64] 
 		}
 		ids := snapshot()
 		e.mu.RUnlock()
+		// The snapshot comes off map keys, so without this the same file answers the same
+		// listing in a different order each time. Id order is no host's notion of
+		// relevance; it is at least the same order every call, which is what a listing
+		// that a host indexes by position or diffs between two reads needs.
+		slices.Sort(ids)
 		for _, id := range ids {
 			if !yield(id) {
 				return

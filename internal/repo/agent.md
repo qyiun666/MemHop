@@ -27,6 +27,9 @@
   `RecL5PlanNode 0x0F`；id 命名空间不烘层号（场景节点 `scene-node:`、内容槽
   `content:`、计划节点 `plan:`），归档的归属字段叫 `topic_id`，场景记录只剩
   `turn_seq` 一个计数器。
+  引擎对外的两条遍历（`IndexByType`、`IterAgents`）**交回 id 升序**：快照取自 map 键，不排就没有
+  「同一份文件两次给同样答案」，而按位置索引列表、或比对两次读的调用方正需要这条。要别的顺序的
+  调用方自己排（`GroupPlanNodes` 按话题、场景读按时间）。
   **`SnapshotVersion` 与 `FormatVersion` 不是一回事**：快照版本不符只让 Open 丢掉
   那份快照、回退一次全量记录扫描重建索引并打一条 WARN，文件照开、记录一条不少，
   下一次 checkpoint 就写成当前布局。所以改快照布局的代价是「旧文件首次 Open 慢
