@@ -60,6 +60,11 @@ README 的版本表与 git log。
 
 29. **新增门禁 `api/guide_symbols_test.go`**：两份指南里出现的每个 `api.X` 与每个 `handle.Method()` 都必须存在于已发布的面上。§11 骨架此前只证明它**自己那段**编得过，正文与各层速查表里的符号名没有任何检查对着——而宿主抄的正是这些行。符号集由 `go/parser` 现读 `api` 包自己的源码（非测试文件，包级名与方法各一组），不是手抄清单，所以门禁不可能与被检面各自漂移；实测两份指南当前各有 30~31 个包级符号、22 处方法调用，全部命中。**负例内置成第二条测试**：一段含 `api.SessionContextTopic2`、`db.PlanCreate()`、`db.ListCapabilities()`、`sess.BogusMethod()` 的文本被逐条点名，而同一段里的 `api.LlmConfig`、`db.Search` 放行——退役名与虚构名走同一条判据。零生产代码改动。
 
+30. **§12 两条陷阱说过头，按实测改准并补两条测试**：
+    第 5 条写的是「开了没沉淀的轮次不留残渣」——不成立：那一轮已经 `AppendArchive` 的记录仍在，只是没有话题行，于是场景读看不见它，而它挂的那个 id 域往前走之后不再由任何读点名，要等保留窗扫掉。现在这句改成「看不见 ≠ 不存在：放弃一本记了东西的轮花的是空间，不是零」，并由 `TestAbandonedRoundKeepsItsRecords` 钉住两面（场景读只列出已收的那本；整域 `SearchL4` 仍交出那四条记录，含被放弃那一条）。
+    第 3 条把话题上的两个时间界写成「其内容的最早与最晚」——也不准：`settleLocked` 取的是**原文**的跨度，轮中事件各按自己的时刻存在，不撑宽那两个界（`TestTurnTopicBoundsIgnoreMidRoundEvents`；负例＝把事件并进取界的那次读取，当场报 `1000/9000, want 1000/1000`）。
+    两处都是宿主据以排 prompt 与保留窗的判断句。零生产代码改动。
+
 ## v1.6.5 — 2026-09-22 — MCP 面整体退役：对外只剩 Go module
 
 1. **`cmd/memhop-mcp` 整包删除**（14 个文件 3109 行）：25 个工具、多租户 HTTP（SSE 与 streamable-http 双传输）、按 `/mcp/<tenant>` 建/取域的租户注册表、`--tenants` 白名单与锚定 db-dir 的读入口一起消失。仓库不再有 server 形态、不再有后台进程，对外只剩「以 Go module 使用 `api`」一种接入。

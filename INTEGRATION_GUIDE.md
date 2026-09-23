@@ -834,12 +834,17 @@ func main() {
    owning topic under a `context_id` key, ids derived from `l1:` / `l4:`
    namespaces — and none of it can be addressed under the current rules.
 3. **Timestamps in Unix ms**, `<= 0` → `ErrInvalidQuery` on every record you append;
-   a turn's topic is stamped with the earliest and latest of its content.
+   a turn's topic is stamped with the earliest and latest timestamps among its **utterances** — an event recorded mid-round does not widen those bounds.
 4. **IDs are opaque 16-hex strings**: never splice/truncate them; response ids
    feed back as-is; the facade exposes no hex ⇄ integer bridge.
 5. **`Search` writes no memory content**: it opens one turn (advancing the
-   scene's turn counter) and creates no topic record, so an abandoned
-   turn leaves nothing behind. To read originals use `SceneContext` /
+   scene's turn counter) and creates no topic record, so a round that never
+   settles stays out of the scene read. That is not the same as leaving nothing
+   behind: whatever the round already appended survives under that turn's id —
+   which no read names once the domain moves on — until the retention window
+   sweeps it. Closing with `Update` is what makes a round's content reachable, so
+   abandoning a round that recorded something costs space, not nothing.
+   To read originals use `SceneContext` /
    `SearchL4`.
    Replaying an append to the same slot is idempotent: the record
    hashes from the open turn and its `Seq`, so a retry rewrites it instead of duplicating — and a

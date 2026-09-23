@@ -248,7 +248,8 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    只被它的**话题**寻址，而话题里推不出场景，那是键本身的语义，不是归属闸的活。
    重放当前轮与"先开两轮再乱序结算"
    仍然合法（`TestUpdateSettlesEachScenesTurnsInOrder`）；重放重写的是引擎那半
-   （关键词轨、两个时间界、场景归属），而宿主给的 `name` 与 Dream 已经给过的位置
+   （关键词轨、两个时间界、场景归属——那两个界取的是该轮**原文**的 min/max，轮中事件各按自己的时刻存在、
+   不撑宽它们（`TestTurnTopicBoundsIgnoreMidRoundEvents`）），而宿主给的 `name` 与 Dream 已经给过的位置
    （`depth`、`parent_id`）都从存量记录里带过来——否则把一轮重述一次就把它悄悄改了
    名（`TestCreateTurnTopicL2ReplayKeepsHostName`），或让一个已沉入融合组的轮次带着
    自己的原文回到 surface，与取代它的那份组摘要并排出现、组还少一个子
@@ -411,6 +412,9 @@ internal/{domain,scene,turn,dream,graph,plan,content}
     不建行，所以召回读到的永远是已收束的轮——一轮里召回几次都不会把自己写了一半的这一轮喂回模型
     （`TestOpenTurnIsAbsentUntilItSettles`）。轮中写的东西并不是看不见：按那个 id 走 `SearchL4`
     当场就读得到，收束之后成为这一轮自己的那几条消息。
+    被下一次开轮**弃掉**的那一本同样不是空手：它 append 过的记录留在日志里，只是没有话题行，而那个 id 再没有
+    读会点名，要等保留窗扫掉。所以「开了没沉淀的轮不留残渣」这句是错的——放弃一本记了东西的轮花的是空间，
+    不是零（`TestAbandonedRoundKeepsItsRecords`）。
 
 ## 修改者义务
 
