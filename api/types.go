@@ -325,8 +325,8 @@ type L3Subgraph struct {
 // or an operation event (KindEvent), as read back. TopicID is the topic that owns a
 // stored record and Seq the slot it owns there, so (TopicID, Seq) is the address a read
 // names. Role is what a host declared when it appended — RoleUser / RoleAgent /
-// RoleSystem, and an event leaves it 0. A read can hand back one more value: 3, the
-// library's own mark on a fused group's summary, which has no exported name on purpose.
+// RoleSystem, and an event leaves it 0. A read can hand back one more value: RoleDream,
+// the library's own mark on a fused group's summary — which no write may carry.
 // ContentType says whether Content is prose or a reference to media; EventType names an
 // event and is the host's own word for it. CreatedAt is milliseconds since the epoch.
 type ArchiveSlot struct {

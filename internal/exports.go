@@ -90,6 +90,9 @@ const (
 	RoleUser   = core.RoleUser
 	RoleAgent  = core.RoleAgent
 	RoleSystem = core.RoleSystem
+	// RoleDream 是库给巩固组摘要自己戳的记号：只出得去（SceneContext 与 SearchL4 会带回来），
+	// 进不来——content.ValidateAppend 拒任何带它的写入。
+	RoleDream = core.RoleDream
 )
 
 // ---- agent domain identity ----

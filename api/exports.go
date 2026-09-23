@@ -40,13 +40,18 @@ const (
 
 // ---- L4 message role constants ----
 
-// These are the roles a host may declare for an utterance it appends. RoleDream is
-// deliberately absent: Dream marks a fused group's summary with it and the append
-// boundary refuses it, so a host cannot write a record that reads as consolidated.
+// RoleUser / RoleAgent / RoleSystem are what a host may declare for an utterance it
+// appends. RoleDream is not: Dream marks a fused group's summary with it, and the append
+// boundary refuses it, so a host cannot write a record that reads as consolidated. The
+// name is still exported because a read hands the value back — SceneContext's messages
+// and ArchiveSlot.Role carry it on a fused group — and a host choosing what to put in
+// front of the model has to be able to say which line the library wrote. Naming it grants
+// no write ability: the refusal is enforced at the boundary, not by withholding the name.
 const (
 	RoleUser   = internal.RoleUser
 	RoleAgent  = internal.RoleAgent
 	RoleSystem = internal.RoleSystem
+	RoleDream  = internal.RoleDream
 )
 
 // PlanStatus* are the string lifecycle values the plan write surface accepts and
