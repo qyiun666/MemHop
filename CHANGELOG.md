@@ -58,6 +58,8 @@ README 的版本表与 git log。
 一句过期话会让宿主多写一次复制、并且怀疑留空是不是关掉什么。判据钉在入口处（`TestOpenTakesUnfilledDefaultsAsTheLibraryDefaults`：全零表到达引擎时逐字段等于默认表），
 按库形状写的宿主侧后端草案带着同一句过期注释，同批去掉后它的三包测试仍全绿。纯文档，代码与形状一字未动。
 
+29. **新增门禁 `api/guide_symbols_test.go`**：两份指南里出现的每个 `api.X` 与每个 `handle.Method()` 都必须存在于已发布的面上。§11 骨架此前只证明它**自己那段**编得过，正文与各层速查表里的符号名没有任何检查对着——而宿主抄的正是这些行。符号集由 `go/parser` 现读 `api` 包自己的源码（非测试文件，包级名与方法各一组），不是手抄清单，所以门禁不可能与被检面各自漂移；实测两份指南当前各有 30~31 个包级符号、22 处方法调用，全部命中。**负例内置成第二条测试**：一段含 `api.SessionContextTopic2`、`db.PlanCreate()`、`db.ListCapabilities()`、`sess.BogusMethod()` 的文本被逐条点名，而同一段里的 `api.LlmConfig`、`db.Search` 放行——退役名与虚构名走同一条判据。零生产代码改动。
+
 ## v1.6.5 — 2026-09-22 — MCP 面整体退役：对外只剩 Go module
 
 1. **`cmd/memhop-mcp` 整包删除**（14 个文件 3109 行）：25 个工具、多租户 HTTP（SSE 与 streamable-http 双传输）、按 `/mcp/<tenant>` 建/取域的租户注册表、`--tenants` 白名单与锚定 db-dir 的读入口一起消失。仓库不再有 server 形态、不再有后台进程，对外只剩「以 Go module 使用 `api`」一种接入。
