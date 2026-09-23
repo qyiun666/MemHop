@@ -372,7 +372,7 @@ err = db.UpdateL0(&api.ProfileInput{Name: "..."})
 
 | 方法 | 说明 |
 |---|---|
-| `db.ListScenes(l3ID) ([]SceneSlot, error)` | 场景列表（`SceneID / SceneName / L3ID`）；`l3ID` 非空时只列挂到该项目域的场景，`""` 列全部 |
+| `db.ListScenes(l3ID) ([]SceneSlot, error)` | 场景列表（`SceneID / SceneName / L3ID`）；`l3ID` 非空时只列挂到该项目域的场景，`""` 列全部。顺序是记录 id 升序，所以同一份文件每次交出同一份列表——这是「可重复」，不是「按相关性排」 |
 | `db.SceneContext(sceneID) (*SceneContext, error)` | 场景全貌（含各话题的 L4 原文），且**完全不写**——不开轮次，**会话恢复用这个**，一轮开了轮之后每次召回也用它；`sceneID` 留空即读该域正在做的那条会话，重复调用不必持有任何东西。与 `Search` 的取数差异是刻意的：它平铺到 depth 2，因为 Dream 融合组把原文下沉到了子话题，只有这条路能取回。每一行还带着自己的 `UserTimestamp`/`AgentTimestamp`——那一轮的界，或那个组的界——而正文被保留窗扫掉之后，这是唯一还能给这段记忆定日期的东西。认出「一个融合组」看 `ChildCount > 0`（它自己那条唯一的消息带着 role 3，即 Dream 给组摘要盖的记号），`Depth` 只回答这条话题还在不在场景表浅——被后一轮巩固折走的组会与它归并的那几轮同为 depth 2，分不出父子。返回的这些条目本身就是全量计数——根与只有这条路能带回的下沉子条目都在里面 |
 | `db.UpdateScene(sceneID, api.ScenePatch{Name, L3ID, Force}) (SceneSlot, error)` | 一次调用改标题（`Name`）/ 锚定到 L3 项目域（`L3ID`）/ 清除锚定（`L3ID: &""`）；未传的字段保持库里现值，**返回值就是写入后的场景** |
 | `db.MergeScenes(primaryID, []secondaryIDs) error` | 场景合并 |
