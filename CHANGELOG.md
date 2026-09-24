@@ -231,6 +231,8 @@ README 的版本表与 git log。
 
 101. **第 1 条与第 3 条各补一处宿主面对证**（只加用例：`TestInterfaceProfileBriefReflectsWhatTheHostJustWrote`、`TestInterfaceDeleteSceneTakesItsFusedGroupWithIt`；行为一字未动）。第八遍探针问的是两个生命周期：① 「每次对话把画像维护进 prompt」这条要靠**那一轮自己的读**兑现——`SearchResult.ProfileBrief` 必须反映宿主刚刚写进去的名字、角色、人格、偏好表，且在**整替**之后不再列已被停用的那项（缓存一份摘要、记录另一份，就是给模型喂旧画像）。此前这条只有包内 `TestSearchReturnsProfileBrief`，宿主面零证据。② 巩固会造出场景列举不再直接点名的行：融合父节点，和它下面被下沉的轮次。删一条场景只算删干净，得连这整棵树一起走——**检验放在压实出来的副本上**：那里只剩活记录，任何漏网的行都藏不住（墓碑与缓都不行了）。实测删除后副本上活记录恰为 1（域自己的画像）、场景 0、L1 行 0、每一个被下沉轮的原文按 id 也读不出东西。**两条负例各红在自己那一处**：摘要渲染里跳过偏好（`carries a brief without "mode=strict"`）、级联枚举只收 depth-1 话题（副本仍留 3 条活记录——正是「删了场景、行还挂在融合父下面」那种半删状态）。离线接口面 56 → 58 条。
 
+102. **清单第 11 条那条「流程」第一次能在单个仓库里跑完**（新文件 `test/api_interface_round_flow_test.go` / `TestInterfaceRoundFlowRunsEndToEnd`；两份指南 §11 补一句这循环在本仓有离线对证；行为一字未动）：第 11 条写的不是某个方法而是一条序——开文件 → `Search` 读进 prompt → 第一次建计划节点 → 每步把做过的事记在该步 → 更新/追加计划 → 把计划渲染回 prompt 继续 → 循环收口 `Update`。此前这条序只在仓库之外被验过（三仓 e2e 程序在台账目录里，克隆本仓的人跑不到）：语料那条用例从不碰计划面，计划那批用例从不收口一轮，离线面也没有一条在同一次运行里混开第二个域。新用例把这些一次跑通并只按宿主的读法断言：`SearchResult.ProfileBrief` 带着画像、`PlanNodeAdd` 交回的序号既是子步的 `ParentSeq` 也是事件上的 `NodeSeq`、父节点在子全部终态后折出结论、`Update` 收的正是那次读铸出的话题、`ArchiveKind.String()`/`ArchiveRole.String()` 直接给词、全程只有 hex 字符串在宿主手里流动。顺带钉住一条容易被写错的读法：**开着的轮在收口之前没有话题记录**，所以那一轮的 `SceneContext` 只列上一轮——这不是丢行，是轮次归属由库自持的直接结果。两条负例各红在自己那一处：`Append` 丢掉 `NodeSeq`（该步的事件轨变成空）、收口时不写关键词轨（`the closed turn carries no keyword track`）。离线接口面 58 → 59 条。
+
 ## v1.6.5 — 2026-09-22 — MCP 面整体退役：对外只剩 Go module
 
 1. **`cmd/memhop-mcp` 整包删除**（14 个文件 3109 行）：25 个工具、多租户 HTTP（SSE 与 streamable-http 双传输）、按 `/mcp/<tenant>` 建/取域的租户注册表、`--tenants` 白名单与锚定 db-dir 的读入口一起消失。仓库不再有 server 形态、不再有后台进程，对外只剩「以 Go module 使用 `api`」一种接入。

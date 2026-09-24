@@ -702,6 +702,10 @@ if api.CodeOf(err) == api.ErrNotFound { ... }
 
 ## 11. 最小可运行骨架
 
+下面这个循环在本仓库里也逐轮跑过：对着假模型、不花额度、不联网 ——
+`TestInterfaceRoundFlowRunsEndToEnd`（给一轮规划、把每一步做过的事记在该步上、收口这一轮、中途再开第二个域、
+接着跑第二轮）。所以只克隆本仓也能验这条序，不必先把另外两个项目搭起来。
+
 ```go
 package main
 

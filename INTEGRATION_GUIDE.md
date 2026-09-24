@@ -985,6 +985,11 @@ Numbers are never reused: `1002` and `9001` are retired and will not be reissued
 
 ## 11. Minimal runnable skeleton
 
+The loop below is also run inside this repository, round by round against a fake model with no quota and
+no network: `TestInterfaceRoundFlowRunsEndToEnd` (plan a round, record each step's work against
+that step, close the round, spawn a second domain mid-loop, run a second round). So a clone can
+check the sequence without building the two other projects.
+
 ```go
 package main
 
