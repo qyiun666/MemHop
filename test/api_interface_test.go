@@ -155,11 +155,11 @@ func TestInterfaceSearchUpdateL2L4(t *testing.T) {
 	if len(fresh.Topics) != 0 {
 		t.Fatalf("fresh session should be empty, got %+v", fresh.Topics)
 	}
-	if calls := llm.calls["keywords"]; calls != 0 {
+	if calls := llm.count("keywords"); calls != 0 {
 		t.Fatalf("Search distilled %d times, want 0 (reads never distill)", calls)
 	}
 
-	before := llm.calls["keywords"]
+	before := llm.count("keywords")
 	topicID := openTurn(t, db, sceneID)
 	closedID, err := turn(db.Session, "用户要求重构代码", "好的,我来重构这段代码")
 	if err != nil {
@@ -170,7 +170,7 @@ func TestInterfaceSearchUpdateL2L4(t *testing.T) {
 	if closedID != topicID {
 		t.Fatalf("Update closed topic %s, want the turn Search opened (%s)", closedID, topicID)
 	}
-	if calls := llm.calls["keywords"]; calls != before+1 {
+	if calls := llm.count("keywords"); calls != before+1 {
 		t.Fatalf("Update distilled %d times, want exactly one per turn", calls-before)
 	}
 
@@ -283,7 +283,7 @@ func TestInterfaceWritesRefuseWhenNoTurnIsOpen(t *testing.T) {
 			t.Fatalf("%s: %v, want the refusal to name the missing open turn", w.name, err)
 		}
 	}
-	if calls := llm.calls["keywords"]; calls != 0 {
+	if calls := llm.count("keywords"); calls != 0 {
 		t.Fatalf("a refused close asked the model %d times, want 0", calls)
 	}
 
@@ -314,14 +314,14 @@ func TestInterfaceOneDistillationPerTurn(t *testing.T) {
 	db, llm := openTestDB(t)
 	sceneID := openSession(t, db)
 
-	start := llm.calls["keywords"]
+	start := llm.count("keywords")
 	for i := range 5 {
 		openTurn(t, db, sceneID)
 		if _, err := turn(db.Session, fmt.Sprintf("问题 %d", i), "回复"); err != nil {
 			t.Fatalf("turn %d: %v", i, err)
 		}
 	}
-	if got := llm.calls["keywords"] - start; got != 5 {
+	if got := llm.count("keywords") - start; got != 5 {
 		t.Fatalf("5 turns cost %d distillations, want 5", got)
 	}
 	res, err := db.Search(memhop.SearchQuery{SceneID: sceneID})
@@ -369,7 +369,7 @@ func TestInterfaceUpdateRefusesAnOffContractReply(t *testing.T) {
 		t.Fatalf("Update over an off-contract reply = %v (code %d), want the LLM code %d",
 			err, memhop.CodeOf(err), memhop.ErrLLM)
 	}
-	if llm.calls["keywords"] == 0 {
+	if llm.count("keywords") == 0 {
 		t.Fatal("the refusal came without ever asking the model")
 	}
 

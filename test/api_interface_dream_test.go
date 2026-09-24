@@ -44,8 +44,8 @@ func TestInterfaceDream(t *testing.T) {
 	if rep == nil || rep.ConsolidatedScenes != 1 || rep.L2TopicsCompressed != 2 {
 		t.Fatalf("Dream should consolidate the session: %+v", rep)
 	}
-	if llm.calls["consolidate"] != 1 {
-		t.Fatalf("one scene over the threshold is one consolidate call, got %d", llm.calls["consolidate"])
+	if llm.count("consolidate") != 1 {
+		t.Fatalf("one scene over the threshold is one consolidate call, got %d", llm.count("consolidate"))
 	}
 	// Consolidation fuses the group into one depth-1 topic, so the read
 	// surface shrinks below the two turns written.
@@ -99,7 +99,7 @@ func TestInterfaceDream(t *testing.T) {
 		}
 	}
 	// L1 nodes were synced from L2 during Dream, so the distill stage runs.
-	if llm.calls["distill"] < 1 {
+	if llm.count("distill") < 1 {
 		t.Fatal("Dream should call distill for L0 profile")
 	}
 	if !rep.L0Updated {

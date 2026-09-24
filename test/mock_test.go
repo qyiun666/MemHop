@@ -13,13 +13,19 @@ import (
 	"net/http/httptest"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 )
 
 // mockLLM serves OpenAI-compatible /chat/completions and dispatches by the
 // system prompt of each LLM call point; call counters are exposed.
 type mockLLM struct {
-	srv   *httptest.Server
+	srv *httptest.Server
+	// calls counts each call point. The counter sits behind a mutex because a consolidation pass
+	// the round close scheduled runs on its own goroutine: without the lock, a test reading what
+	// the model was asked races the handler that answers it — which is why every case that cares
+	// about counts used to switch that trigger off instead of observing it.
+	mu    sync.Mutex
 	calls map[string]int
 	// offContract, when set, is what every call point gets back instead of its own
 	// contractual reply — the injection point for a model that answers off contract.
@@ -55,13 +61,13 @@ func newMockLLM(t testing.TB) *mockLLM {
 		lower := strings.ToLower(sys)
 		switch {
 		case strings.Contains(lower, "meaningful keywords"):
-			m.calls["keywords"]++
+			m.tally("keywords")
 			content = `{"keywords":["重构","代码","测试"]}`
 		case strings.Contains(lower, "l2 chat memory"):
-			m.calls["consolidate"]++
+			m.tally("consolidate")
 			content = consolidateReply(user)
 		case strings.Contains(lower, "l1 associative"):
-			m.calls["distill"]++
+			m.tally("distill")
 			content = `{"emotion":{"valence":0.8,"arousal":0.6,"dominance":0.5},"mbti":{"i_e":0.2,"n_s":0.3,"t_f":-0.1,"j_p":0.4,"type":"ESFP"},"personality":"务实直接，注重代码质量，面对重构任务条理清晰，习惯先补测试再动手","per_node":[]}`
 		default:
 			t.Errorf("mockLLM: unknown system prompt: %.80s", sys)
@@ -78,6 +84,20 @@ func newMockLLM(t testing.TB) *mockLLM {
 	}))
 	t.Cleanup(m.srv.Close)
 	return m
+}
+
+// tally records one call from the handler goroutine.
+func (m *mockLLM) tally(what string) {
+	m.mu.Lock()
+	m.calls[what]++
+	m.mu.Unlock()
+}
+
+// count reads one call point's total.
+func (m *mockLLM) count(what string) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.calls[what]
 }
 
 // consolidateReply builds a merge group from the first two topic ids echoed

@@ -84,11 +84,11 @@ func TestInterfaceTurnContentSharesOneKey(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("append event: %v", err)
 	}
-	before := llm.calls["keywords"]
+	before := llm.count("keywords")
 	if _, err := turn(db.Session, "跑一下测试", "go test ./... 全绿"); err != nil {
 		t.Fatalf("settle turn: %v", err)
 	}
-	if got := llm.calls["keywords"] - before; got != 1 {
+	if got := llm.count("keywords") - before; got != 1 {
 		t.Fatalf("settling cost %d distillations, want 1", got)
 	}
 
@@ -160,13 +160,13 @@ func TestInterfaceUpdateNeedsAtLeastOneSideOfTheDialogue(t *testing.T) {
 	if !strings.Contains(err.Error(), "an input, an output or an outcome") {
 		t.Fatalf("a close with nothing in it answered %q, want it to say which fields are missing", err)
 	}
-	before := mock.calls["keywords"]
+	before := mock.count("keywords")
 	// The refused close left the turn open, so the host can still finish it properly.
 	if _, err := db.Update(api.TurnEnd{Input: "只有刺激", Output: "只有回复", CreatedAt: time.Now().UnixMilli()}); err != nil {
 		t.Fatalf("closing after the refusal: %v", err)
 	}
-	if mock.calls["keywords"] != before+1 {
-		t.Fatalf("the distill calls moved from %d to %d, want exactly one after the refusal", before, mock.calls["keywords"])
+	if mock.count("keywords") != before+1 {
+		t.Fatalf("the distill calls moved from %d to %d, want exactly one after the refusal", before, mock.count("keywords"))
 	}
 
 	// One side alone is a turn that happened: what landed is that one line, on the slot

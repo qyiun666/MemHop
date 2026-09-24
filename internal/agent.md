@@ -74,7 +74,7 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    `triggerSceneDream(ac, sceneID)`（调用方持 `ac.Mu`，留在根里因为它管理
    goroutine 生命周期），goroutine 运行在 `ac.OpCtx` 下——
    `Close` 与空闲回收取消它，任何在飞 Dream 在下一阶段边界退出，
-   不会把生命周期屏障堵在一次完整 LLM 往返上。域锁内的前台 LLM 调用（`Update` 的轮次提炼）同样挂
+   不会把生命周期屏障堵在一次完整 LLM 往返上。同一处也定告警的极性：排定的那一趟与宿主交回文件之间本来就有竞争，`ErrClosed` / `ErrCancelled` 说的是「宿主不再要了」而不是「巩固坏了」，这两档不记 WARN（每次正常退出都响一行的告警等于没有告警），其余答复照记——两臂由 `dream_trigger_log_test.go` 各钉一条，且各自先证一句前提（那个状态下确实回那个码）。域锁内的前台 LLM 调用（`Update` 的轮次提炼）同样挂
    `ac.OpCtx`，避免生命周期屏障被一次完整往返阻塞。一次提炼要串多少次往返不在本契约里限定：长输入
    在 `llmops` 里按块走，块数随这一轮转录的长度增长，所以退出点是一块而不是一整轮，而一轮能在锁内
    串起任意多块——内容侧那两条上限量的是单条记录，不量一轮。

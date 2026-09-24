@@ -98,8 +98,17 @@ func (db *DB) triggerSceneDream(ac *domain.Context, sceneID uint64) {
 			ac.Mu.Unlock()
 		}()
 		if _, err := db.RunDream(ac.OpCtx, ac.ID, sceneID); err != nil {
-			slog.Warn("dream: trigger failed",
-				"agent", common.FormatHash(ac.ID), "scene", common.FormatHash(sceneID), "err", err)
+			// Two answers mean the host stopped asking: the database is closed, or this pass was
+			// cancelled by that close. Neither is a consolidation that went wrong — the memory simply
+			// was not consolidated before the file was handed back, which is what closing means — and
+			// a warning on every clean exit is a warning nobody reads, so those two go unreported.
+			// Anything else the pipeline answered is a real failure and stays a warning.
+			switch code := common.CodeOf(err); code {
+			case common.ErrClosed, common.ErrCancelled:
+			default:
+				slog.Warn("dream: trigger failed",
+					"agent", common.FormatHash(ac.ID), "scene", common.FormatHash(sceneID), "err", err)
+			}
 		}
 	}()
 }

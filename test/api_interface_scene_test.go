@@ -192,12 +192,12 @@ func TestInterfaceSceneContextReadsThroughFusion(t *testing.T) {
 	second := settleTurn(t, db, sceneID, "用户要求把读不动的记录上报而不是跳过", "已改成只有 ErrNotFound 才跳过")
 
 	// SceneContext costs no distillation: it reads, it does not consolidate.
-	before := llm.calls["keywords"]
+	before := llm.count("keywords")
 	ctx, err := db.SceneContext(sceneID)
 	if err != nil {
 		t.Fatalf("SceneContext: %v", err)
 	}
-	if got := llm.calls["keywords"]; got != before {
+	if got := llm.count("keywords"); got != before {
 		t.Fatalf("SceneContext triggered %d distillations, want 0", got-before)
 	}
 	if len(ctx.Topics) != 2 {
