@@ -424,6 +424,8 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    仍是一个场景（`requireScenes` 逐个回读比对），未知 id 报 `ErrNotFound`；
    底层 `repo.DeleteL2Records` 只照给定的 id 落墓碑、不认 id 是什么，少这一步时一个陈旧
    的 secondary id 就能带走存活主场景自己的记录，而调用还返回成功。
+   同一条清单还要说得出「谁」：一个 secondary 出现两次即 `ErrInvalidQuery` 拒（改挂与落墓碑会照单
+   跑第二遍，而调用方此时已经数不清自己要并掉哪几段）。
    删除面其余各口同此：`DeleteScene`/`DeleteTopic`/`DeleteL3` 都先回读确认目标
    存在（不认识的 id 正是 `CheckSession` 拒的那类 id）——没有一处把「记录不在」
    当成成功返回。这三条路径还各自带走域自持的那一半：`DeleteScene` 清 `ac.Scene`/`ac.Turn`

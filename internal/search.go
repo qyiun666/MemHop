@@ -79,6 +79,13 @@ func (db *DB) Search(agentID uint64, q SearchQuery) (*SearchResult, error) {
 // at. Continuing never re-checks existence: OpenSceneTurn reads the record next.
 func (db *DB) resolveScene(ac *domain.Context, agentID uint64, q SearchQuery) (uint64, error) {
 	if q.SceneID != "" {
+		if q.NewScene {
+			// The two flags ask for opposite things — one names a conversation to go on,
+			// the other asks for a different one — and answering by quietly dropping the
+			// second would leave a host starting a new session while reading the old scene.
+			return 0, common.NewError(common.ErrInvalidQuery,
+				"scene_id names a conversation to continue and new_scene asks for a fresh one: pass one or the other")
+		}
 		named, err := parseID("scene", q.SceneID)
 		if err != nil {
 			return 0, err

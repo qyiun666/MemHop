@@ -229,7 +229,7 @@ No `ctx` parameter — the read path holds no cancellable LLM or network work �
 | `Topics` | the scene's depth-1 topics in user-timestamp order, each with its `FusedKeywords` | **the memory injected into this turn's prompt**; originals are addressed by a turn's own topic id — `SearchL4(L4Query{TopicID})` |
 | `NewTopicID` | the topic this read opened for the turn about to run | the read/correction key for this turn's content (`SearchL4{TopicID}`, `DeleteTopic`); the write calls (`AppendArchive`, `Update`, the plan family) do **not** take it — the library holds the open turn |
 
-An unknown `SceneID` returns `ErrNotFound` (the library will not create a scene you asked to read); an empty one continues the domain's current scene, creating one only when it holds none. `NewScene: true` skips all of that and opens a fresh scene.
+An unknown `SceneID` returns `ErrNotFound` (the library will not create a scene you asked to read); an empty one continues the domain's current scene, creating one only when it holds none. `NewScene: true` skips all of that and opens a fresh scene. `SceneID` and `NewScene` are not sent together: one names a conversation to go on, the other asks for a different one, and the read is refused (`ErrInvalidQuery`) rather than answered by dropping a flag a host believes it set.
 
 **One session is one conversation in progress.** The open turn belongs to the domain, not to the caller, so a `Search` from a second goroutine takes the turn the first was about to close — and the first's turn is left unsettled while its `Update` closes the other id. The domain lock keeps the file consistent either way (nothing corrupts, nothing interleaves on disk); what it does not do is multiplex turns. So run each concurrent worker on **its own domain** (`SubAgent` hands out a session per profile name), or serialize `Search → … → Update` on one handle. `TestConcurrentWorkersOnTheirOwnDomains` and `TestConcurrentReadsDuringWrites` cover both halves: six workers × four rounds on six domains, each listing exactly its own turns, and reads that keep running while a `Dream` and a new round rewrite the scene.
 
@@ -914,7 +914,8 @@ the turn `Search` opened for the domain, so these calls name no topic id.
 
 The all-zero key `0000000000000000` is reserved (it is the value a record leaves its key
 unset with) — `Search` never opens a turn on it, and the read entries that do take a
-topic id (`SearchL4{TopicID}`, `RenameTopic`, `DeleteTopic`) reject it.
+topic id (`SearchL4{TopicID}`, `RenameTopic`, `DeleteTopic`) reject it, and a `SearchL4{IDs}` list
+that carries it is refused rather than answered one row short.
 
 ---
 

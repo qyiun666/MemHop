@@ -38,7 +38,10 @@ type Session struct {
 // An empty SceneID continues the domain's current scene,
 // and after the file is reopened that scene restores from the records (the one a turn
 // was opened in most recently; the turn counter only breaks ties among records written
-// before that stamp existed); NewScene starts a fresh conversation instead. L3ID
+// before that stamp existed); NewScene starts a fresh conversation instead. The two are
+// not sent together: naming a scene while asking for a fresh one is refused
+// (ErrInvalidQuery) rather than answered by dropping the flag, which would leave a host
+// starting a new session and writing round one into the transcript it meant to leave. L3ID
 // anchors a scene to an L3 project domain and is taken only by a read that creates
 // one — NewScene, or the domain's first scene. Handed in along with a scene this read
 // continues, named or not, it is refused (ErrInvalidQuery) rather than dropped: an
@@ -245,7 +248,8 @@ func (s *Session) QueryL3Subgraph(graphID, startNodeID string, maxDepth int, edg
 // has no Seq in common (it numbers slots inside one turn), so it comes back by each
 // record's CreatedAt, with the record id breaking ties. TopicID is the key Search
 // issued for one turn, parsed as it is everywhere else — the reserved all-zero key is
-// refused, not answered with an empty list.
+// refused, not answered with an empty list. The same key is refused inside an IDs list, where a
+// host reads the row count as the answer.
 func (s *Session) SearchL4(q L4Query) ([]ArchiveSlot, error) {
 	archives, err := s.session.SearchL4(q)
 	if err != nil {
@@ -430,6 +434,12 @@ func (s *Session) SceneContext(sceneID string) (*SceneContext, error) {
 // A secondary's L1 node goes with it, and the primary's node picks the retargeted
 // topics up at the next Dream. A hyperedge that pointed at a merged scene loses the
 // member to that same pass's edge decay.
+//
+// The id list is read as a set of intents, so a mistake in it stops the call: the
+// primary may not appear among the secondaries, no id may name a scene that is already
+// gone, and a secondary listed twice is refused (ErrInvalidQuery) — the merge would
+// retarget and tombstone the same topics on the strength of a list its caller had lost
+// track of.
 func (s *Session) MergeScenes(primaryID string, secondaryIDs []string) error {
 	return s.session.MergeScenes(primaryID, secondaryIDs)
 }

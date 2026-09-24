@@ -9,6 +9,7 @@ package internal
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/content"
@@ -57,6 +58,13 @@ func (db *DB) SearchL4(agentID uint64, q L4Query) ([]core.ArchiveSlot, error) {
 		ids, err := common.ParseAll(q.IDs)
 		if err != nil {
 			return nil, common.NewError(common.ErrInvalidQuery, "parse archive ids", err)
+		}
+		if slices.Contains(ids, 0) {
+			// A named read is the one place a host counts rows instead of listing them, and
+			// the reserved key can never name a record: answering one row short would read
+			// as "that memory is gone".
+			return nil, common.NewError(common.ErrInvalidQuery,
+				"archive id 0000000000000000 is reserved and names no record")
 		}
 		rq.IDs = ids
 	}

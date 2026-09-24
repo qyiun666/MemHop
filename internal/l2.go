@@ -161,6 +161,12 @@ func (db *DB) MergeScenes(agentID uint64, primaryID string, secondaryIDs []strin
 	if _, dup := common.ToSet(hashes)[primaryHash]; dup {
 		return common.NewError(common.ErrInvalidQuery, "primary scene id must not be a secondary", nil)
 	}
+	if len(common.ToSet(hashes)) != len(hashes) {
+		// A merge is destructive and this list is its input: a repeated id says the caller
+		// lost track of which scenes it meant, which is exactly when retargeting and
+		// tombstoning the same topic twice stops being harmless bookkeeping.
+		return common.NewError(common.ErrInvalidQuery, "a secondary scene id is listed twice", nil)
+	}
 	// A merge destroys records, so every id it names must still be a scene.
 	// Naming one the host no longer holds is a mistake to report, not a fold to
 	// pretend succeeded: the batch delete below keys on these ids, so a stale

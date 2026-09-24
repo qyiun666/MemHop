@@ -160,7 +160,7 @@ type L4Query struct {
 	Keyword string       `json:"keyword,omitempty"`  // case-insensitive substring of Content
 	Start   int64        `json:"start,omitempty"`    // created at or after (ms); 0 leaves the bound unset, a wrong scale is refused
 	End     int64        `json:"end,omitempty"`      // created at or before (ms); same ruler as a write's CreatedAt
-	IDs     []string     `json:"ids,omitempty"`      // only these archive ids, 16-char hex
+	IDs     []string     `json:"ids,omitempty"`      // only these archive ids (the reserved key is refused)
 	TopicID *string      `json:"topic_id,omitempty"` // only archives of this topic
 	Type    *ContentType `json:"type,omitempty"`     // only archives of this content type
 	Kind    *ArchiveKind `json:"kind,omitempty"`     // utterance or event; unset selects both

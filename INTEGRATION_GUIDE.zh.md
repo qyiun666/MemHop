@@ -190,7 +190,7 @@ res, err := db.Search(api.SearchQuery{
 | `Topics` | 该场景的 depth-1 话题集（按用户消息时间升序，每个带 `FusedKeywords`） | **拼进本次 LLM prompt 的记忆**；要看原文，用那一轮的话题 id 寻址 L4：`SearchL4(L4Query{TopicID})` |
 | `NewTopicID` | 这次读取为即将进行的这一轮开出的话题 | 这一轮内容的读/纠错键（`SearchL4{TopicID}`、`DeleteTopic`）；写入调用（`AppendArchive`、`Update`、计划族）**不**收它——库自持开着的这一轮 |
 
-未知 `SceneID` 返回 `ErrNotFound`（库不会替你新建一个你指名要读的场景）；`SceneID` 为空则续用该域当前场景，只有它一个场景都没有时才新建。`NewScene: true` 跳过这一切，直接开一个新场景。
+未知 `SceneID` 返回 `ErrNotFound`（库不会替你新建一个你指名要读的场景）；`SceneID` 为空则续用该域当前场景，只有它一个场景都没有时才新建。`NewScene: true` 跳过这一切，直接开一个新场景。`SceneID` 与 `NewScene` 不能一起给：一个说接着哪段对话，一个说要另起一段，这一读直接拒（`ErrInvalidQuery`），而不是替宿主丢掉一个它以为自己生效了的开关。
 
 **一个 Session 就是一段在进行中的对话。** 开着的这一轮属于域、不属于调用方，所以第二个 goroutine 的 `Search` 会把第一个正准备收口的那一轮接走——它那一轮从此没收口，而它的 `Update` 关的是别人的 id。域锁在两种用法下都保住文件一致（不会写坏、不会交错）；它不做的是把轮复用。所以并行的每个 worker 请跑在**自己的域**上（`SubAgent` 按 profile 名字各给一个 session），或者在同一个句柄上把 `Search → … → Update` 串起来。`TestConcurrentWorkersOnTheirOwnDomains` 与 `TestConcurrentReadsDuringWrites` 两头各钉一遍：六个 worker × 四轮各自一个域，每边只列自己的轮；以及读口在 `Dream` 与新轮次改写场景的同时持续读。
 
@@ -659,7 +659,7 @@ _, err := db.AppendArchive(api.ArchiveInput{
 
 计划的写读面在任务面那 18 个方法里——树种在 `Search` 为这个域开着的这一轮上，所以这些调用不点名话题 id。
 
-全零键 `0000000000000000` 是保留值（记录未赋键时的值）：`Search` 绝不会在它上面开轮，而仍收话题 id 的读/纠错口（`SearchL4{TopicID}`、`RenameTopic`、`DeleteTopic`）一律拒绝它。
+全零键 `0000000000000000` 是保留值（记录未赋键时的值）：`Search` 绝不会在它上面开轮，而仍收话题 id 的读/纠错口（`SearchL4{TopicID}`、`RenameTopic`、`DeleteTopic`）一律拒绝它。`SearchL4{IDs}` 的清单里带着它同样被拒，而不是少给一行——这条读正是宿主按行数作答的地方。
 
 ---
 
