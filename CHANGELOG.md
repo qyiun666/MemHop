@@ -205,6 +205,8 @@ README 的版本表与 git log。
 
 顺带修掉一句早已失真的模块文档：`internal/agent.md` 写着「`RoleDream` 公开常量里没有它」，而门面 `api.RoleDream` 一直在导出（读侧要能认出哪一句是库写的）——按实话改成「名字出得去、写侧拒收」。
 
+同一条改动入库后立刻把自己的说法收窄了一处，因为它说过头了：`AGENTS.md` 与 `internal/repo/agent.md` 先写的是「宿主侧没有裸 `uint8` 的轴」，而 `ProfileSlot.AgentType` 至今仍是裸 `uint8`。真正的判据不是「它是个小整数」而是「宿主会写它、或按它过滤」——域身份只有库这一支笔在戳（`ProfileInput` 里没有那一格），计划节点的三个状态值对外形态是字符串，两者的数字都不需要这面接口承诺词表，所以 §7.6 那张表没有它们的两行是**对的**，两份指南因此各补一段说明这张表的适用范围。
+
 ## v1.6.5 — 2026-09-22 — MCP 面整体退役：对外只剩 Go module
 
 1. **`cmd/memhop-mcp` 整包删除**（14 个文件 3109 行）：25 个工具、多租户 HTTP（SSE 与 streamable-http 双传输）、按 `/mcp/<tenant>` 建/取域的租户注册表、`--tenants` 白名单与锚定 db-dir 的读入口一起消失。仓库不再有 server 形态、不再有后台进程，对外只剩「以 Go module 使用 `api`」一种接入。

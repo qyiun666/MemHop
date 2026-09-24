@@ -525,7 +525,10 @@ A tool schema has to promise a value set, and this surface spells two of its voc
 words and four as numbers. Nothing here is implicit: adding a value changes this table
 (`enum-wire-table`), and `api/surface_enums_test.go` fails until both guides say it too —
 the check is row by row, so a table that dropped a value or a whole vocabulary is red even
-though those words still appear somewhere else in the prose.
+though those words still appear somewhere else in the prose. What earns a row is being an
+axis the host writes or filters on: `AgentTypePrimary` / `AgentTypeSub` report which domain a
+profile belongs to, the library stamps them and no call sends them, so their two numbers are
+not a vocabulary this surface promises anybody.
 
 | vocabulary | on the wire | values (word the host reads ← what JSON carries) |
 |---|---|---|

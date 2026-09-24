@@ -40,7 +40,7 @@
   `engine_read.go`（索引查找读）、`engine_delete.go`（墓碑删除）、
   `engine_recovery.go`（扫描/撕裂尾帧截断/索引重建）；数据模型分
   `model.go`（Slot 结构）/ `model_enums.go`（枚举）/ `model_dto.go` 与
-  `model_distill.go`（跨包使用的请求与响应结构，最底层纯数据）。词表在 JSON 里有两种走法：字符串型的（`PlanStatus`、`L3ImportMode`）一律小写下划线，数字型的（`ArchiveKind`/`ArchiveRole`/`ContentType`/`GraphEdgeKind`）走数字、词只从 `String()` 出，四套各自是具名类型（带 `Valid()` 与那张名字表），没有哪一条轴以裸 `uint8` 定义；这份对照以表格形式写在两份指南 §7.6，由门面那侧的门禁同时核代码与指南（改一边另一边就红），且是逐行核——标记 `enum-wire-table` 定位那张表，一套词表少一行或一个取值缺项都红，整篇文档里搜到那个词不算数。本层不解析任何词表名，只判取值是否定义。
+  `model_distill.go`（跨包使用的请求与响应结构，最底层纯数据）。词表在 JSON 里有两种走法：字符串型的（`PlanStatus`、`L3ImportMode`）一律小写下划线，数字型的（`ArchiveKind`/`ArchiveRole`/`ContentType`/`GraphEdgeKind`）走数字、词只从 `String()` 出，四套各自是具名类型（带 `Valid()` 与那张名字表），判据是「调用方会写它或按它过滤」——`AgentTypePrimary`/`AgentTypeSub` 与计划节点的三个状态值仍是裸 `uint8`：前者只有本层这一支笔在戳，后者的对外形态是字符串，两者的数字都没有对外的词表要承诺；这份对照以表格形式写在两份指南 §7.6，由门面那侧的门禁同时核代码与指南（改一边另一边就红），且是逐行核——标记 `enum-wire-table` 定位那张表，一套词表少一行或一个取值缺项都红，整篇文档里搜到那个词不算数。本层不解析任何词表名，只判取值是否定义。
 - `index/`：索引——L2Meta（场景读回的唯一话题缓存，`rebuild.go` 全量重建；**两种读形**——
   `TopicsByScene` 在一把读锁下把一个场景的行交出去，`Get` 按 id 取一行（问一个话题的深度与
   父指向），`RetargetScene` 一次搬完一个场景。全域迭代器随它最后一个读者一起删了。两张表
