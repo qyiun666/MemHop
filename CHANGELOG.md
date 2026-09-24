@@ -138,6 +138,8 @@ README 的版本表与 git log。
 
 65. **工具面表补上「哪两个键归宿主填」，并写进门面**（两份指南 §7.7 一段 + `api/surface_tool_map_test.go` 一条断言 + `AppendArchive` 的 go doc 一句）：表里 `memory_record` 与 `memory_close_turn` 都带 `created_at`，`memory_record` 还带 `seq`——这两样一旦进 schema 让模型填，回收到的常是秒级数或空值，而库在写边界上拒这两种尺度（保留窗按毫秒算），结果是模型每填错一次就吃一次拒绝、宿主还得在旁边补一层兜底。现在明写：调用由模型发起也是**宿主盖 clock**，`seq` 留 0 表示「取下一个空槽」，其余键都可以交给模型；`AppendArchive` 的门面注释同步补这一句（那里本来已写明 CreatedAt 由宿主供、库不代盖，只是没说绑成工具时怎么办）。门禁要求 §7.7 那一段与两个键名一起留在表旁（负例：把中文指南的标记删掉即报 `the tool table no longer says which keys the host fills itself`，恢复即绿）。行为一字未动，只补文档与一条断言。
 
+66. **「ProfileBrief 有界」从形容词改成算得出的数**（`internal/cap/profile` 加常量 `briefWorstCaseRunes` + 新测试 `TestBriefIsBoundedAndRepeatable`，两份指南的 `ProfileBrief` 行改写）：指南一直说这摘要「有界/紧凑」，却没写多大、也没写偏好几十条时到底取哪几条——宿主拿这句规划 prompt 预算其实什么也没拿到。现在量化：`name`/`role`/`personality` 各截到 160 字（截过以 `…` 结尾）、类型词单占一行、偏好取**排序后最低的 5 条**（键截 160、值截 120），最坏整段实测 2010 字，常量上界写 2100 并由测试守住；且两次调用必须逐字相同——同一份画像每轮注入不能变。语料形状这轮返工过一次：第一版 40 个键共享同一长前缀，截断后五者一模一样，「选哪五条」因此不可见，不排序的负例当场逃过；改成可区分的键（一个以 A 开头的超长键排最前，其余 k00…k39）后同一负例立刻红在 `the same profile digested twice differently`，再补一条把字段上限从 160 抬到 400 的负例，四处报「未标记截断」并撞上 2100 上界。`internal/cap/agent.md` 同批改口。行为一字未动（库本来就排序取前五），这次是把它到底多大、到底选哪五条写清并钉住。
+
 ## v1.6.5 — 2026-09-22 — MCP 面整体退役：对外只剩 Go module
 
 1. **`cmd/memhop-mcp` 整包删除**（14 个文件 3109 行）：25 个工具、多租户 HTTP（SSE 与 streamable-http 双传输）、按 `/mcp/<tenant>` 建/取域的租户注册表、`--tenants` 白名单与锚定 db-dir 的读入口一起消失。仓库不再有 server 形态、不再有后台进程，对外只剩「以 Go module 使用 `api`」一种接入。

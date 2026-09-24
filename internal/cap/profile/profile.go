@@ -21,6 +21,11 @@ import (
 // length, and this string rides with every LLM call.
 const briefFieldMaxRunes = 160
 
+// briefWorstCaseRunes is the ceiling Brief cannot exceed, and the test against it is what
+// keeps the guides' "bounded" honest: three free-text fields at the field cap, the type word,
+// five preference pairs at the key and value caps, and the emotion line.
+const briefWorstCaseRunes = 2100
+
 // Brief renders a compact profile digest for prompt injection: identity,
 // personality, MBTI, top preferences and the current emotional state. Every field it
 // carries is bounded — one budget per free-text value, five preferences — because a
