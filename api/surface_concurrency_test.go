@@ -16,6 +16,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -181,6 +182,105 @@ func TestConcurrentReadsDuringWrites(t *testing.T) {
 	}
 	if encode(current) == known {
 		t.Fatalf("the scene answered the same after a Dream and a new round as before it:\n%s", known)
+	}
+}
+
+// The other shape a spawning host hits is one name asked for twice at once: the model decided to
+// start a worker another goroutine is already starting, or a call was retried while the first was
+// in flight. Two domains under one name is amnesia with no error to read — the roster would list
+// the name once, `SubAgent` would resolve it to whichever id the registry scan happened to keep,
+// and each half of what that worker remembers would sit where nothing points. Registration is
+// serialised on `agentsMu` and the profile is seeded under the domain lock, so this shape has
+// outcomes worth asserting: one id per name inside the process, one roster entry per name on the
+// disk, and a domain that still closes a round afterwards. Run it under -race.
+func TestSameNameAskedForAtOnceOpensOneDomain(t *testing.T) {
+	llm := stubLLM()
+	t.Cleanup(llm.Close)
+	path := filepath.Join(t.TempDir(), "spawn.meh")
+	m, err := Open(path, surfaceLLM(llm.URL), DefaultMemHopDefaults, surfaceProfile())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	const callers = 8
+	names := []string{"shared-a", "shared-b"}
+	ids := make([]string, callers)
+	errs := make([]error, callers)
+	var wg sync.WaitGroup
+	for i := 0; i < callers; i++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			sess, err := m.SubAgent(surfaceLLM(llm.URL), ProfileInput{Name: names[n%len(names)]})
+			if err != nil {
+				errs[n] = err
+				return
+			}
+			ids[n] = sess.AgentID()
+		}(i)
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("SubAgent(%s), caller %d: %v", names[i%len(names)], i, err)
+		}
+	}
+	opened := map[string][]string{}
+	for i, id := range ids {
+		opened[names[i%len(names)]] = append(opened[names[i%len(names)]], id)
+	}
+	for _, name := range names {
+		distinct := map[string]bool{}
+		for _, id := range opened[name] {
+			distinct[id] = true
+		}
+		if len(distinct) != 1 {
+			t.Fatalf("%q opened as %d different domains in one process: %v", name, len(distinct), opened[name])
+		}
+	}
+
+	// The same answers have to come off the disk: a second registry record is precisely what a
+	// restart hands back as a second domain, and this process's maps are gone by then.
+	if err := m.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	m2, err := Open(path, surfaceLLM(llm.URL), DefaultMemHopDefaults, surfaceProfile())
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer func() { _ = m2.Close() }()
+	roster, err := m2.Agents()
+	if err != nil {
+		t.Fatalf("Agents: %v", err)
+	}
+	seen := map[string]int{}
+	for _, a := range roster {
+		seen[a.Name]++
+	}
+	for _, name := range names {
+		if seen[name] != 1 {
+			t.Fatalf("the reopened roster names %q %d times, want one domain per name: %+v", name, seen[name], roster)
+		}
+	}
+
+	// Asking by name again resolves to the domain that was opened, and that domain still runs the
+	// loop: the storm of admissions left one profile and a usable turn counter behind.
+	sess, err := m2.SubAgent(surfaceLLM(llm.URL), ProfileInput{Name: "shared-a"})
+	if err != nil {
+		t.Fatalf("SubAgent by name after restart: %v", err)
+	}
+	if sess.AgentID() != opened["shared-a"][0] {
+		t.Fatalf("%q reopened as %s, the same process had opened it as %s",
+			"shared-a", sess.AgentID(), opened["shared-a"][0])
+	}
+	if prof, err := sess.GetL0(); err != nil || prof.Name != "shared-a" {
+		t.Fatalf("the domain's own profile says %+v (err %v), want the name it was opened by", prof, err)
+	}
+	if _, err := sess.Search(SearchQuery{}); err != nil {
+		t.Fatalf("Search on the restarted domain: %v", err)
+	}
+	if _, err := sess.Update(turnEnd()); err != nil {
+		t.Fatalf("Update on the restarted domain: %v", err)
 	}
 }
 
