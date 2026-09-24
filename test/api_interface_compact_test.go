@@ -218,4 +218,42 @@ func TestInterfaceCompactedCopyAnswersIdentically(t *testing.T) {
 		t.Fatalf("the round closed after compaction is not the one that was opened: %s vs %s",
 			after1.Topics[len(after1.Topics)-1].TopicID, res.NewTopicID)
 	}
+
+	// A second pass, on a file with nothing dead left to move. Checkpointing first is what
+	// makes the comparison honest: CompactTo writes its own snapshot, so the numbers only
+	// mean the same thing once both files have one.
+	if err := lib.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint before the second pass: %v", err)
+	}
+	live, err := lib.Stats()
+	if err != nil {
+		t.Fatalf("Stats before the second pass: %v", err)
+	}
+	second := filepath.Join(dir, "compacted-twice.meh")
+	if err := lib.CompactTo(second); err != nil {
+		t.Fatalf("second CompactTo: %v", err)
+	}
+	lib2, err := memhop.Open(second, testLLM(url), memhop.DefaultMemHopDefaults,
+		&memhop.ProfileInput{Name: "test-primary", Role: "offline fixture"})
+	if err != nil {
+		t.Fatalf("Open the twice-compacted file: %v", err)
+	}
+	defer lib2.Close()
+	secondStats, err := lib2.Stats()
+	if err != nil {
+		t.Fatalf("Stats on the second copy: %v", err)
+	}
+	if secondStats.RecordCount != live.RecordCount {
+		t.Fatalf("the second pass changed the live set: %d vs %d", secondStats.RecordCount, live.RecordCount)
+	}
+	// Compaction is not a growth machine: with no dead records to reclaim it comes out no
+	// larger than the file it read (measured here: about 150 bytes of slack shaved off the
+	// tail). This is the relation a host planning capacity has to know, since the pair
+	// `Stats` answers is a byte count and a record count — no difference between them is a
+	// volume of space.
+	if secondStats.FileBytes > live.FileBytes {
+		t.Fatalf("a compaction of an already-compacted file grew it: %d -> %d bytes", live.FileBytes, secondStats.FileBytes)
+	}
+	t.Logf("second pass on the same live set: %d -> %d bytes, %d records",
+		live.FileBytes, secondStats.FileBytes, secondStats.RecordCount)
 }

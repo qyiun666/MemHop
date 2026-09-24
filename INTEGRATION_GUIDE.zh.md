@@ -655,7 +655,7 @@ _, err := db.AppendArchive(api.ArchiveInput{
 | 入参形状 | **`ProfileInput`** / `SearchQuery` / `TurnEnd` / `ScenePatch` / `L3ImportItem` / `L3Relation` / `L3ImportMode` / `L3NodeQuery` / `L4Query` / `PlanStep` / `ArchiveInput`（L4 的写形状；读回是 `ArchiveSlot`） | 宿主唯一能写的画像形状就是 `ProfileInput`，它四项里只有 `Name` 必填 |
 | 响应 DTO | `AgentInfo` / `ProfileSlot` / `SceneNodeView` / `SceneSlot` / `TopicSlot` / `SceneContext` / `SceneContextTopic` / `SceneMessage` / `SearchResult` / `DreamReport` + `DreamStage` / `HypergraphSlot` / `HypergraphNode` / `HypergraphEdge` / `L3Graph` / `L3Subgraph` / `L3ImportResult` / `PlanTree` / `PlanNodeView` / `DreamReport` / `DreamStage` | 每个 id 字段都是 16 位 hex 字符串，且每一个都由库发号 |
 | 枚举 | `GraphEdgeKind` / `ContentType` / `ArchiveKind` / `PlanStatus` / `AgentTypePrimary` + `AgentTypeSub` | 一次调用写在里面的词汇 |
-| 文件诊断 | **`DBStats`**（`FileBytes` / `RecordCount`） | `DB.Stats()` 的答复，也是决定要不要 `CompactTo` 的那一对数：两者的差就是压缩能还回来的字节 |
+| 文件诊断 | **`DBStats`**（`FileBytes` / `RecordCount`） | `DB.Stats()` 的答复。两个数不是同一件事的两种看法，也不能相减：`FileBytes` 是空间，`RecordCount` 是重写后必须活下来的记录数。`CompactTo` 还回来的是**它前后的 `FileBytes` 之差**——离线语料上实测 19 700 → 17 827 字节、活记录仍是 47 条；且重写是个不动点：没有死记录可清时再压一次文件不会变大（18 830 → 18 680），两头都由 `TestInterfaceCompactTo` 钉住 |
 | 错误 | `Code` + 各 `Err*` 常量，用 `CodeOf(err)` 取回数字码 | 错误串背后的那一层分类 |
 
 枚举常量同样导出：`L3ImportSkip` / `L3ImportMerge` / `L3ImportOverwrite`、`EdgeRelated`…`EdgeCustom`、

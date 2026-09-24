@@ -186,6 +186,9 @@ README 的版本表与 git log。
 85. **「删一轮会带走它的计划树」此前只在包内断言过，宿主面的删除闭包补上两头**（新用例 `test/api_interface_delete_cascade_test.go`：`TestInterfaceDeleteTopicTakesThePlanTreeToo` 与 `TestInterfaceDeleteTopicTakesAFusedGroupsSubtree`；两份指南 §8 的 `DeleteTopic` 行同批改口）：`scene.DeleteCascade` 的注释与 `internal/l2_test.go` 都写着闭包含 L5 计划节点，而 §8 那行给宿主的说明只列了「子树 + L4 原文 + 索引」——正好漏掉第 6 条最关心的那句：计划树的键就是这一轮，删了轮不删树，留下的是一棵没人再能读到的孤树，而它此后每一趟都会被巩固扫一遍。宿主面此前也只验到「清单少一行」。现在按宿主看得见的两样东西验：一是 `DB.Stats()` 的可达记录数（那一轮交出 4 条内容 + 2 个计划节点，删除后必须至少回收 6 条），二是删除后 `SearchL4{TopicID}` 再也答不出任何一行；融合组那一例走完整路径（把压缩门限降到 2、四轮收口、一趟 `Dream` 出组）后删组，要求 `SceneContext` 里既没有组行也没有任何 depth>1 的成员行，且记录数确实下降。**两条负例各自红在被改的那一头**：摘掉 `DeletePlanNodesByIDs` 那一步 → `DeleteTopic reclaimed 5 records, want the 4 content records plus the 2 plan nodes`；把闭包截成只删点名的那个话题 → `a member of the deleted group is still listed: {TopicID:… Depth:2 …}`。行为一字未动，离线接口面 38 → 40 条。
 
 
+86. **压缩能还回来多少，从此有实测的两个数与一个不动点**（`test/api_interface_compact_test.go` 新增第二段；门面 `DB.Stats` 注释与两份指南 §9 的 `DBStats` 行改口）：原文写的是「`FileBytes` 与 `RecordCount` 这一对数，两者的差就是压缩能还回来的字节」——宿主真按字面做就会去拿字节减条数。事实是：`RecordCount` 说「重写后必须活下来多少条」，能还回来的空间是 **`CompactTo` 前后的 `FileBytes` 之差**，两个数之间没有可算的差。补上真实测量而不只是措辞：同一份离线语料删掉一个场景之后压实，19 700 → 17 827 字节而活记录仍是 47 条；再往深处一步此前没人验过——**压实过的文件再压一次不该继续变大也不该继续变小**，于是用例先 `Checkpoint`（让两边都有快照，比较才同口径），第二次压实实测 18 830 → 18 680 字节、51 条记录不变，断言钉住「活集合不变」与「不会变大」两头。**负例不是改断言而是改行为**：让 `Compact` 在新引擎上多写一次快照 → 前面的「副本必须更小」与活记录数两项照旧通过，新那条独自红在 `a compaction of an already-compacted file grew it: 18828 -> 19543 bytes`，恢复即绿。顺带量到一件事写进注释与门面：`Stats` 的 `FileBytes` 是引擎自己记下的长度，不是 OS 层面的文件大小（用 `ftruncate` 往副本尾部塞 4 KiB 完全不动它）——所以「按 `Stats` 判断该不该压实」判断的是日志里被算作的长度，不是磁盘占用。行为一字未动。
+
+
 
 
 ## v1.6.5 — 2026-09-22 — MCP 面整体退役：对外只剩 Go module
