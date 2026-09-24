@@ -223,7 +223,7 @@ No `ctx` parameter — the read path holds no cancellable LLM or network work �
 | Field | Content | Host use |
 |---|---|---|
 | `Profile` | L0 profile snapshot | can go into the system prompt |
-| `ProfileBrief` | the profile as a **bounded** digest: at most 6 lines, every free-text field capped at 160 runes (a truncated one ends in `…`), the 5 lowest preference keys, in that order, and 2100 runes as the ceiling it never exceeds | light per-turn injection; fetch full `Profile` only when needed |
+| `ProfileBrief` | the profile as a **bounded** digest: at most 6 lines, every free-text field capped at 160 runes and each preference value at 120 (a truncated one ends in `…`), the 5 lowest preference keys, in that order, and 2100 runes as the ceiling it never exceeds | light per-turn injection; fetch full `Profile` only when needed |
 | `Scene` | the scene just read (`SceneID` / `SceneName` / `L3ID`) | read-side and corrections only — `SceneContext`, `UpdateScene`, `MergeScenes` take it; the write path never needs it, the library holds the open scene |
 | `Topics` | the scene's depth-1 topics in user-timestamp order, each with its `FusedKeywords` | **the memory injected into this turn's prompt**; originals are addressed by a turn's own topic id — `SearchL4(L4Query{TopicID})` |
 | `NewTopicID` | the topic this read opened for the turn about to run | the read/correction key for this turn's content (`SearchL4{TopicID}`, `DeleteTopic`); the write calls (`AppendArchive`, `Update`, the plan family) do **not** take it — the library holds the open turn |

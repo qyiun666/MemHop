@@ -185,7 +185,7 @@ res, err := db.Search(api.SearchQuery{
 | 字段 | 内容 | 宿主用途 |
 |---|---|---|
 | `Profile` | L0 画像快照（名字/角色/性格/情绪/MBTI/偏好） | 可拼入系统提示词 |
-| `ProfileBrief` | 画像的**有界**摘要：最多 6 行，每个自由文本字段截到 160 字（截过就以 `…` 结尾），偏好取**排序后最低的 5 条**（每次都是同样那 5 条），整段上界 2100 字 | 轻量按轮注入；需要时才拉完整 `Profile` |
+| `ProfileBrief` | 画像的**有界**摘要：最多 6 行，每个自由文本字段截到 160 字、每条偏好的值截到 120 字（截过就以 `…` 结尾），偏好取**排序后最低的 5 条**（每次都是同样那 5 条），整段上界 2100 字 | 轻量按轮注入；需要时才拉完整 `Profile` |
 | `Scene` | 本轮读到的场景本体（含 `SceneID`/`SceneName`/`L3ID`） | 只供读侧与纠错侧——`SceneContext`、`UpdateScene`、`MergeScenes` 用它；写入路径不需要它，库自持当前场景 |
 | `Topics` | 该场景的 depth-1 话题集（按用户消息时间升序，每个带 `FusedKeywords`） | **拼进本次 LLM prompt 的记忆**；要看原文，用那一轮的话题 id 寻址 L4：`SearchL4(L4Query{TopicID})` |
 | `NewTopicID` | 这次读取为即将进行的这一轮开出的话题 | 这一轮内容的读/纠错键（`SearchL4{TopicID}`、`DeleteTopic`）；写入调用（`AppendArchive`、`Update`、计划族）**不**收它——库自持开着的这一轮 |

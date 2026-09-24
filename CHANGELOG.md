@@ -171,6 +171,8 @@ README 的版本表与 git log。
 
 80. **指南里那几个「有多少个方法」的数字第一次由代码算**（新门禁 `api/surface_tool_map_test.go` 的 `TestGuideFaceCountsMatchTheMethodSet`）：宿主文档里有四个纯散文数字——会话方法总数 26、按使用者分成任务面 18 与管理面 8、文件级 `api.DB` 的 9。它们此前没有任何检查：公开面加一个方法时，`surface_public_test.go` 的清单会红、工具表那几条门禁会红，**而指南里写着的「18」不会**——正是「文档说的数与表面的数各说一套」这一类里最省事的漏法。新门禁把四个数全部反射出来再比对：`Session`/`DB` 的导出方法集给出 26 与 9，`adminFace` 名单给出 8，任务面 = 26 − 8 = 18 并且必须等于工具表的行数（与既有那条断言同源，三处不可能同时自欺）。它不止比数字：还把两份指南那两条 bullet 里反引号点出的方法名**逐个收出来**，要求任务面那条列出 18 个、管理面那条列出 8 个、两边不重叠、并集正好盖住整个 `Session` 表面——「数字对但清单少一个」同样红。**两条负例各自红在对应断言上**：把 `Runtime/task face (18)` 改成 19 → `the guide states 19 task-face methods, the surface holds 18`；从任务面那条 bullet 里删掉 `ListL1` → 一次两条 `the task-face bullet names 17 methods, want 18` 与 `no face lists Session.ListL1`。中英两份同受管（各自的中文措辞 `任务面（N 个）` 等各有匹配式）。行为一字未动，公开面与磁盘格式未动。
 
+81. **宿主文档里那八个「尺寸与上限」数字全部改成由代码算**（两个新门禁 `TestGuideStatesTheBriefsOwnNumbers`、`TestGuideStatesTheNumbersTheCodeRefuses`；`internal/cap/profile/profile.go` 把最后两个裸字面量收成 `briefValueMaxRunes` / `briefPreferencesShown`；顺带改准一处真说错的数）：这一类数字此前只有代码那头有断言，指南那头是散文——`ProfileBrief` 的「6 行 / 字段 160 字 / 取最低 5 条 / 整段上界 2100 字」与旋钮表的「默认 604800000 ms（7 天）/ 保留窗最长 9223372036854 ms / 超时最长 9223372036 s」。上界那两个尤其危险：它们就是**引擎会拒的值**，改日常量而文档不动，宿主照表填的数会当场把 `Open` 打回。新门禁按短语逐个抓数再与常量比：行数不写死，由 `Brief(全量画像)` 现数出来；两个语言各按自己的措辞（`at most N lines` / `最多 N 行` 等）受管。**顺手改准的一处真错**：两份指南都写着「每个自由文本字段截到 160 字」，而偏好的**值**其实截到 120——按 160 估预算的宿主会高估每一条偏好；两处行与 `internal/cap/agent.md` 同一句一并改准，并把四个常量点名句内。**两条负例各自红在被改的那一个数上**：EN 保留窗上界多一毫秒 → `the guide states 9223372036855 for the retention ceiling, the code refuses past 9223372036854`；ZH 整段上界改成 2200 → `the guide states 2200 for the 整段上界, the code gives 2100`。行为一字未动，公开面与磁盘格式未动。
+
 
 
 

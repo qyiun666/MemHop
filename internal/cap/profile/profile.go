@@ -26,6 +26,14 @@ const briefFieldMaxRunes = 160
 // five preference pairs at the key and value caps, and the emotion line.
 const briefWorstCaseRunes = 2100
 
+// briefValueMaxRunes and briefPreferencesShown are the other two numbers the guides
+// quote about this digest: how long one preference value may get, and how many pairs
+// a profile with more of them still shows.
+const (
+	briefValueMaxRunes    = 120
+	briefPreferencesShown = 5
+)
+
 // Brief renders a compact profile digest for prompt injection: identity,
 // personality, MBTI, top preferences and the current emotional state. Every field it
 // carries is bounded — one budget per free-text value, five preferences — because a
@@ -54,7 +62,7 @@ func Brief(slot core.ProfileSlot) string {
 	}
 	if len(slot.Preferences) > 0 {
 		b.WriteString("preferences: ")
-		writeKV(&b, slot.Preferences, 5)
+		writeKV(&b, slot.Preferences, briefPreferencesShown)
 		b.WriteByte('\n')
 	}
 	if slot.EmotionState != (core.EmotionScore{}) {
@@ -75,7 +83,7 @@ func writeKV(b *strings.Builder, m map[string]string, max int) {
 		if i > 0 {
 			b.WriteString(", ")
 		}
-		fmt.Fprintf(b, "%s=%s", truncateRunes(k, briefFieldMaxRunes), truncateRunes(m[k], 120))
+		fmt.Fprintf(b, "%s=%s", truncateRunes(k, briefFieldMaxRunes), truncateRunes(m[k], briefValueMaxRunes))
 	}
 }
 
