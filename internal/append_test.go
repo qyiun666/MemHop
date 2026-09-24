@@ -16,7 +16,7 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
-func utterance(seq uint64, role uint8, text string, ts int64) core.ArchiveSlot {
+func utterance(seq uint64, role core.ArchiveRole, text string, ts int64) core.ArchiveSlot {
 	return core.ArchiveSlot{
 		Kind: core.KindUtterance, Seq: seq, Role: role, Content: text, CreatedAt: ts,
 	}

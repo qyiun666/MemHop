@@ -37,7 +37,9 @@
 - `Kind` 决定采信哪一组字段：原文侧照收 `Role` 与 `ContentType`；事件侧 `Kind` 恒为
   event、`ContentType` 恒为 text、`Role` 恒为 0——说了发生了什么的东西没有说话者，
   也没有媒介。越界的轴是**拒**的：原文带 `EventType` 或 `NodeSeq`、或自称
-  `RoleDream`（库给融合摘要盖的标记），都是 `ErrInvalidQuery`。被丢弃的那些字段
+  `RoleDream`（库给融合摘要盖的标记），都是 `ErrInvalidQuery`。`Role` 的两问分开答：
+  「词表里有没有这个数字」由 `core.ArchiveRole.Valid()` 判（读那张名字表），「这个词
+  轮不轮到调用方写」由本包点名那三个——两者要改的不是同一处。被丢弃的那些字段
   因此不产生分叉，不必为它增设校验分支。
 - `Seq` 是一个话题内跨 Kind 共享的单一空间：显式 `Seq=0` 才分配，且
   `seq = max(话题现有 Seq, 2) + 1`。下限 2 是给对话预留的位置：无论先记事件还是

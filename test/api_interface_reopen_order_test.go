@@ -59,9 +59,9 @@ func TestInterfaceReadsSurviveAReopenByteForByte(t *testing.T) {
 				}
 			}
 			for _, in := range []memhop.ArchiveInput{
-				{Kind: memhop.KindUtterance, ContentType: memhop.ContentText, Role: uint8(memhop.RoleUser),
+				{Kind: memhop.KindUtterance, ContentType: memhop.ContentText, Role: memhop.RoleUser,
 					CreatedAt: stamp, Content: "does the index order survive a restart?"},
-				{Kind: memhop.KindUtterance, ContentType: memhop.ContentText, Role: uint8(memhop.RoleAgent),
+				{Kind: memhop.KindUtterance, ContentType: memhop.ContentText, Role: memhop.RoleAgent,
 					CreatedAt: stamp + 10, Content: "it must"},
 				{Kind: memhop.KindEvent, ContentType: memhop.ContentText, EventType: "tool_call",
 					NodeSeq: 2, CreatedAt: stamp + 20, Content: "grep index"},

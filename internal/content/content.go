@@ -76,6 +76,11 @@ func ValidateAppend(in core.ArchiveSlot) error {
 	switch in.Role {
 	case core.RoleUser, core.RoleAgent, core.RoleSystem:
 	default:
+		// Two ways to get here, and they want different answers: a number the
+		// vocabulary never heard of, or a defined role that is not a host's to claim.
+		if !in.Role.Valid() {
+			return common.NewError(common.ErrInvalidQuery, "undefined content role")
+		}
 		return common.NewError(common.ErrInvalidQuery,
 			"an utterance speaks as user, agent or system")
 	}
@@ -214,7 +219,10 @@ func RenderForDistill(utterances []core.ArchiveSlot) string {
 	return b.String()
 }
 
-func speaker(role uint8) string {
+// The three roles a host may declare are the whole set this reaches: an update settles
+// a turn's own utterances, and a fused group's summary — the one record carrying
+// RoleDream — rides a topic that never settles.
+func speaker(role core.ArchiveRole) string {
 	switch role {
 	case core.RoleAgent:
 		return "Assistant"

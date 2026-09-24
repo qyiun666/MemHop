@@ -6,15 +6,16 @@ package api
 import (
 	"os"
 	"regexp"
+	"strings"
 	"testing"
 )
 
-// The vocabularies on this surface come in two wire forms: three enums travel as their
-// numbers (content medium, archive kind, L3 edge kind) and two as words (a plan step's
-// status, an import's conflict mode). A host writing a tool schema for a model has to know
-// which is which and what the whole set of values is, and it has to be able to trust that
-// the guide still says so — so the tables below are checked against the code and against
-// both guides, one place each.
+// The vocabularies on this surface come in two wire forms: four enums travel as their
+// numbers (content medium, archive kind, utterance speaker, L3 edge kind) and two as words
+// (a plan step's status, an import's conflict mode). A host writing a tool schema for a
+// model has to know which is which and what the whole set of values is, and it has to be
+// able to trust that the guide still says so — so the tables below are checked against the
+// code and against both guides, one place each.
 
 var snakeKey = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
@@ -51,6 +52,10 @@ func TestEnumVocabulariesAreWhatTheGuidesSay(t *testing.T) {
 		"ArchiveKind": {
 			{"KindUtterance", "utterance", "0"}, {"KindEvent", "event", "1"},
 		},
+		"ArchiveRole": {
+			{"RoleUser", "user", "0"}, {"RoleAgent", "agent", "1"}, {"RoleSystem", "system", "2"},
+			{"RoleDream", "dream", "3"},
+		},
 		"GraphEdgeKind": {
 			{"EdgeRelated", "related", "0"}, {"EdgeCausal", "causal", "1"}, {"EdgePartOf", "part_of", "2"},
 			{"EdgeSequence", "sequence", "3"}, {"EdgeDependency", "dependency", "4"}, {"EdgeCustom", "custom", "5"},
@@ -78,27 +83,92 @@ func TestEnumVocabulariesAreWhatTheGuidesSay(t *testing.T) {
 		}
 	}
 
-	// Every name above has to appear in both guides: the table is the host's answer for
-	// a tool schema, and a guide that dropped a word is a guide that no longer answers.
+	// Every vocabulary above has to hold a row of the guides' own table, carrying every
+	// value: the table is the host's answer for a tool schema. Probing the document for
+	// the words is not that check — `dream` also lives inside the `memory_dream` tool
+	// name, so a table that lost a row could still read as complete.
+	wordRows := map[string][]string{
+		"status": {"in_progress", "done", "failed"},
+		"mode":   {"skip", "merge", "overwrite"},
+	}
 	for _, path := range []string{"../INTEGRATION_GUIDE.md", "../INTEGRATION_GUIDE.zh.md"} {
 		raw, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatalf("read %s: %v", path, err)
 		}
-		text := string(raw)
-		for _, word := range []string{"in_progress", "done", "failed", "skip", "merge", "overwrite",
-			"utterance", "text", "image", "video", "document", "audio", "code", "other",
-			"part_of", "sequence", "dependency", "causal", "custom"} {
-			// Whole words only: `merge` inside the identifier `L3ImportMerge` is a Go
-			// name, not a host being told what value to send.
-			if !regexp.MustCompile(`\b` + word + `\b`).MatchString(text) {
-				t.Errorf("%s no longer names the value %q as a word", path, word)
+		guideRows := enumTableRows(t, string(raw))
+		for enum, rows := range tables {
+			cell, listed := guideRows[enum]
+			if !listed {
+				t.Errorf("%s vocabulary table has no %s row", path, enum)
+				continue
+			}
+			for _, r := range rows {
+				if !strings.Contains(cell, "`"+r.number+"`") || !strings.Contains(cell, r.value) {
+					t.Errorf("%s: the %s row does not carry %s = %q over the wire as %s",
+						path, enum, r.name, r.value, r.number)
+				}
+			}
+		}
+		for field, words := range wordRows {
+			cell, listed := guideRows[field]
+			if !listed {
+				t.Errorf("%s vocabulary table has no %s row", path, field)
+				continue
+			}
+			for _, w := range words {
+				if !strings.Contains(cell, "`"+w+"`") {
+					t.Errorf("%s: the %s row no longer spells the value %q", path, field, w)
+				}
 			}
 		}
 	}
 }
 
-// enumValue reads one named constant of one of the three numeric enums, so the table
+// enumTableRows reads the guide's vocabulary table — the one after the `enum-wire-table`
+// marker — into its first-column name mapped to the cell listing its values.
+func enumTableRows(tb testing.TB, text string) map[string]string {
+	tb.Helper()
+	at := strings.Index(text, "`enum-wire-table`")
+	if at < 0 {
+		tb.Fatal("the guide no longer marks its vocabulary table")
+	}
+	rows := map[string]string{}
+	for _, line := range strings.Split(text[at:], "\n") {
+		if !strings.HasPrefix(line, "|") {
+			if len(rows) > 0 {
+				break
+			}
+			continue
+		}
+		cells := strings.Split(line, "|")
+		if len(cells) < 4 {
+			continue
+		}
+		if name := firstBackticked(cells[1]); name != "" {
+			rows[name] = cells[3]
+		}
+	}
+	if len(rows) == 0 {
+		tb.Fatal("no table rows follow the vocabulary marker")
+	}
+	return rows
+}
+
+func firstBackticked(cell string) string {
+	open := strings.Index(cell, "`")
+	if open < 0 {
+		return ""
+	}
+	rest := cell[open+1:]
+	end := strings.Index(rest, "`")
+	if end < 0 {
+		return ""
+	}
+	return rest[:end]
+}
+
+// enumValue reads one named constant of one of the four numeric enums, so the table
 // above stays the only place their values are written down.
 func enumValue(tb testing.TB, enum, name string) interface {
 	String() string
@@ -124,6 +194,14 @@ func enumValue(tb testing.TB, enum, name string) interface {
 		return KindUtterance
 	case "ArchiveKind.KindEvent":
 		return KindEvent
+	case "ArchiveRole.RoleUser":
+		return RoleUser
+	case "ArchiveRole.RoleAgent":
+		return RoleAgent
+	case "ArchiveRole.RoleSystem":
+		return RoleSystem
+	case "ArchiveRole.RoleDream":
+		return RoleDream
 	case "GraphEdgeKind.EdgeRelated":
 		return EdgeRelated
 	case "GraphEdgeKind.EdgeCausal":
@@ -152,6 +230,8 @@ func enumMax(tb testing.TB, enum string) interface {
 		return ContentType(6)
 	case "ArchiveKind":
 		return ArchiveKind(2)
+	case "ArchiveRole":
+		return ArchiveRole(4)
 	case "GraphEdgeKind":
 		return GraphEdgeKind(6)
 	}

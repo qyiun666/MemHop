@@ -1,9 +1,9 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// Enumerations of the data model: the content medium and archive kind an L4
-// record carries, and the relation kind an L3 edge carries, each with its string
-// form. Slot structures live in model.go.
+// Enumerations of the data model: the content medium, the archive kind and the
+// speaker an L4 record carries, and the relation kind an L3 edge carries, each with
+// its string form. Slot structures live in model.go.
 package core
 
 import "github.com/qyiun666/MemHop/internal/common"
@@ -55,6 +55,31 @@ func (k ArchiveKind) String() string { return common.EnumString(k, archiveKindNa
 // Valid reports whether k is a defined archive kind, read off the names table.
 func (k ArchiveKind) Valid() bool {
 	_, ok := archiveKindNames[k]
+	return ok
+}
+
+// ArchiveRole says who spoke an L4 utterance. An event record leaves it 0 — Role
+// qualifies an utterance only, and 0 is RoleUser, so on an event the number carries
+// no claim. RoleDream is the library's own mark on a fused group's summary.
+type ArchiveRole uint8
+
+const (
+	RoleUser   ArchiveRole = 0
+	RoleAgent  ArchiveRole = 1
+	RoleSystem ArchiveRole = 2
+	RoleDream  ArchiveRole = 3
+)
+
+var archiveRoleNames = map[ArchiveRole]string{
+	RoleUser: "user", RoleAgent: "agent", RoleSystem: "system", RoleDream: "dream",
+}
+
+func (r ArchiveRole) String() string { return common.EnumString(r, archiveRoleNames, "ArchiveRole") }
+
+// Valid reports whether r is a defined role, read off the names table so adding a
+// role needs no second edit here.
+func (r ArchiveRole) Valid() bool {
+	_, ok := archiveRoleNames[r]
 	return ok
 }
 

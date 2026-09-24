@@ -389,19 +389,21 @@ worker 属于哪一种由宿主定，库不替它猜。
 
 ### 7.6 几套词表各自怎么走
 
-给模型写工具 schema 必须先定「允许哪些值」，而这面接口里有两套词表走字符串、三套走数字。
-这里没有含糊的地方：加一个值就要改这张表，改漏了 `api/surface_enums_test.go` 会红（它同时
-要求两份指南都把这些词写全）。
+给模型写工具 schema 必须先定「允许哪些值」，而这面接口里有两套词表走字符串、四套走数字。
+这里没有含糊的地方：加一个值就要改这张表（`enum-wire-table`），改漏了
+`api/surface_enums_test.go` 会红——它是逐行核的，所以表里少了一行、或整套词表没了，
+哪怕这些词在别处还留着，也照样红。
 
 | 词表 | 线上形态 | 取值（宿主读到的词 ← JSON 里带的东西） |
 |---|---|---|
 | 计划步骤的 `status` | 字符串 | `in_progress`、`done`、`failed` |
 | 导入的 `mode` | 字符串 | `skip`、`merge`、`overwrite` |
 | `ArchiveKind`（`kind`） | 数字 | `0` = utterance，`1` = event |
+| `ArchiveRole`（`role`） | 数字 | `0` user，`1` agent，`2` system，`3` dream——最后一个是库自己在巩固组摘要上盖的记号，`AppendArchive` 拒收 |
 | `ContentType`（`content_type`、`type`） | 数字 | `0` text，`1` image，`2` video，`3` document，`4` audio，`5` code，`255` other |
 | `GraphEdgeKind`（关系里的 `kind`） | 数字 | `0` related，`1` causal，`2` part_of，`3` sequence，`4` dependency，`5` custom |
 
-那三套数字型的词表通过 `String()` 读出上面这些词（并且多出一档的取值会被拒，不会被读成「没设」），
+那四套数字型的词表通过 `String()` 读出上面这些词（并且多出一档的取值会被拒，不会被读成「没设」），
 所以模型给的词与调用带的数字之间就是宿主侧一小张映射表——这份映射归宿主，因为引擎除了校验取值
 以外不按任何词表名分支。
 
@@ -593,7 +595,7 @@ arcs, err := db.SearchL4(api.L4Query{
 `ArchiveInput` 是写入侧的形状：`Kind`、`Seq`、`ContentType`、`Role`、`EventType`、`NodeSeq`、
 `CreatedAt`、`Content`——没有 `ID` 也没有 `TopicID`。一条记录属于哪一轮由库自持（是 `Search` 铸的
 键），所以把读回的一条原样递回来写时，它没有地方声称自己的出处。存下之后同一个形状叫
-`ArchiveSlot`，它带 `Kind`（原文 / 事件）、`Seq`、`ContentType`（text/image/video/document/audio/code/other）、`Role`（`RoleUser` / `RoleAgent` / `RoleSystem`，另加 `RoleDream`——那是库盖在巩固组摘要上的标记，读得到、追加时被拒）、`TopicID`、`CreatedAt`、`Content`——媒体类型的 `Content` 是路径或 URI，不是二进制。每个查询字段都可选，填了的条件之间是 **AND** 关系——不分「三种模式」。顺序看查询宽度：填了 `TopicID` 按该轮内 `Seq` 升序，跨轮读取按记录自己的 `CreatedAt` 升序、同值以记录 id 收尾，`Limit` 保留该顺序末尾的 N 条。所以宿主最常用的读取各一次就够：`SearchL4(L4Query{TopicID: &topicID, Kind: &utterance})` 拿这一轮说了什么，换成 `&event` 拿做了什么，`Kind` 不填即两种都要；`NodeSeq` 只取归因到某个计划步骤**及其全部子步**的记录（闭包沿父子链接求出——序号是整数，没有前缀形状可匹配；步骤是轮次内的地址，因此必须与 `TopicID` 同填），于是一步做过什么能单独读回，不必先把整轮拉回来。
+`ArchiveSlot`，它带 `Kind`（原文 / 事件）、`Seq`、`ContentType`（text/image/video/document/audio/code/other）、`Role`（`api.ArchiveRole`：`RoleUser` / `RoleAgent` / `RoleSystem`，另加 `RoleDream`——那是库盖在巩固组摘要上的标记，读得到、追加时被拒）、`TopicID`、`CreatedAt`、`Content`——媒体类型的 `Content` 是路径或 URI，不是二进制。每个查询字段都可选，填了的条件之间是 **AND** 关系——不分「三种模式」。顺序看查询宽度：填了 `TopicID` 按该轮内 `Seq` 升序，跨轮读取按记录自己的 `CreatedAt` 升序、同值以记录 id 收尾，`Limit` 保留该顺序末尾的 N 条。所以宿主最常用的读取各一次就够：`SearchL4(L4Query{TopicID: &topicID, Kind: &utterance})` 拿这一轮说了什么，换成 `&event` 拿做了什么，`Kind` 不填即两种都要；`NodeSeq` 只取归因到某个计划步骤**及其全部子步**的记录（闭包沿父子链接求出——序号是整数，没有前缀形状可匹配；步骤是轮次内的地址，因此必须与 `TopicID` 同填），于是一步做过什么能单独读回，不必先把整轮拉回来。
 `L4Query{IDs: []string{id}}` 取代原来的单条 getter（ID 不存在返回空列表，格式不合法返回 `ErrInvalidQuery`）；
 空查询返回该域全部原文——域大了请先加时间范围或 `Limit`，否则这就是文件里的每一条原文。
 
@@ -660,7 +662,7 @@ _, err := db.AppendArchive(api.ArchiveInput{
 | 配置 | **`LlmConfig`** / `MemHopDefaults` + `DefaultMemHopDefaults` | `Open` 要的端点与调参入参 |
 | 入参形状 | **`ProfileInput`** / `SearchQuery` / `TurnEnd` / `ScenePatch` / `L3ImportItem` / `L3Relation` / `L3ImportMode` / `L3NodeQuery` / `L4Query` / `PlanStep` / `ArchiveInput`（L4 的写形状；读回是 `ArchiveSlot`） | 宿主唯一能写的画像形状就是 `ProfileInput`，它四项里只有 `Name` 必填 |
 | 响应 DTO | `AgentInfo` / `ProfileSlot` / `SceneNodeView` / `SceneSlot` / `TopicSlot` / `SceneContext` / `SceneContextTopic` / `SceneMessage` / `SearchResult` / `DreamReport` + `DreamStage` / `HypergraphSlot` / `HypergraphNode` / `HypergraphEdge` / `L3Graph` / `L3Subgraph` / `L3ImportResult` / `PlanTree` / `PlanNodeView` / `DreamReport` / `DreamStage` | 每个 id 字段都是 16 位 hex 字符串，且每一个都由库发号 |
-| 枚举 | `GraphEdgeKind` / `ContentType` / `ArchiveKind` / `PlanStatus` / `AgentTypePrimary` + `AgentTypeSub` | 一次调用写在里面的词汇 |
+| 枚举 | `GraphEdgeKind` / `ContentType` / `ArchiveKind` / `ArchiveRole` / `PlanStatus` / `AgentTypePrimary` + `AgentTypeSub` | 一次调用写在里面的词汇 |
 | 文件诊断 | **`DBStats`**（`FileBytes` / `RecordCount`） | `DB.Stats()` 的答复。两个数不是同一件事的两种看法，也不能相减：`FileBytes` 是空间，`RecordCount` 是重写后必须活下来的记录数。`CompactTo` 还回来的是**它前后的 `FileBytes` 之差**——离线语料上实测 19 700 → 17 827 字节、活记录仍是 47 条；且重写是个不动点：没有死记录可清时再压一次文件不会变大（18 830 → 18 680），两头都由 `TestInterfaceCompactTo` 钉住 |
 | 错误 | `Code` + 各 `Err*` 常量，用 `CodeOf(err)` 取回数字码 | 错误串背后的那一层分类 |
 

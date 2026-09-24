@@ -37,7 +37,7 @@ func TestEveryCallAnswersErrClosedAfterClose(t *testing.T) {
 	}
 	sceneID, topicID := searched.Scene.SceneID, searched.NewTopicID
 	if _, err := sess.AppendArchive(ArchiveInput{
-		Kind: KindUtterance, Role: uint8(RoleUser), ContentType: ContentText,
+		Kind: KindUtterance, Role: RoleUser, ContentType: ContentText,
 		Content: "hello", CreatedAt: 1_770_000_000_000,
 	}); err != nil {
 		t.Fatalf("AppendArchive: %v", err)

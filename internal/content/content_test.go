@@ -64,6 +64,21 @@ func TestValidateAppendRefusals(t *testing.T) {
 			t.Errorf("valid record %+v refused: %v", ok, err)
 		}
 	}
+	// The two role refusals answer different questions — a number nobody named, or a
+	// defined role that is not the caller's to claim — so each has to say which.
+	for _, tc := range []struct {
+		in   core.ArchiveSlot
+		want string
+	}{
+		{core.ArchiveSlot{Kind: core.KindUtterance, Role: 77, Content: "c", CreatedAt: 1}, "undefined content role"},
+		{core.ArchiveSlot{Kind: core.KindUtterance, Role: core.RoleDream, Content: "c", CreatedAt: 1},
+			"an utterance speaks as user, agent or system"},
+	} {
+		err := ValidateAppend(tc.in)
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("role refusal = %v, want it to say %q", err, tc.want)
+		}
+	}
 }
 
 // The transcript a distillation reads is the topic's own content in slot order,

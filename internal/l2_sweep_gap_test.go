@@ -42,7 +42,7 @@ func TestSweepKeepsEverySurvivorAtItsOwnSeq(t *testing.T) {
 		}
 	}
 	if _, err := db.AppendArchive(core.DefaultAgentID, core.ArchiveSlot{
-		Kind: core.KindUtterance, Seq: 9, ContentType: core.ContentText, Role: uint8(core.RoleUser),
+		Kind: core.KindUtterance, Seq: 9, ContentType: core.ContentText, Role: core.RoleUser,
 		Content: "a note that will age out", CreatedAt: 1000,
 	}); err != nil {
 		t.Fatalf("append the extra utterance: %v", err)

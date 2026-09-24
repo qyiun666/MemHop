@@ -491,7 +491,7 @@ func TestUpdateWritesTheTurnEndItIsGiven(t *testing.T) {
 	}
 	for i, want := range []struct {
 		seq  uint64
-		role uint8
+		role ArchiveRole
 		text string
 	}{{1, RoleUser, "要不要用 mmap"}, {2, RoleAgent, "用，读路径零拷贝"}} {
 		got := utterances[i]

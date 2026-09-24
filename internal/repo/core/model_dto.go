@@ -52,7 +52,7 @@ type TurnEnd struct {
 // reclaimed utterance is one such reason, a legal end state for a turn, not a
 // read that lost a line.
 type SceneMessage struct {
-	Role      uint8       `json:"role"`
+	Role      ArchiveRole `json:"role"`
 	Type      ContentType `json:"type"`
 	Content   string      `json:"content"`
 	Seq       uint64      `json:"seq"`

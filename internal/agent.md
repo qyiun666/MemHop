@@ -302,7 +302,7 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    走同一道 `content.ValidateAppend`，它不给自己开后门）：原文侧照收
    `Role`（user/agent/system）与 `ContentType`（零值 `ContentText`，非文本侧存
    路径/URL），未定义值以 `ErrInvalidQuery` 拒绝；`RoleDream` 是库给融合摘要
-   自己盖的标记，公开常量里没有它、append 也拒它，否则宿主能伪造巩固产物。
+   自己盖的标记：名字出得去（读侧得能认出哪一句是库写的），写侧拒收，否则宿主能伪造巩固产物。
    事件侧不接受这两项：`content.Append` 一律写 `Kind=event` + `ContentText` +
    `Role=0`，宿主在事件上给的 `Role`/`ContentType`/`TopicID`/`IDHash`
    一律不被采信（`TestAppendEventCannotForgeContentFields`）。

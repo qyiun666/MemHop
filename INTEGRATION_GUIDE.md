@@ -513,26 +513,30 @@ crystallization call.
 The write side owns the axes: content type (`text`/`image`/`video`/`document`/`audio`/
 `code`/`other`) and speaker are declared per record by `AppendArchive` and reported
 back verbatim (`ArchiveSlot.ContentType`, `L4Query.Type`, `SceneContext`'s
-`Messages[].Type`); an undefined value is refused rather than stored. Dream's fused
-summary is the one record whose type and role the library fixes — `text`, role 3.
+`Messages[].Type`); an undefined value is refused rather than stored. The speaker is an
+`api.ArchiveRole`. Dream's fused summary is the one record whose type and role the library
+fixes — `text`, role 3.
 
 ---
 
 ### 7.6 The vocabularies and how they travel
 
 A tool schema has to promise a value set, and this surface spells two of its vocabularies as
-words and three as numbers. Nothing here is implicit: adding a value changes this table, and
-`api/surface_enums_test.go` fails until the guides say it too.
+words and four as numbers. Nothing here is implicit: adding a value changes this table
+(`enum-wire-table`), and `api/surface_enums_test.go` fails until both guides say it too —
+the check is row by row, so a table that dropped a value or a whole vocabulary is red even
+though those words still appear somewhere else in the prose.
 
 | vocabulary | on the wire | values (word the host reads ← what JSON carries) |
 |---|---|---|
 | a plan step's `status` | word | `in_progress`, `done`, `failed` |
 | an import's `mode` | word | `skip`, `merge`, `overwrite` |
 | `ArchiveKind` (`kind`) | number | `0` = utterance, `1` = event |
+| `ArchiveRole` (`role`) | number | `0` user, `1` agent, `2` system, `3` dream — the last is the library's own mark, which `AppendArchive` refuses |
 | `ContentType` (`content_type`, `type`) | number | `0` text, `1` image, `2` video, `3` document, `4` audio, `5` code, `255` other |
 | `GraphEdgeKind` (a relation's `kind`) | number | `0` related, `1` causal, `2` part_of, `3` sequence, `4` dependency, `5` custom |
 
-The three numeric ones print those words through `String()` (and refuse one value past the
+The four numeric ones print those words through `String()` (and refuse one value past the
 set rather than reading it as "unset"), so the mapping between a model's word and the number
 a call carries is one small table on the host side — and it is the host's, because the engine
 does not branch on any of these names beyond validation.
@@ -910,7 +914,7 @@ topic id (`SearchL4{TopicID}`, `RenameTopic`, `DeleteTopic`) reject it.
 | config | **`LlmConfig`** / `MemHopDefaults` + `DefaultMemHopDefaults` | the endpoint and tuning arguments `Open` takes |
 | input shapes | **`ProfileInput`** / `SearchQuery` / `TurnEnd` / `ScenePatch` / `L3ImportItem` / `L3Relation` / `L3ImportMode` / `L3NodeQuery` / `L4Query` / `PlanStep` / `ArchiveInput` (the L4 write shape; a read returns `ArchiveSlot`) | inputs; `ProfileInput` is the only profile a host may write, and of its four fields only `Name` is required |
 | response DTOs | `AgentInfo` / `ProfileSlot` / `SceneNodeView` / `SceneSlot` / `TopicSlot` / `SceneContext` / `SceneContextTopic` / `SceneMessage` / `SearchResult` / `DreamReport` + `DreamStage` / `HypergraphSlot` / `HypergraphNode` / `HypergraphEdge` / `L3Graph` / `L3Subgraph` / `L3ImportResult` / `PlanTree` / `PlanNodeView` / `DreamReport` / `DreamStage` | every id field is a 16-char hex string, and every one of them was issued by the library |
-| enums | `GraphEdgeKind` / `ContentType` / `ArchiveKind` / `PlanStatus` / `AgentTypePrimary` + `AgentTypeSub` | the vocabulary a call is written in |
+| enums | `GraphEdgeKind` / `ContentType` / `ArchiveKind` / `ArchiveRole` / `PlanStatus` / `AgentTypePrimary` + `AgentTypeSub` | the vocabulary a call is written in |
 | file diagnostics | **`DBStats`** (`FileBytes` / `RecordCount`) | what `DB.Stats()` answers. Not two views of one number: `FileBytes` is space, `RecordCount` is the live set that must survive a rewrite, and the two are never subtracted from each other. What a `CompactTo` gives back is `FileBytes` before against `FileBytes` after — measured 19 700 → 17 827 bytes on the same 47 live records — and the rewrite is a fixed point: run it again on a file with nothing dead left and it comes out no larger (18 830 → 18 680), which `TestInterfaceCompactTo` holds on both sides |
 | errors | `Code` + the `Err*` constants, read with `CodeOf(err)` | the numeric code behind an error string |
 
@@ -925,13 +929,15 @@ and builds none itself. There is no capability type either — the card format, 
 file layout and its activation are the host's own assets.
 
 
-> A record's kind is `api.KindUtterance` / `api.KindEvent`. L4 `role` is a bare
-> `uint8`, and the three a host may declare on an appended utterance are
+> A record's kind is `api.KindUtterance` / `api.KindEvent`. The speaker of an utterance is
+> `api.ArchiveRole`, and the three a host may declare on an appended one are
 > `api.RoleUser` / `RoleAgent` / `RoleSystem`. The fourth value, `api.RoleDream`, is the
 > library's own mark on a consolidated summary: naming it is how a host tells that summary
 > apart from a turn's own two lines when it renders a prompt, and `AppendArchive` still
 > refuses it, so a host cannot write a record that reads as consolidated. A name is not a
-> write grant — the boundary is.
+> write grant — the boundary is. `role` is that named type on every shape carrying it
+> (`ArchiveInput`, `ArchiveSlot`, `SceneMessage`), so a constant lands with no conversion,
+> and `String()` gives the word a tool schema promises the model.
 > A plan node's status is only ever a string — the `api.PlanStatus*` constants — since
 > the engine assigns a node's state separately from the events bound to it.
 

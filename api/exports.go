@@ -47,6 +47,8 @@ const (
 // and ArchiveSlot.Role carry it on a fused group — and a host choosing what to put in
 // front of the model has to be able to say which line the library wrote. Naming it grants
 // no write ability: the refusal is enforced at the boundary, not by withholding the name.
+// These are values of ArchiveRole, the same type the shapes above declare their field as,
+// so a host assigns one with no conversion.
 const (
 	RoleUser   = internal.RoleUser
 	RoleAgent  = internal.RoleAgent

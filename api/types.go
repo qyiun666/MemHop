@@ -109,6 +109,16 @@ type (
 	// ArchiveKind says which of a turn's records an L4 slot is (see KindUtterance and
 	// KindEvent). It is orthogonal to ContentType, which names the medium of the text.
 	ArchiveKind = internal.ArchiveKind
+	// ArchiveRole says who spoke an L4 utterance: RoleUser, RoleAgent or RoleSystem on
+	// a line a host appended, and RoleDream on the one record the library writes — a
+	// fused group's summary. An event leaves it 0, which is RoleUser, because Role
+	// qualifies an utterance and an utterance has a speaker.
+	//
+	// This is a type rather than a bare number so the vocabulary has one home: a host
+	// building a tool schema reads the word for a stored value off String()
+	// ("user"/"agent"/"system"/"dream") instead of writing its own 0-3 table, and
+	// Valid() says whether a number it got from elsewhere is one of these at all.
+	ArchiveRole = internal.ArchiveRole
 )
 
 // ---- response aliases ----
@@ -361,7 +371,7 @@ type ArchiveSlot struct {
 	Kind        ArchiveKind `json:"kind"`
 	Seq         uint64      `json:"seq"`
 	ContentType ContentType `json:"content_type"`
-	Role        uint8       `json:"role"`
+	Role        ArchiveRole `json:"role"`
 	TopicID     string      `json:"topic_id"`
 	EventType   string      `json:"event_type,omitempty"`
 	NodeSeq     uint32      `json:"node_seq,omitempty"`
@@ -384,7 +394,7 @@ type ArchiveInput struct {
 	Kind        ArchiveKind `json:"kind"`
 	Seq         uint64      `json:"seq"`
 	ContentType ContentType `json:"content_type"`
-	Role        uint8       `json:"role"`
+	Role        ArchiveRole `json:"role"`
 	EventType   string      `json:"event_type,omitempty"`
 	NodeSeq     uint32      `json:"node_seq,omitempty"`
 	CreatedAt   int64       `json:"created_at"`

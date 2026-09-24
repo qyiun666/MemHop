@@ -39,6 +39,7 @@ type (
 	HypergraphEdge = core.HypergraphEdge
 	ArchiveSlot    = core.ArchiveSlot
 	ArchiveKind    = core.ArchiveKind
+	ArchiveRole    = core.ArchiveRole
 	GraphEdgeKind  = core.GraphEdgeKind
 	TopicSlot      = core.TopicSlot
 	ContentType    = core.ContentType

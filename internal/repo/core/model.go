@@ -201,17 +201,6 @@ type HypergraphEdge struct {
 	CreatedAt int64         `json:"created_at"`
 }
 
-// Message roles in an ArchiveSlot. An utterance carries one of RoleUser /
-// RoleAgent / RoleSystem; RoleDream is the library's own stamp on a fused group's
-// summary and is never an utterance role. Role qualifies an utterance — an event
-// record leaves it 0.
-const (
-	RoleUser   uint8 = 0
-	RoleAgent  uint8 = 1
-	RoleSystem uint8 = 2
-	RoleDream  uint8 = 3
-)
-
 // Utterances hold Seq 1 and 2 of their topic. Auto-allocation starts above these
 // two slots: a caller records events while the turn runs and appends the
 // originals whenever it chooses, and the dialogue still lands on the slots a
@@ -237,7 +226,7 @@ type ArchiveSlot struct {
 	Kind        ArchiveKind `json:"kind"`
 	Seq         uint64      `json:"seq"`
 	ContentType ContentType `json:"content_type"`
-	Role        uint8       `json:"role"`
+	Role        ArchiveRole `json:"role"`
 	TopicID     uint64      `json:"topic_id"`
 	EventType   string      `json:"event_type,omitempty"`
 	NodeSeq     uint32      `json:"node_seq,omitempty"`

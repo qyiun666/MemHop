@@ -196,8 +196,14 @@ README 的版本表与 git log。
 
 写这条门禁过程中自己踩到两课，都记下来：一是「每个字段都非零」这种写法会把合法零值当成丢失（`kind: 0` 就是 utterance、`seq: 0` 是「取下一个空槽」），故改成按**键集合**对齐再单挑几个值断言常量；二是负例第一次打错了地方——`content_type` 这个标签在 `ArchiveInput` 与 `ArchiveSlot` 上各出现一次，我改了读形状那一处，门禁如实「通过」，直到精确改到写形状才两头红：`the document sends "content_type", which no field of api.ArchiveInput takes` 与 `api.ArchiveInput carries "contentType", which no example document ever sends`。**行为一字未动**；这条与 §7.7 的既有门禁（表逐行对方法集、键对 tag）合起来，把「绑定工具」这件事的全部表面钉住。
 
+89. **说话者轴从裸 `uint8` 收成具名类型 `ArchiveRole`，四套数字词表从此同形**（`internal/repo/core/model_enums.go` 加枚举与名字表；`core.ArchiveSlot`、`core.SceneMessage`、`api.ArchiveInput`、`api.ArchiveSlot` 四处字段同改；`content.ValidateAppend` 的 `Role` 一问改判 `Valid()`；两份指南 §7.5/§7.6/§9 与 `AGENTS.md` 词表条改口；`api/surface_enums_test.go` 核指南的方式改为**逐行**）：清单第 5 条要宿主逐条声明「谁说的」，而这条轴是四套数字词表里唯一没有名字的——`Kind`/`ContentType`/边种类各是带 `String()`/`Valid()` 的具名类型，`Role` 却是门面直接发布的 `uint8`，指南因此得专门写一句「role 是裸 uint8」的例外。代价对宿主不是抽象的：把 `SearchL4` 读回的行渲染进 prompt 时，0/1/2/3 → user/agent/system/dream 那张表得宿主自己写（引擎里的词只住在 `String()`，够不着），而写侧入参上它是一个可以随手填任意小整数的洞。现在三个形状共用一个 `api.ArchiveRole`，常量原样赋值不经换算。**`Role` 的两问分开答**：数字在不在词表里由 `Valid()` 读那张名字表；「这个词轮不轮到调用方写」仍由 `ValidateAppend` 点名 user/agent/system——一个发明出来的数字与一个想冒充巩固产物的 `RoleDream`，此前拿到同一句拒绝理由。除这句拒绝理由外行为一字未动，线上形态仍是数字。
 
+这一轮真正值得留下的是**两处门禁被自己的负例推翻**，它们比改动本身更值钱：
 
+- 我先加了一条反射门禁「凡带这条轴的宿主形状，字段类型必须等于常量的类型」，随后去打负例：把今天仍是裸 `uint8` 的 `ProfileSlot.AgentType` 当对照项塞进表里 → **绿**（两侧都是 `uint8`，断言自动成立）；再试着把 `ArchiveInput.Role` 改回裸 `uint8` → 整包编译失败，红在编译器而不在断言。一条在任何真实回归上都不会失败的断言就是装饰，删。门面那侧的类型一致其实由 Go 自己钉着：`String()`/`Valid()` 只有具名类型才有，退回裸常量连门禁里的 `enumValue` 都编不过。
+- 门禁核指南的旧方式是**整篇文档**搜取值词（`dream`/`text`/`merge`…）。第一次负例就假绿：把中文指南 §7.6 那行的 `dream` 换成中文词，门禁照绿——`dream` 还活在工具名 `memory_dream` 与包路径 `internal/dream` 里。改为按 `enum-wire-table` 标记定位那张表、逐行核「这套词表在不在、数字与词齐不齐」，三个负例各自红在被改的那一头：删掉 `ArchiveKind` 整行 → `vocabulary table has no ArchiveKind row`；`2 video` 写成 `2 movie` → `the ContentType row does not carry ContentVideo = "video" over the wire as 2`；ZH 那行去掉 `dream` → `the ArchiveRole row does not carry RoleDream`。同一套逐行检查也盖住了 `status`/`mode` 两套字符串词表。`Role` 的两条拒绝理由另加断言，负例为摘掉 `Valid()` 那一支 → `role refusal = an utterance speaks as user, agent or system, want it to say "undefined content role"`。
+
+顺带修掉一句早已失真的模块文档：`internal/agent.md` 写着「`RoleDream` 公开常量里没有它」，而门面 `api.RoleDream` 一直在导出（读侧要能认出哪一句是库写的）——按实话改成「名字出得去、写侧拒收」。
 
 ## v1.6.5 — 2026-09-22 — MCP 面整体退役：对外只剩 Go module
 
