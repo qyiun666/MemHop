@@ -565,6 +565,11 @@ when an admin-face method wanders in here.
 | `plan_update_step` | `Session.PlanNodeUpdate` | `seq`, `title`, `status`, `summary` | nothing; a refused update leaves the tree untouched |
 | `plan_state` | `Session.PlanState` | none | the open turn's forest, with `DoneCount`/`TotalCount` summed over every step |
 
+The table is checked against the shapes rather than trusted: `TestToolArgumentsDecodeIntoEveryInputShape`
+decodes each tool's argument object straight into the input struct and requires every key to land — a
+model's JSON becomes a call with no translation layer in between, and a renamed or missing key fails here
+instead of in production.
+
 Two of those keys are **the host's, even when the call is model-initiated** (`host-filled-keys`):
 `created_at` and `seq`. A model asked for a millisecond instant will sometimes answer with
 seconds or with nothing, and the library refuses both scales at the write boundary rather than

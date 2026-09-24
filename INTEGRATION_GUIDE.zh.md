@@ -432,6 +432,10 @@ worker 属于哪一种由宿主定，库不替它猜。
 | `plan_update_step` | `Session.PlanNodeUpdate` | `seq`, `title`, `status`, `summary` | 无；被拒的重述不动树一下 |
 | `plan_state` | `Session.PlanState` | 无 | 本轮那片森林，`DoneCount`/`TotalCount` 按每一步汇总 |
 
+这张表是照着形状核出来的，不是靠人眼维护：`TestToolArgumentsDecodeIntoEveryInputShape` 把每个工具的参数对象
+直接解码进对应的入参结构体，要求每个键都必须落到位——模型给的 JSON 与一次调用之间没有翻译层，键被改名或漏掉
+会在这里红，而不是在生产里红。
+
 其中两个键即使在「模型自己发起调用」的路径上也归**宿主填**（`host-filled-keys`）：`created_at` 与 `seq`。
 让模型给一个毫秒时刻，它有时交来秒级、有时干脆不给，而库在写边界上拒掉这两种尺度、不去猜钟——
 所以宿主在调用前把时间戳盖好，`seq` 留 0 就是「取下一个空槽」。表里其余的键都可以交给模型填。
