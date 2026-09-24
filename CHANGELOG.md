@@ -5,6 +5,29 @@ README 的版本表与 git log。
 
 ## v1.6.6 — 2026-09-23 — 一轮只剩一次收束：场景与轮次由域自持，轮中写入不再收宿主填的归属字段
 
+### 从 v1.6.1 一路升上来要处理什么（合起来看，非某一轮的新增）
+
+远端的 tag 停在 v1.6.1，而 v1.6.2…v1.6.6 都还没发布过：一个宿主如果跟着最新代码，它跨的不是一个版本而是四个。
+下面每一条都是从当前工作树与 `git diff v1.6.1..HEAD` 量出来的，不是各版本块的复述汇总。
+
+- **磁盘格式硬拒，无迁移**：`FormatVersion` 从 `0x000C`（v1.6.1）走到 `0x0012`（HEAD，`internal/repo/core/header.go:32`）。
+  闸门是 `version != FormatVersion` 即 `ErrCorruption`（同文件 95-97 行），**不是「旧版照开、只是慢一点」**——
+  那与快照层的向下兼容是两件事（0x02 及更早的快照被拒只是退回一次全量扫描重建，文件本身照开）。
+  所以升级 = 重新生成记忆，或者自己带一份导出/重放方案；仓库不提供迁移。
+- **门面少了 7 个名字**：`AppendTrajectory`、`ReadTrajectory`、`ListTrajectorySessions`、`SyncPlanTree`、`PlanCommit`、
+  `Crystallize`、`DeleteL3Nodes`（能力记录层与轨迹轮次列举整体退役、计划族换成按步骤逐个写）。
+- **另有 4 个名字改了形状**：`Update`（收 `TurnEnd`，一轮一次）、`UpdateL0`（收 `ProfileInput` 四字段）、
+  `UpdateL3`（按值收，不再回传整槽）、`PlanState`（读的是域自持的那一轮，不再收轮次键）。
+- **`api.DB` 面是净增**：`Primary`/`SubAgent`/`Agent`/`Agents`/`Stats`/`Checkpoint`/`CompactTo`/`IsClosed`/`Close`，
+  其中域 id 只在 `Agents()` 出去、`Agent(id)` 回来这条路上用，其余调用一个都不收 id。
+- **今天钉死的公开面**：`api.Session` 26 个业务方法 + `api.DB` 9 个（`api/surface_public_test.go` 逐名核）。
+- **三个此前只能抄散文的数**：`MaxEventPayloadBytes` 4 KiB、`MaxUtterancePayloadBytes` 64 KiB、
+  `MaxSubAgentNameBytes` 256 字节——v1.6.1 的 `api` 里一个都没有。
+- **一条读形状的变化值得单独盯**：从没说过话的域现在交回**空转录**（`scene_name` 为空、不报 `ErrNotFound`），
+  宿主侧那段「没找到就新建」的特判应当删掉，而不是留着当兜底。
+
+版本号仍由用户定；这一节只是把跨版本升级要处理的事合成一处，逐轮的细节在上面各自的版本块里。
+
 1. **`Settle` 退役，一轮的终点只剩一次 `Update(TurnEnd{Input, Output, Outcome, CreatedAt})`**：Input 与 Output 落在该轮话题预留的 Seq 1 / Seq 2（对话主干的两个槽位，所以重关一轮是原地覆写而不是累积），Outcome 作为一条 `turn_outcome` 事件按调用次数追加——一次挂起加一次恢复本就是两条事实（`TestTwoClosesOfOneTurnKeepBothEndingsAndTheLastDialogue`、`TestUpdateWritesTheTurnEndItIsGiven`）。轮末照旧蒸一次关键词轨，并把 `fused_keywords` 随话题交回。
 2. **场景与轮次这两个 id 改由域上下文自持、不再回传宿主**：`Search(SearchQuery{})` 续用该域当前的场景，并为「即将进行的这一轮」铸出 topic id（`NewScene:true` 才另开一条会话；跨进程重启从记录里恢复，靠的是场景上原有的 `turn_seq` 计数器——这是读路径唯一的写入，也是 load-bearing 字段）。`SceneContext("")` 是同一条会话的**纯读**：不吃轮次、不点名，也不替从没读过的域新建场景（`ErrNotFound`）。一轮里「问模型之前」的读可以发生很多次，只有开轮那一次前进计数——否则带工具调用的决策循环会让计数替根本没发生过的轮白跳，而那把计数正是轮次 id 的派生依据（`TestSearchContinuesItsSceneUnlessAskedForANewOne`、`TestSearchOpensOneTurnPerRead`、`TestSceneContextOpensNoTurn`、`TestSceneContextWithoutAnIdReadsTheDomainsScene`、`TestSearchContinuesTheDomainScene`）。
 3. **锚点只能由会新建场景的那一读采纳**：续用一条会话时递来 `L3ID` 一律拒——不静默丢弃，也不拿它当作「另起一条会话」的暗示（`TestSearchRefusesAnAnchorWhileContinuingItsScene`）。
