@@ -339,6 +339,8 @@ README 的版本表与 git log。
 
 139. **「事件只能绑到本轮树上已有的那一步」现在两头都有断言了**（新增 `test/api_interface_plan_attribution_test.go`；库行为一字未动，两份指南各补半句）。指南 §6.2 早就承诺「`NodeSeq` 指向本 turn 从未创建过的一步 → `ErrInvalidQuery` 且零留痕」（EN 第 291 行、zh 第 651 行），宿主面上却一条断言都没有——先当探针量一遍确认行为与承诺一致（拒、错误里点名第几步、下一次 `PlanNodeAdd` 仍拿到紧邻的 2 号，不吃序号），再钉成测试，并把承诺**推到指南此前没说出口的那一头**：被保留窗扫掉的步骤同样不在树上，事件不许再指回去。这条判据不是挑剔：一轮的发号取「幸存节点最高序号」与「事件点名最高序号」两处的高，接受一个指向幽灵步骤的事件，等于替一条不存在的记录永久占住一段号。用例两臂各钉一条并各配前置（扫掉那臂先确证 `L5NodesPruned==1` 且 `PlanState` 计数归零，再问事件），负例＝把 `AppendArchive` 里那道 `HasSeq` 闸短路 → 两臂各自红在自己的断言上（`got code 0 (<nil>)` / 「may not reach back」）。
 
+141. **框架的记忆端口按它的真实形状在仓内过了一遍**（新增 `test/api_interface_framework_port_test.go`；库行为一字未动）。此前那份适配器配方是「两方法」的抽象形状，这次照 meowire 实际的 `nerve.Memory` 重刻：`Recall(ctx, MemoryQuery{CellID,Cue}) ([]Record{Key,Kind,Content []byte,Created}, error)` 与 `Remember(ctx, CycleFacts{CellID,Input,Output,Outcome}) error`，两份都不 import 对方（本地镜像声明，编译期 `var _ port = (*memhopPort)(nil)` 就是那道「形状合不合」的断言）。量到的转换面只剩三处：`Content` 的 string↔[]byte、`Kind` 走它自己的 `String()`（同一串小写词，宿主不必自建表）、`Outcome` 走宿主侧的 `String()`；`Created` 与 `CreatedAt` **原样过**（两侧同为 Unix 毫秒，这条被断言钉住：`1e12 ≤ Created < 1e14`），`Key` 就是库发的 16 位 hex id（宿主可拿它当自己表的键，仍不许自造）。另外两条由调用顺序自己教出来的事实写进注释：端口的两个时间点 1:1 对上 `Search`/`Update`，**适配器因此不持有任何跨调用状态**；顺序倒了 `Remember` 直接答「no turn is open」——那是库在拒，不是它该猜一轮没人开过的账。
+
 ## v1.6.5 — 2026-09-22 — MCP 面整体退役：对外只剩 Go module
 
 1. **`cmd/memhop-mcp` 整包删除**（14 个文件 3109 行）：25 个工具、多租户 HTTP（SSE 与 streamable-http 双传输）、按 `/mcp/<tenant>` 建/取域的租户注册表、`--tenants` 白名单与锚定 db-dir 的读入口一起消失。仓库不再有 server 形态、不再有后台进程，对外只剩「以 Go module 使用 `api`」一种接入。
