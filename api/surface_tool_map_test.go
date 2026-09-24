@@ -8,6 +8,7 @@ import (
 	"os"
 	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -168,6 +169,146 @@ func methodArgs(fn reflect.Type) []reflect.Type {
 	}
 	return out
 }
+
+// TestGuideFaceCountsMatchTheMethodSet checks the four numbers the guides state about the
+// surface itself — the session total, how it splits by audience, and the DB total — against
+// the reflected method sets, and then checks that each bullet's own enumeration adds up to
+// the number in front of it. A prose count is the one thing a rename cannot break: the tool
+// table, the symbol gate and the signature checks all stay green when a method moves face or
+// a new one arrives, while the guide keeps saying "18" to a surface of 19.
+func TestGuideFaceCountsMatchTheMethodSet(t *testing.T) {
+	session := exportedMethods(reflect.TypeOf(&Session{}))
+	db := exportedMethods(reflect.TypeOf(&DB{}))
+	admin := map[string]bool{}
+	for _, m := range adminFace {
+		admin[m] = true
+	}
+	taskCount := 0
+	for name := range session {
+		if !admin[name] {
+			taskCount++
+		}
+	}
+	if taskCount != len(toolRows) {
+		t.Fatalf("the task face holds %d methods but the tool table describes %d", taskCount, len(toolRows))
+	}
+
+	cases := []struct {
+		path                string
+		sessionRe, taskRe   string
+		adminRe, dbRe       string
+		taskLine, adminLine string
+	}{
+		{"../INTEGRATION_GUIDE.md",
+			`The (\d+) session methods split by audience`,
+			`Runtime/task face \((\d+)\)`,
+			`Assembly/admin face \((\d+)\)`,
+			`api\.DB. instead \((\d+)\)`,
+			"- **Runtime/task face", "- **Assembly/admin face"},
+		{"../INTEGRATION_GUIDE.zh.md",
+			`(\d+) 个会话方法按使用者分两类`,
+			`任务面（(\d+) 个）`,
+			`组装/管理面（(\d+) 个）`,
+			`api\.DB. 上（(\d+) 个）`,
+			"- **任务面", "- **组装/管理面"},
+	}
+	for _, c := range cases {
+		raw, err := os.ReadFile(c.path)
+		if err != nil {
+			t.Fatalf("read %s: %v", c.path, err)
+		}
+		text := string(raw)
+		wants := []struct {
+			re   string
+			want int
+			what string
+		}{
+			{c.sessionRe, len(session), "session methods"},
+			{c.taskRe, taskCount, "task-face methods"},
+			{c.adminRe, len(adminFace), "admin-face methods"},
+			{c.dbRe, len(db), "DB methods"},
+		}
+		for _, w := range wants {
+			got := statedNumber(t, c.path, text, w.re, w.what)
+			if got != w.want {
+				t.Errorf("%s: the guide states %d %s, the surface holds %d", c.path, got, w.what, w.want)
+			}
+		}
+		// The enumeration beside each number has to be that long, and the two halves have
+		// to cover the surface without overlapping: a list missing a method is the same
+		// lie as a count that does not match.
+		task := namedMethods(t, text, c.taskLine, session)
+		adminNames := namedMethods(t, text, c.adminLine, session)
+		if len(task) != taskCount {
+			t.Errorf("%s: the task-face bullet names %d methods, want %d", c.path, len(task), taskCount)
+		}
+		if len(adminNames) != len(adminFace) {
+			t.Errorf("%s: the admin-face bullet names %d methods, want %d", c.path, len(adminNames), len(adminFace))
+		}
+		seen := map[string]bool{}
+		for _, name := range append(append([]string{}, task...), adminNames...) {
+			if seen[name] {
+				t.Errorf("%s: %s is listed on both faces", c.path, name)
+			}
+			seen[name] = true
+		}
+		for name := range session {
+			if !seen[name] {
+				t.Errorf("%s: no face lists Session.%s", c.path, name)
+			}
+		}
+	}
+}
+
+// exportedMethods returns the receiver's exported method names.
+func exportedMethods(handle reflect.Type) map[string]bool {
+	out := map[string]bool{}
+	for i := 0; i < handle.NumMethod(); i++ {
+		if handle.Method(i).IsExported() {
+			out[handle.Method(i).Name] = true
+		}
+	}
+	return out
+}
+
+// statedNumber reads one integer out of the guide text through a capture-group pattern.
+func statedNumber(tb testing.TB, path, text, expr, what string) int {
+	tb.Helper()
+	m := regexp.MustCompile(expr).FindStringSubmatch(text)
+	if m == nil {
+		tb.Fatalf("%s never states a %s count matching %q", path, what, expr)
+	}
+	n, err := strconv.Atoi(m[1])
+	if err != nil {
+		tb.Fatalf("%s: unparsable %s count %q", path, what, m[1])
+	}
+	return n
+}
+
+// namedMethods counts the surface methods a guide line names in backticks, so an invented or
+// dropped name changes the count the line is claiming.
+func namedMethods(tb testing.TB, text, linePrefix string, surface map[string]bool) []string {
+	tb.Helper()
+	var names []string
+	for _, line := range strings.Split(text, "\n") {
+		if !strings.HasPrefix(line, linePrefix) {
+			continue
+		}
+		for _, m := range backtickName.FindAllStringSubmatch(line, -1) {
+			if surface[m[1]] {
+				names = append(names, m[1])
+			}
+		}
+		if len(names) > 0 {
+			return names
+		}
+		tb.Fatalf("no guide line starts with %q while naming methods", linePrefix)
+	}
+	return names
+}
+
+// backtickName picks a `Word` out of a guide line.
+var backtickName = regexp.MustCompile("`" + `(\w+)` + "`")
 
 func toolSection(tb testing.TB, path, text string) string {
 	tb.Helper()

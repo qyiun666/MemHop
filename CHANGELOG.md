@@ -169,6 +169,9 @@ README 的版本表与 git log。
 
 79. **过期之后 `Messages` 到底长什么样，指南此前说错了一半**（新用例 `internal/l2_sweep_gap_test.go` / `TestSweepKeepsEverySurvivorAtItsOwnSeq`；两份指南 §12 第 7 条同批改口）：那句话写的是「过了窗的话题 `Messages` 读回来是空的**或 `Seq` 上有洞**」。前半对，后半把事件轨的形状安到了原文轨上——`SceneContext` 渲染的只有 utterance（`internal/l2.go:257` 一句 `content.Read(..., KindUtterance)`），而一轮的两句原文是**同一次 `Update` 盖的同一个钟**，所以它们成对出局：正常路径下 `Messages` 只会「空」，不会「有洞」。有洞的是事件轨（每条事件各带自己的时刻，先写先出局）。这不是文字洁癖：宿主按那句话去 `Messages` 里找洞，会把「中间少了两条」当成引擎丢了自己的写入，而它要找的那条轨道在 `SearchL4{TopicID, Kind: event}`。新用例把两头各钉一遍：同一轮里事件写在 3/5/7（3、5 已过窗，7 在窗内）、宿主自己指定槽位的原文写在 9，一趟 Dream 之后**事件轨只剩 [7]、原文轨只剩 [1 2]**——序号一律不改（改了就等于让重试的 `AppendArchive` 落到别人的行上），且 `SceneContext` 与 `SearchL4` 两条读给出的清单必须一致。写法上取的是「前后各测一次」而不是只测终态：开局断言 `[3 5 7]` 与 `[1 2 9]`，否则「根本没写进去」也能让后半截断言通过。**负例**：把 `endTurn` 的钟退回 fixture 默认的 1000（两句原文一起过期）→ 红在 `the sweep renumbered the dialogue: want [1 2], got []`，即这条断言确实活在那对原文「一个出局、一个留下」的边界上；把事件 7 的钟改成过期 → 红在 `want [7], got []`。行为一字未动，公开面与磁盘格式未动。
 
+80. **指南里那几个「有多少个方法」的数字第一次由代码算**（新门禁 `api/surface_tool_map_test.go` 的 `TestGuideFaceCountsMatchTheMethodSet`）：宿主文档里有四个纯散文数字——会话方法总数 26、按使用者分成任务面 18 与管理面 8、文件级 `api.DB` 的 9。它们此前没有任何检查：公开面加一个方法时，`surface_public_test.go` 的清单会红、工具表那几条门禁会红，**而指南里写着的「18」不会**——正是「文档说的数与表面的数各说一套」这一类里最省事的漏法。新门禁把四个数全部反射出来再比对：`Session`/`DB` 的导出方法集给出 26 与 9，`adminFace` 名单给出 8，任务面 = 26 − 8 = 18 并且必须等于工具表的行数（与既有那条断言同源，三处不可能同时自欺）。它不止比数字：还把两份指南那两条 bullet 里反引号点出的方法名**逐个收出来**，要求任务面那条列出 18 个、管理面那条列出 8 个、两边不重叠、并集正好盖住整个 `Session` 表面——「数字对但清单少一个」同样红。**两条负例各自红在对应断言上**：把 `Runtime/task face (18)` 改成 19 → `the guide states 19 task-face methods, the surface holds 18`；从任务面那条 bullet 里删掉 `ListL1` → 一次两条 `the task-face bullet names 17 methods, want 18` 与 `no face lists Session.ListL1`。中英两份同受管（各自的中文措辞 `任务面（N 个）` 等各有匹配式）。行为一字未动，公开面与磁盘格式未动。
+
+
 
 
 ## v1.6.5 — 2026-09-22 — MCP 面整体退役：对外只剩 Go module
