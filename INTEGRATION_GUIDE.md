@@ -319,6 +319,14 @@ rep, err := db.Dream(ctx, "")      // empty sceneID sweeps every scene of the do
 // or db.Dream(ctx, sceneIDHex)    // one scene only
 ```
 
+**What the scene id scopes, and what it does not.** It picks which scenes get consolidated, and an id
+this domain does not hold fails the call with `ErrNotFound` — a model echoing a stale scene id
+out of its context is a normal event, and a clean no-op would read to the host as
+"consolidated". The two retention prunes (L4 content, L5 plan nodes) run over the whole
+domain either way, so a scoped pass's report still carries prune counts from scenes it never
+named. (`TestInterfaceDreamScopesConsolidationButNotRetention`,
+`TestInterfaceDreamRefusesASceneThatIsGone`.)
+
 Usually **the host does not need to call it**: once a scene's depth-1 topic count passes `Defaults.SceneDreamTopicThreshold` (default 24), `Update` schedules that scene's Dream in the background (one in flight per scene).
 
 Runs L2→L1→L0 compression / decay / profile distillation (several LLM calls, slow) — keep it in a goroutine or between turns.

@@ -267,6 +267,12 @@ rep, err := db.Dream(ctx, "")       // sceneID 传 "" = 遍历域内全部场景
 // 或 db.Dream(ctx, sceneIDHex)     // 只巩固指定场景
 ```
 
+**那个场景 id 管到哪、不管哪。** 它只决定哪些场景被巩固；而本域没有这个 id 时整次调用以 `ErrNotFound`
+失败——模型从上下文里回声一个过期场景 id 是常态，一次「干净的空跑」会被宿主读成「巩固过了」。两条保留窗
+清扫（L4 内容、L5 计划节点）**不受这个范围约束**：无论是否点名场景，它们都扫整个域，所以一次限定场景的
+巩固，报告里仍会带上没被点名那几口的裁剪计数。（`TestInterfaceDreamScopesConsolidationButNotRetention`、
+`TestInterfaceDreamRefusesASceneThatIsGone`。）
+
 通常**不需要宿主调用**：某场景 depth-1 话题数超过 `Defaults.SceneDreamTopicThreshold`（默认 24）时，`Update` 会在后台调度该场景的巩固（同场景在途不重复调度）。
 
 执行 L2→L1→L0 压缩 / 衰减 / 画像蒸馏（多次 LLM 调用，耗时较长）——放后台 goroutine 或对话间隔执行。

@@ -346,7 +346,14 @@ func (s *Session) AgentID() string { return formatID(s.session.AgentID()) }
 // Dream runs the consolidation pass — the sleep analogue: it fuses and compresses
 // topics (L2), rebuilds and decays the L1 graph, distills the L0 profile, and prunes
 // content (L4) and plan nodes (L5) past their retention window. Pass a scene id to
-// consolidate one scene, or "" for every scene of the domain. It is the only path that
+// consolidate one scene, or "" for every scene of the domain — and note the scope reaches
+// consolidation only: both retention prunes run over the whole domain either way, since
+// records age on their own clocks and a host that had to sweep one scene per call would
+// never finish the domain. The report's numbers describe the pass it came from, so the
+// prune counts on a scoped Dream include scenes the call never named. Naming a scene this
+// domain does not hold — an id a model echoed from stale context, say — fails the call with
+// ErrNotFound rather than reporting a clean no-op, because the second reads as consolidated.
+// It is the only path that
 // prunes either layer or rebuilds L1, so a domain that stops being written to still
 // needs one Dream to shrink.
 //
