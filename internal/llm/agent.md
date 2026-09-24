@@ -17,7 +17,10 @@
 - 两个预算按「没填＝库默认」读：`TimeoutSecs` 未填取 120 秒、`MaxOutputTokens` 未填取
   8192（`budgets`；`TestBudgetsTakeUnfilledValuesAsDefaults`）。两处都不许让 0 原样落下：
   0 输出上限等于把每次回复截成空，而 0 HTTP 超时的语义不是「立刻」是「永远等」，
-  一次挂死的端点就会把一个域的锁一直占着。
+  一次挂死的端点就会把一个域的锁一直占着。填了的窗口要在网线上真的生效、且**只生效一次**：
+  比窗口慢的端点归「端点拒绝」那一档（`ErrLLM`），不归「调用方已尽」那一档（那是宿主自己的
+  ctx，报错了会把人去支去看自己的上下文），也不进退避重试——慢不是 429 也不是 5xx，
+  每重跑一次就多占一个窗口的域锁（`TestSlowEndpointIsAbandonedInsideItsOwnWindow`）。
 - 一次调用的结论分三档：端点拒绝或回复不成形 → `ErrLLM`；回复被输出上限截断 →
   `ErrLLM` 且 cause 为 `ErrTruncated`（升级预算的重试靠这个判定）；调用方的上下文
   已尽 → `ErrCancelled`，cause 留着 `ctx.Err()`。第三种不是端点的失败：一次被撤掉的

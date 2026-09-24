@@ -84,7 +84,7 @@ endpoint is checked before the path is touched).
 | APIURL | ✅ | OpenAI-compatible endpoint URL. |
 | APIKey | ✅ | API key (inject from env vars, never hardcode). |
 | Model | ✅ | Model name. |
-| TimeoutSecs | 0 = not filled | Whole HTTP call budget in seconds; unfilled answers 120. A zero is never "no timeout" - that would hold a domain lock open on a dead endpoint. The same reason bounds the top: past 9223372036 s the seconds no longer fit a duration and a wrapped timeout reads as no timeout, so `Open` refuses it with `ErrConfig`. |
+| TimeoutSecs | 0 = not filled | Whole HTTP call budget in seconds; unfilled answers 120. A zero is never "no timeout" - that would hold a domain lock open on a dead endpoint. A filled window is honoured on the wire, and once: an endpoint slower than it comes back as `ErrLLM` after a single wait — not `ErrCancelled` (which would point the host at its own context), and not repeated per retry, because a slow endpoint is neither a 429 nor a 5xx. The same reason bounds the top: past 9223372036 s the seconds no longer fit a duration and a wrapped timeout reads as no timeout, so `Open` refuses it with `ErrConfig`. |
 | MaxOutputTokens | 0 = not filled | Cap on one reply; unfilled answers 8192. The prompt budgets are computed against this ceiling, so leaving it unset is the normal case. |
 
 ### `MemHopDefaults` — common overrides
