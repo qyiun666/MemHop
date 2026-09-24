@@ -685,8 +685,10 @@ package main
 
 import (
     "context"
+    "fmt"
     "log"
     "os"
+    "strings"
     "time"
 
     "github.com/qyiun666/MemHop/api"
@@ -742,6 +744,28 @@ func main() {
         EventType: "tool_call", NodeSeq: leaf, Content: "grep ...", CreatedAt: userTS + 1})
     _ = db.PlanNodeUpdate(api.PlanStep{Seq: leaf, Status: api.PlanStatusDone,
         Summary: "…"})
+
+    // 每一圈、再次问模型之前：把 plan 当上下文读回来。PlanState 读的就是库替宿主开着
+    // 的这一轮，交回整片森林——父步骤的 Summary 在它的子全部到终态后已经折好，
+    // 再加两个「任何单行都算不出」的汇总数。引擎不渲染正文：把这些行排成模型读的样子
+    // 是宿主自己的格式，而这一次调用喂给模型的 prompt 就是它。
+    tree, err := db.PlanState()
+    if err != nil {
+        log.Fatal(err)
+    }
+    var planText strings.Builder
+    fmt.Fprintf(&planText, "plan: %d/%d steps done\n", tree.DoneCount, tree.TotalCount)
+    var steps func(nodes []api.PlanNodeView, depth int)
+    steps = func(nodes []api.PlanNodeView, depth int) {
+        for _, n := range nodes {
+            fmt.Fprintf(&planText, "%s- #%d %s [%s]\n",
+                strings.Repeat("  ", depth), n.Seq, n.Title, n.Status)
+            steps(n.Children, depth+1)
+        }
+    }
+    steps(tree.Roots, 0)
+    promptContext := res.ProfileBrief + "\n" + planText.String()
+    fmt.Println(promptContext) // 这一圈要在那次模型调用之前送出去的整块内容
 
     // 每轮对话：结束——Update 把这一轮的输入/输出写进对话槽、把结果作为一条事件追加，
     // 并把整轮蒸馏成关键词轨拿回它。

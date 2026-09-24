@@ -71,6 +71,17 @@ func TestGuideSkeletonActuallyRuns(t *testing.T) {
 			if strings.Contains(string(out), "panic:") {
 				t.Fatalf("the documented quickstart panicked:\n%s", out)
 			}
+			// The run's exit code only says nothing crashed. These are the parts of the
+			// loop the skeleton promises a host will have in hand before the next model
+			// call — the profile block, and the plan read back as a folded forest with
+			// its rollups — so the copy-paste example is checked by what it prints, not
+			// by its return code.
+			for _, want := range []string{"name:", "plan: 1/2 steps done", "- #1 ", "[done]"} {
+				if !strings.Contains(string(out), want) {
+					t.Errorf("the skeleton printed no %q; the documented loop is missing a step it advertises\noutput:\n%s",
+						want, strings.TrimSpace(string(out)))
+				}
+			}
 		})
 	}
 }

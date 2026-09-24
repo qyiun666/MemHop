@@ -954,8 +954,10 @@ package main
 
 import (
     "context"
+    "fmt"
     "log"
     "os"
+    "strings"
     "time"
 
     "github.com/qyiun666/MemHop/api"
@@ -1016,6 +1018,30 @@ func main() {
         Content: "grep ...", CreatedAt: userTS + 1})
     _ = db.PlanNodeUpdate(api.PlanStep{Seq: leaf, Status: api.PlanStatusDone,
         Summary: "…"})
+
+    // Per loop iteration, before asking the model again: the plan back as context.
+    // PlanState reads the turn the library holds open and hands back the whole
+    // forest — each parent's Summary already folded from its children once they all
+    // reach a terminal status, plus the two rollups no single row can give you.
+    // The engine renders nothing: turning this into the lines a model reads is the
+    // host's own format, and it is what the next call's prompt carries.
+    tree, err := db.PlanState()
+    if err != nil {
+        log.Fatal(err)
+    }
+    var planText strings.Builder
+    fmt.Fprintf(&planText, "plan: %d/%d steps done\n", tree.DoneCount, tree.TotalCount)
+    var steps func(nodes []api.PlanNodeView, depth int)
+    steps = func(nodes []api.PlanNodeView, depth int) {
+        for _, n := range nodes {
+            fmt.Fprintf(&planText, "%s- #%d %s [%s]\n",
+                strings.Repeat("  ", depth), n.Seq, n.Title, n.Status)
+            steps(n.Children, depth+1)
+        }
+    }
+    steps(tree.Roots, 0)
+    promptContext := res.ProfileBrief + "\n" + planText.String()
+    fmt.Println(promptContext) // the block this turn sends ahead of the model's next call
 
     // Per turn: end — Update writes the turn's input and output onto the dialogue
     // slots, records the outcome as one event, and distills the turn into its keywords.

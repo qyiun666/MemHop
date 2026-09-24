@@ -164,6 +164,9 @@ README 的版本表与 git log。
 77. **等值的元数据写不再追加记录：`UpdateScene` 的空 patch 与 `RenameTopic` 的同名重试现在什么都不写**（`internal/l2.go` 落笔前比现值、`internal/repo/l2layer_topic.go` 同；新用例 `internal/l2_noop_write_test.go`；顺带补上两份指南 §8 L2 表里 `RenameTopic` 那一直缺的行）：文件是纯追加的，「写一条与现值等价的记录」不是免费——它只是让文件变长，等到 `CompactTo` 才回收。而这两处恰恰是宿主最常重试的口：`UpdateScene(id, ScenePatch{})` 是指南写着「不列举域就确认一次锚点」的那条读（`SceneSlot` 上没有钟，它每次确认都追加一份一模一样的场景记录），`RenameTopic` 是一次网络重试会重发的那类写。本机实测（同一用例的红态）：40 次等值调用把文件从 9617 推到 16237 字节，**+6620 B（每次约 121–211 B）而可达记录数一动不动**（4 → 4）——也就是说这笔开销在 `Stats` 的记录数上完全隐形，只有按字节量才看得见。分开量：只拆场景那一道闸 → +2420 B；只拆话题那一道 → +4220 B；两道都在 → 0。**断言两头都带牙**：另一头钉着「真改了就必须写」（两次真改名让字节上涨、`ListScenes` 与 `SceneContext` 读回新值），所以「干脆永不写」这种变异当场红。同一判据也补进上一轮那条改名规则（`UpdateL3` 改到当前标签已经不写），`AGENTS.md` 的 at-least-once 那一句现在把三处一起说清。门面两处注释、`internal/agent.md` 第 6 条、`internal/repo/agent.md` 陷阱同步；`RenameTopic` 此前在指南里只出现三次（工具面排除句、管理面清单、一条规则里的顺带提及），宿主读不出它到底改什么、什么时候可见、空名会怎样，这一行补上。公开面方法数不变，磁盘格式不变；这是一次只减不增的行为变化（不再有等值追加），随下一个 tag 生效。
 
 
+78. **验收清单第 6/11 条的「把 plan 更新到 prompt」第一次在可跑骨架里跑通**（两份指南 §11 各补一段 `PlanState` 读出→折叠成 prompt 文本→打出来；`test/guide_skeleton_test.go` 从「退出码为零」升级成断言它真的印出该印的东西）：`PlanState` 在指南里一直被解释（§5 那句「plan 式上下文读回来的是开着的那一轮」、§7.7 的 `plan_state` 行、§8 那段渲染与预算），可宿主照抄的那份 §11 骨架走到 `PlanNodeUpdate` 就直接收轮了——第 11 条流程里「将 plan 更新到 prompt 继续循环」这一步在最主要的可跑样例里是缺的，第二个宿主得自己发明一遍渲染。现在骨架里有了：`tree.DoneCount/TotalCount` 一行汇总 + 沿 `Children` 缩进把每一步的 `Seq`/`Title`/`Status` 排出来，接在 `res.ProfileBrief` 后面组成这一次调用要送出去的整块，并且把它打印出来。门禁跟着升级：`TestGuideSkeleton` 此前只判「没崩、退出码 0」，现在要求输出里出现 `name:`、`plan: 1/2 steps done`、`- #1 `、`[done]` 四样——正是这份骨架自己承诺交给宿主的东西，其中 `1/2` 就是「汇总数按全树算而不是只数根」那条契约的实跑值。**负例**：把那行打印换回 `_ = promptContext` → 一次跑出两条红（`the skeleton printed no "name:"` 与 `…no "plan: 1/2 steps done"`），恢复即绿（渲染段整体被删时 profile 那行也一起没了，正是该抓的形态）。英文与中文两份骨架同步改，`make check-guides` 编译、`TestGuideSkeleton` 实跑双语版都过。行为与公开面一字未动。
+
+
 
 ## v1.6.5 — 2026-09-22 — MCP 面整体退役：对外只剩 Go module
 
