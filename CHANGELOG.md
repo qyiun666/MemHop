@@ -174,6 +174,9 @@ README 的版本表与 git log。
 81. **宿主文档里那八个「尺寸与上限」数字全部改成由代码算**（两个新门禁 `TestGuideStatesTheBriefsOwnNumbers`、`TestGuideStatesTheNumbersTheCodeRefuses`；`internal/cap/profile/profile.go` 把最后两个裸字面量收成 `briefValueMaxRunes` / `briefPreferencesShown`；顺带改准一处真说错的数）：这一类数字此前只有代码那头有断言，指南那头是散文——`ProfileBrief` 的「6 行 / 字段 160 字 / 取最低 5 条 / 整段上界 2100 字」与旋钮表的「默认 604800000 ms（7 天）/ 保留窗最长 9223372036854 ms / 超时最长 9223372036 s」。上界那两个尤其危险：它们就是**引擎会拒的值**，改日常量而文档不动，宿主照表填的数会当场把 `Open` 打回。新门禁按短语逐个抓数再与常量比：行数不写死，由 `Brief(全量画像)` 现数出来；两个语言各按自己的措辞（`at most N lines` / `最多 N 行` 等）受管。**顺手改准的一处真错**：两份指南都写着「每个自由文本字段截到 160 字」，而偏好的**值**其实截到 120——按 160 估预算的宿主会高估每一条偏好；两处行与 `internal/cap/agent.md` 同一句一并改准，并把四个常量点名句内。**两条负例各自红在被改的那一个数上**：EN 保留窗上界多一毫秒 → `the guide states 9223372036855 for the retention ceiling, the code refuses past 9223372036854`；ZH 整段上界改成 2200 → `the guide states 2200 for the 整段上界, the code gives 2100`。行为一字未动，公开面与磁盘格式未动。
 
 
+82. **「重启后同一份文件交出同一份清单」第一次被整面核过**（新用例 `test/api_interface_reopen_order_test.go` / `TestInterfaceReadsSurviveAReopenByteForByte`）：宿主真正依赖的顺序承诺不是「同一进程里读两次一样」，而是「重启之后也一样」——它会按位置索引一份清单、会 diff 两次召回、会缓存昨天看到的样子，而那些比较跨的是不同进程。两个进程建立状态的路径还并不相同：一个用的是写过程中一路长出来的内存索引，另一个要从 checkpoint 快照恢复索引（快照比格式旧时更要整扫一遍记录）。既有的两条门禁各管一头：`api/surface_order_test.go` 管同进程八轮重复，`api_interface_consolidate_reopen_test.go` 管巩固后那两份列举。**这一条把范围铺满**：13 个纯读口（`GetL0`/`ListL1`/`ListScenes` 两份/`ListL3`/`GetL3`/`QueryL3Nodes`/`QueryL3Subgraph`/`SearchL4` 两份/`SceneContext` 两份/`Agents`）在同一份已 settle 的文件上取一次快照、`Checkpoint` + `Close`，再连开两次各取一次，逐个比 JSON 字节；每条读要用的图 id、节点 id、场景 id 都由**那个句柄自己**现取，所以红了就只可能是「答得不一样」，不可能是「问得不一样」。结果：今日全等。门禁有牙的证明是**只打乱顺序、不动数据**那一类：把 `Agents()` 的按 id 排序换成恒 false 的比较器（即按 map 迭代顺序答），`-count=3` 立刻红在 `answered Agents differently`，恢复后 `-count=2` 连绿两遍。搭建过程中被库当场拦下一次，也算一条副产品：事件绑到 `NodeSeq: 2` 时被拒（`the event names step 2, which is not on this turn's plan tree`）——先建树再绑事件才对，这正是文档写的归因规则在替宿主挡错。行为一字未动，公开面与磁盘格式未动；`AGENTS.md` 的离线面条数 35 → 36。
+
+
 
 
 ## v1.6.5 — 2026-09-22 — MCP 面整体退役：对外只剩 Go module
