@@ -54,6 +54,12 @@ type DB struct {
 	mu sync.Mutex
 }
 
+// errDBClosed is what every call on a closed database answers, in so many words: the
+// composition root checks the same flag at four different points in its lock protocol, and
+// a host reading CodeOf must not be able to tell which one it hit. TestEveryCallAnswersErrClosedAfterClose
+// walks the whole published surface after a Close to keep that promise.
+var errDBClosed = common.NewError(common.ErrClosed, "database is closed")
+
 func (db *DB) IsClosed() bool { return db.closed.Load() }
 
 // contextFor returns the agent's context, creating it lazily on first access,
@@ -62,12 +68,12 @@ func (db *DB) IsClosed() bool { return db.closed.Load() }
 // registry check: it has no tenant record and is created on first L3 access.
 func (db *DB) contextFor(agentID uint64) (*domain.Context, error) {
 	if db.closed.Load() {
-		return nil, common.NewError(common.ErrClosed, "database is closed")
+		return nil, errDBClosed
 	}
 	db.agentsMu.Lock()
 	defer db.agentsMu.Unlock()
 	if db.closed.Load() { // re-check under the lock: Close may have raced the check above
-		return nil, common.NewError(common.ErrClosed, "database is closed")
+		return nil, errDBClosed
 	}
 	if agentID != core.DefaultAgentID && agentID != core.SharedPoolAgentID {
 		if _, ok := db.idToName[agentID]; !ok {
@@ -143,7 +149,7 @@ func (db *DB) lockOpen(ac *domain.Context) error {
 	ac.Mu.Lock()
 	if db.closed.Load() {
 		ac.Mu.Unlock()
-		return common.NewError(common.ErrClosed, "database is closed")
+		return errDBClosed
 	}
 	return nil
 }
@@ -228,7 +234,7 @@ func (db *DB) Close() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	if !db.closed.CompareAndSwap(false, true) {
-		return common.NewError(common.ErrClosed, "database is closed")
+		return errDBClosed
 	}
 	// Cancel background Dreams so an in-flight pipeline exits at its next
 	// stage boundary; then wait for every domain lock so no operation is
@@ -249,7 +255,7 @@ func (db *DB) Close() error {
 
 func (db *DB) Checkpoint() error {
 	if db.closed.Load() {
-		return common.NewError(common.ErrClosed, "database is closed")
+		return errDBClosed
 	}
 	return db.engine.Checkpoint()
 }
@@ -260,7 +266,7 @@ func (db *DB) Checkpoint() error {
 // while domains are busy.
 func (db *DB) Stats() (int64, int, error) {
 	if db.closed.Load() {
-		return 0, 0, common.NewError(common.ErrClosed, "database is closed")
+		return 0, 0, errDBClosed
 	}
 	size, records := db.engine.Stats()
 	return size, records, nil
@@ -277,7 +283,7 @@ func (db *DB) Stats() (int64, int, error) {
 // not in it, so compact when the domain is quiet — typically just before Close.
 func (db *DB) CompactTo(newPath string) error {
 	if db.closed.Load() {
-		return common.NewError(common.ErrClosed, "database is closed")
+		return errDBClosed
 	}
 	if newPath == "" {
 		return common.NewError(common.ErrInvalidQuery, "compact: newPath is required")

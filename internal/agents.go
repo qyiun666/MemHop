@@ -34,7 +34,7 @@ import (
 // creating a domain is a low-frequency operation.
 func (db *DB) ensureRegistered(name string) (uint64, error) {
 	if db.closed.Load() {
-		return 0, common.NewError(common.ErrClosed, "database is closed")
+		return 0, errDBClosed
 	}
 	db.agentsMu.Lock()
 	defer db.agentsMu.Unlock()
@@ -213,7 +213,7 @@ type AgentInfo struct {
 // never carries a registry record, so it cannot appear here.
 func (db *DB) Agents() ([]AgentInfo, error) {
 	if db.closed.Load() {
-		return nil, common.NewError(common.ErrClosed, "database is closed")
+		return nil, errDBClosed
 	}
 	names, unresolved := repo.ListAgentRegistry(db.engine)
 	if unresolved != nil {
@@ -240,7 +240,7 @@ func (db *DB) Agents() ([]AgentInfo, error) {
 // and agentID must address a registered tenant or the default domain.
 func (db *DB) CheckSession(agentID uint64) error {
 	if db.closed.Load() {
-		return common.NewError(common.ErrClosed, "database is closed")
+		return errDBClosed
 	}
 	if !db.HasAgent(agentID) {
 		return common.NewError(common.ErrAgentNotFound, "unknown agent: "+common.FormatHash(agentID))

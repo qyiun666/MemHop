@@ -139,6 +139,17 @@ file is derived from, arrives out of a model's tool arguments, the host resolves
 its own directory before handing it in. `CompactTo` is the same kind of argument: an
 arbitrary destination path.
 
+**What a call answers after `Close`.** Once `Close` returns, every published call —
+on `DB` and on every `Session` taken from it — answers `ErrClosed` (5002): the engine
+refuses rather than read a released file, and nothing panics. So a host whose worker is
+still driving a turn while the run ends gets a code it already branches on, not a
+corruption error and not a crash. `Close` belongs to that set deliberately: a second
+`Close` answers `ErrClosed` too, because it closed nothing — which is what lets
+`defer lib.Close()` and an explicit end-of-run `Close` share one reading. Two accessors
+keep answering normally because they read no engine state: `Session.AgentID` and
+`DB.IsClosed`. `TestEveryCallAnswersErrClosedAfterClose` walks every published method on
+that foot, and refuses to let its own table shrink as the surface grows.
+
 `api.Open` is the only entry point, and what it does depends on the file and on the
 primary domain's profile:
 

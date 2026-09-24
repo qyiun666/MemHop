@@ -78,6 +78,10 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    `ac.OpCtx`，避免生命周期屏障被一次完整往返阻塞。一次提炼要串多少次往返不在本契约里限定：长输入
    在 `llmops` 里按块走，块数随这一轮转录的长度增长，所以退出点是一块而不是一整轮，而一轮能在锁内
    串起任意多块——内容侧那两条上限量的是单条记录，不量一轮。
+   引擎文件没了之后整份面只答一个码：`errDBClosed`（`ErrClosed`）在建/取域锁的每一处判出，措辞与判据
+   只有一份；`Close` 自己也在其列（第二次 `Close` 同样答 `ErrClosed`，因为它没关掉任何东西），只有不读
+   引擎状态的两个句柄口（`Session.AgentID`、`DB.IsClosed`）照常回答。这条整面契约由 `api` 侧的
+   `TestEveryCallAnswersErrClosedAfterClose` 逐方法走一遍钉住。
 4. **空闲回收**：无后台定时器；`contextFor` 顺带清扫超
    `Defaults.AgentIdleTTLMs` 未访问的域（宿主留 0 已在装配处折成默认值，这里见到 `<= 0` 就是宿主显式
    关掉的；默认域与共享 L3 域豁免），回收前先对域锁

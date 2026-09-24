@@ -156,8 +156,20 @@ func (d *DB) Stats() (DBStats, error) {
 // itself rather than pass through what the model named.
 func (d *DB) CompactTo(newPath string) error { return d.db.CompactTo(newPath) }
 
-// Close checkpoints every agent domain and releases the file.
+// Close checkpoints every agent domain and releases the file. It is the one call
+// on this surface that reports being late rather than succeeding: a second Close
+// answers ErrClosed, because it closed nothing. That is the same answer every
+// other call gives once the file is gone — the whole published surface, DB and
+// every Session taken from it, refuses with ErrClosed instead of reading a
+// released file or panicking — so a host that defers Close and also closes at the
+// end of its run reads one vocabulary rather than two, and a worker still mid-turn
+// gets a code it already knows how to branch on. The two accessors that read no
+// engine state keep answering normally: Session.AgentID (the handle's own id) and
+// IsClosed itself.
 func (d *DB) Close() error { return d.db.Close() }
 
-// IsClosed reports whether the database has been closed.
+// IsClosed reports whether the database has been closed. It reads no engine state,
+// so it answers on a closed database like any other accessor — which is also why it
+// is the check a host can run to tell an ErrClosed it just read apart: "this handle
+// is gone" versus "this record is unreadable".
 func (d *DB) IsClosed() bool { return d.db.IsClosed() }

@@ -120,6 +120,14 @@ worker, err := lib.SubAgent(workerLLM, api.ProfileInput{Name: "worker"}) // 按�
 当一条路径、或某个 worker 文件从它派生出的 agent 名字，是从模型的工具参数里来的，宿主
 要先把它解进自己的目录再递进来。`CompactTo` 是同一种入参：一条任意文件写路径。
 
+**`Close` 之后一次调用答什么。** `Close` 返回之后，公开面上的每一个调用——`DB` 上的、以及从它取到的
+每一个 `Session` 上的——都答 `ErrClosed`（5002）：引擎选择拒绝，而不去读一个已释放的文件，也不会 panic。
+所以「worker 还在跑一轮，而整场运行结束了」的宿主拿到的是一个它本来就会分支处理的码，不是一次损坏错误，
+也不是一场崩溃。`Close` 被有意放进这个集合：第二次 `Close` 同样答 `ErrClosed`，因为它什么都没关掉——
+这正是让 `defer lib.Close()` 与末尾那次显式 `Close` 共用一套读法的理由。两个不读引擎状态的句柄口照常回答，
+因为它们本就不碰文件：`Session.AgentID` 与 `DB.IsClosed`。`TestEveryCallAnswersErrClosedAfterClose`
+逐方法在这一点上走一遍整份公开面，并且不允许自己这张表随公开面增长而缩水。
+
 `api.Open` 是唯一入口，它做什么由「文件在不在」与「主域画像在不在」两件事决定：
 
 | 文件 | 主域画像 | 传入的画像 | 结果 |
