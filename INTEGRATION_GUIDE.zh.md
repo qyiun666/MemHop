@@ -816,7 +816,10 @@ agent 框架通常自带一个两方法的端口——每次调用开一轮、�
 那次 `Search`，并留下读回的 `ProfileBrief`；`recall()` 是纯读（`SceneContext` 加 `PlanState`，绝不再 `Search`——四次召回仍只收一轮）；
 `remember()` 是一次 `Update`，把框架自己那个结局词原样带走。它钉住两件只看接口表容易写错的事：没有开着的轮时 `PlanState` 答
 `ErrInvalidQuery`，意思是「手上没有进行中的计划」，不该据此中断这一轮；超预算的写入带错误回来而轮还开着，所以被拒之后的重试落在
-同一轮，而不是另起一轮。
+同一轮，而不是另起一轮。`TestInterfaceMemoryPortServesSeveralAgentsOnOneFileAndOneFileEach` 把同一份配方推到宿主真有多个 agent 时的形状：
+子 agent 是同一个句柄上的一个域（它的适配器仍只持一个 `*Session`，召回里永远不会出现父域的轮次），按任务 spawn 出去的 agent 用
+自己那份文件；要读那个 worker 留下的东西，得按路径重开——第二个实例会被 `ErrIO` 拒掉、消息写着「another instance」，宿主该重试的就是这一对，
+因为光一个 `ErrIO` 分不出「文件被别人占着」和「盘坏了」。
 
 ## 12. 陷阱清单
 

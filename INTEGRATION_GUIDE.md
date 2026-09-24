@@ -1126,6 +1126,12 @@ the framework's own outcome word. Two claims it pins are easy to write wrong fro
 alone: `PlanState` answers `ErrInvalidQuery` while no turn is open, which means "nothing in
 progress" and must not abort the invocation; and an over-budget write comes back as an error with
 the round still open, so the retry lands on that round instead of minting a new one.
+`TestInterfaceMemoryPortServesSeveralAgentsOnOneFileAndOneFileEach` extends the same recipe to the shape a
+running host has several agents in: a sub-agent is a domain of the same handle (its adapter still
+holds one `*Session`, and its recall never shows the parent's rows), a task spawned per job gets a
+file of its own, and reading what that worker left behind means reopening the path — a second
+instance is refused with `ErrIO` saying "another instance", which is the pair a host retries on,
+since `ErrIO` alone cannot tell a busy file from a broken disk.
 
 ## 12. Pitfalls
 
