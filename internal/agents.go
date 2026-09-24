@@ -92,10 +92,12 @@ func (db *DB) Primary() (*Session, error) {
 	return db.NewSession(core.DefaultAgentID)
 }
 
-// maxSubAgentNameBytes caps a tenant key. The registry record holds the name as
-// JSON in the file, so an unbounded name is an unbounded record; the cap is
-// about that, not about which characters a name may hold.
-const maxSubAgentNameBytes = 256
+// MaxSubAgentNameBytes caps a tenant key. The registry record holds the name as
+// JSON in the file, so an unbounded name is an unbounded record; the cap is about
+// that, not about which characters a name may hold. It is exported because the
+// name is the handle a host generates when it spawns an agent, and a spawn that
+// fails on its own key length is not something to discover by trying.
+const MaxSubAgentNameBytes = 256
 
 // SubAgent returns the session of the sub-agent domain named profile.Name,
 // creating that domain the first time and handing back the same one after. The
@@ -116,9 +118,9 @@ func (db *DB) SubAgent(llmCfg LlmConfig, profile core.ProfileSlot) (*Session, er
 	if name == "" {
 		return nil, common.NewError(common.ErrInvalidQuery, "sub-agent profile Name is required")
 	}
-	if len(name) > maxSubAgentNameBytes {
+	if len(name) > MaxSubAgentNameBytes {
 		return nil, common.NewError(common.ErrInvalidQuery,
-			fmt.Sprintf("sub-agent name exceeds %d bytes", maxSubAgentNameBytes))
+			fmt.Sprintf("sub-agent name exceeds %d bytes", MaxSubAgentNameBytes))
 	}
 	id, err := db.ensureRegistered(name)
 	if err != nil {

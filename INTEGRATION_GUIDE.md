@@ -170,6 +170,10 @@ primary domain's profile:
   model. The profile is written only if the domain has none yet, which also finishes
   off a domain left half-created by a crash. `AgentType` is stamped, not taken: a
   domain created this way is a sub-agent.
+  The name is also bounded: `MaxSubAgentNameBytes` (256) is the cap, measured in **bytes** — the
+  registry stores it inside one record, so an unbounded key is an unbounded record. A host that builds
+  worker names out of task titles should shorten against that constant rather than discover it in a
+  refusal, since the name is the handle it will reopen the domain by.
 - `Agent(llm, agentID)` reaches a domain by the id `Session.AgentID` issued for it: the
   same handle `SubAgent` returns for its name, re-pointed at `llm`. It creates nothing —
   an id this file never registered is refused with `ErrAgentNotFound`, so a mistyped or

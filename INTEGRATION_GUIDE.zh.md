@@ -144,6 +144,9 @@ worker, err := lib.SubAgent(workerLLM, api.ProfileInput{Name: "worker"}) // 按�
   ——名字就是域的地址，创建时冻结。`llm` 是该域自己的端点，所以子 agent 可以跑在另一个
   模型上。画像只在域还没有画像时才写，这同时把「崩在两次写之间」的半截域补完。
   `AgentType` 由库盖章而不采信入参：这样建出来的域就是子 agent。
+  名字也有上界：`MaxSubAgentNameBytes`（256），按**字节**量——注册记录把名字存进同一条记录里，
+  不设界就等于不设界的记录。用任务标题拼 worker 名的宿主应当照这个常量去截短，而不是在报错里第一次听说：
+  这个名字正是它日后重开那个域要递回去的把手。
 - `Agent(llm, agentID)` 按 `Session.AgentID` 交出的 id 找到那个域：拿回的句柄与按名字调
   `SubAgent` 是同一个，只是端点换成传进来的这个。它**不建任何东西**——这个文件从没注册过的 id
   会被 `ErrAgentNotFound` 拒掉，所以一个打错或编出来的 id 开不出一个顶替真域的空记忆。宿主若只想

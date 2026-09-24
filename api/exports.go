@@ -55,6 +55,11 @@ const (
 const (
 	MaxEventPayloadBytes     = internal.MaxEventPayloadBytes
 	MaxUtterancePayloadBytes = internal.MaxUtterancePayloadBytes
+	// MaxSubAgentNameBytes is the cap on the name that addresses a sub-agent domain —
+	// bytes, not runes, because that is what the record stores and what the check
+	// measures. A host generating worker names from task titles needs this number to
+	// shorten safely rather than after a refusal.
+	MaxSubAgentNameBytes = internal.MaxSubAgentNameBytes
 )
 
 const (

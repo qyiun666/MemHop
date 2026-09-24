@@ -301,7 +301,7 @@ func TestSubAgentRefusesAnUnusableName(t *testing.T) {
 	if _, err := db.SubAgent(LlmConfig{APIURL: "http://x"}, core.ProfileSlot{Name: "worker"}); err == nil {
 		t.Fatal("a half-specified endpoint must be refused before any domain is created")
 	}
-	long := make([]byte, maxSubAgentNameBytes+1)
+	long := make([]byte, MaxSubAgentNameBytes+1)
 	for i := range long {
 		long[i] = 'a'
 	}

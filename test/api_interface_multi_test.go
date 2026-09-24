@@ -11,6 +11,7 @@ package test
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 
 	memhop "github.com/qyiun666/MemHop/api"
@@ -317,6 +318,44 @@ func TestInterfaceCompactTo(t *testing.T) {
 // the case above; the addressed-by-id ones are where a forgotten domain argument would leak,
 // and the shared half is where over-isolation would break the tool that reads project knowledge
 // from a sub-agent. Both directions are pinned here.
+// The tenant key is the one host-generated string the library measures in bytes, so the number
+// has to be readable before a spawn rather than learned from the refusal — a name built out of a
+// task title is exactly the thing that overflows, and "one agent per task" is the deployment.
+func TestInterfaceSubAgentNameCapIsTheExportedNumber(t *testing.T) {
+	llm := newMockLLM(t)
+	m := openMockDB(t, filepath.Join(t.TempDir(), "names.meh"), llm.srv.URL)
+	defer m.Close()
+
+	if memhop.MaxSubAgentNameBytes != 256 {
+		t.Fatalf("the exported cap is %d bytes, want the 256 the record layer enforces",
+			memhop.MaxSubAgentNameBytes)
+	}
+	atCap := strings.Repeat("n", memhop.MaxSubAgentNameBytes)
+	if _, err := mustOK(m.SubAgent(testLLM(llm.srv.URL), memhop.ProfileInput{Name: atCap})); err != nil {
+		t.Fatalf("a name of exactly %d bytes was refused: %v", memhop.MaxSubAgentNameBytes, err)
+	}
+	_, err := m.SubAgent(testLLM(llm.srv.URL), memhop.ProfileInput{Name: atCap + "x"})
+	if memhop.CodeOf(err) != memhop.ErrInvalidQuery {
+		t.Fatalf("one byte over the cap answered %v (code %d), want ErrInvalidQuery", err, memhop.CodeOf(err))
+	}
+	// The refusal names the number the host has to cut to, in the unit the check uses.
+	if err != nil && !strings.Contains(err.Error(), "256 bytes") {
+		t.Fatalf("the refusal does not state the cap in bytes: %v", err)
+	}
+	// And the cap counts bytes, not runes: a name of 200 three-byte characters is over the line
+	// even though it is well under it in runes — the reason the constant says Bytes.
+	wide := strings.Repeat("回", 90) // 270 bytes, 90 runes
+	if _, err := m.SubAgent(testLLM(llm.srv.URL), memhop.ProfileInput{Name: wide}); memhop.CodeOf(err) != memhop.ErrInvalidQuery {
+		t.Fatalf("a 270-byte name was accepted (err %v): the cap must be measured in bytes", err)
+	}
+	if _, err := mustOK(m.SubAgent(testLLM(llm.srv.URL), memhop.ProfileInput{Name: strings.Repeat("回", 80)})); err != nil {
+		t.Fatalf("a 240-byte name was refused: %v", err)
+	}
+}
+
+// mustOK hands a (value, error) pair back split, so a call can be checked for its error alone.
+func mustOK[T any](v T, err error) (T, error) { return v, err }
+
 func TestInterfaceIsolationHoldsOnTheIdAddressedPaths(t *testing.T) {
 	llm := newMockLLM(t)
 	m := openMockDB(t, filepath.Join(t.TempDir(), "ids.meh"), llm.srv.URL)

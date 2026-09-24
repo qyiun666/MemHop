@@ -142,7 +142,9 @@ internal/{domain,scene,turn,dream,graph,plan,content}
   `SubAgent(llm, profile)` 按 `profile.Name` 幂等建/取一个注册域并挂上它自己的
   LLM 端点，`Agent(llm, agentID)` 按 `Session.AgentID` 交出的那个 id 取回同一个域——它只走
   `CheckSession` 的准入（注册表认不出即 `ErrAgentNotFound`，不许顺手建一个空域顶上去），
-  因此既不注册也不写画像，剩下的锁序与 `SubAgent` 那一条相同。两个带端点的入口都先过
+  因此既不注册也不写画像，剩下的锁序与 `SubAgent` 那一条相同。那个名字同时是租户键，因而上界是 `MaxSubAgentNameBytes`（256，按**字节**量：注册记录把名字存在
+  自己那条记录里，不设界等于不设界的记录）；这道闸排在碰文件之前，超了就是 `ErrInvalidQuery`——宿主拿名字开
+  门，开不了该是一次拒绝，而不是写进一半再让它在注册表里找一个不存在的域。两个带端点的入口都先过
   `LlmConfig.Validate`，与 `OpenDB` 那一判同一份规则——一份装不进 duration 的超时必须在第一次调用
   把域锁挂死之前就被拒。`Agents()` 是反向的发现口：读磁盘上的
   注册记录（不是内存里那份表）列出本文件的所有域，键读不出来就带着那个原因停下——一份更短的列表是一次
