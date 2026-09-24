@@ -612,3 +612,41 @@ func TestInterfaceParentFoldFollowsTheBranchItSummarizes(t *testing.T) {
 		t.Fatalf("the restated child lost its own conclusion: %+v", child)
 	}
 }
+
+// A step's subtree is a property of the tree that turn wrote, not of the turn the domain
+// happens to be holding open: a host that comes back later for 「what did step 1 of that
+// round do, including its sub-steps」 must get the same closure it would have got while the
+// round was live. Reading the live turn's tree is the easy case; this reads a closed one.
+func TestInterfaceStepSubtreeReadsBackAfterTheTurnClosed(t *testing.T) {
+	db, _ := openTestDB(t)
+	sceneID := openSession(t, db)
+	round1 := openTurn(t, db, sceneID)
+	root := mustCreate(t, db, 0, "总任务")
+	child := mustCreate(t, db, root, "子任务")
+	grand := mustCreate(t, db, child, "孙任务")
+	ts := time.Now().UnixMilli()
+	for _, seq := range []uint32{root, child, grand} {
+		mustAppend(t, db, seq, planEvent(ts+int64(seq), "step_work", "步骤 "+strconv.FormatUint(uint64(seq), 10)+" 做过的事"))
+	}
+	if _, err := turn(db.Session, "第一轮的问题", "回答"); err != nil {
+		t.Fatalf("close round 1: %v", err)
+	}
+	// The domain moves on to a second round with its own tree.
+	openTurn(t, db, sceneID)
+	if other := mustCreate(t, db, 0, "第二轮的步骤"); other != root {
+		t.Fatalf("round two was handed ordinal %d, want its own 1", other)
+	}
+
+	kind := memhop.KindEvent
+	rows, err := db.SearchL4(memhop.L4Query{TopicID: &round1, Kind: &kind, NodeSeq: root})
+	if err != nil {
+		t.Fatalf("read the closed round by its root step: %v", err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("the closed round's subtree read back %d rows, want all three steps: %+v", len(rows), rows)
+	}
+	leaves, err := db.SearchL4(memhop.L4Query{TopicID: &round1, Kind: &kind, NodeSeq: grand})
+	if err != nil || len(leaves) != 1 {
+		t.Fatalf("a leaf step read back %+v err %v, want only its own work", leaves, err)
+	}
+}

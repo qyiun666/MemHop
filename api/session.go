@@ -448,7 +448,8 @@ func (s *Session) SceneContext(sceneID string) (*SceneContext, error) {
 // closed, and whatever the host appended under it is reclaimed by the retention
 // window like any other transcript. The domain's own memory of the turn moves to the
 // primary with the merge, emptied: the turn id derives from the scene, so the host
-// reads again to work on the merged one.
+// reads again to work on the merged one. A round opened on the survivor is not disturbed by any of
+// this: it keeps its key and closes normally.
 //
 // A secondary's L1 node goes with it, and the primary's node picks the retargeted
 // topics up at the next Dream. A hyperedge that pointed at a merged scene loses the

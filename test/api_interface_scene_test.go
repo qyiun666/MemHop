@@ -650,3 +650,79 @@ func TestInterfaceMergeCarriesTheProjectAnchor(t *testing.T) {
 		}
 	}
 }
+
+// A merge moves the domain's own memory of which scene it is working, and that has two
+// different consequences for a round that is open at the time — worth pinning because a host
+// looping over rounds can hit either one. A round opened on the survivor keeps running: the
+// merge leaves its key alone and it closes normally. A round left open on a scene being
+// swallowed cannot be closed at all: that round's key names a scene that no longer exists,
+// so the next read starts a fresh round on the survivor and the recorded content stays where
+// it was written until the retention window takes it.
+func TestInterfaceMergeMovesTheOpenRoundWithTheScene(t *testing.T) {
+	t.Run("a round open on the survivor keeps working", func(t *testing.T) {
+		db, _ := openTestDB(t)
+		survivor := openSession(t, db)
+		swallowed := openSession(t, db)
+		openTurn(t, db, swallowed)
+		if _, err := turn(db.Session, "被并方已收口的一轮", "答"); err != nil {
+			t.Fatalf("close the swallowed scene's round: %v", err)
+		}
+		live := openTurn(t, db, survivor)
+		if _, err := db.AppendArchive(planEvent(time.Now().UnixMilli(), "tool_call", "开着的那轮记的事")); err != nil {
+			t.Fatalf("append: %v", err)
+		}
+		if err := db.MergeScenes(survivor, []string{swallowed}); err != nil {
+			t.Fatalf("MergeScenes: %v", err)
+		}
+		topic, err := turn(db.Session, "把开着的那轮收掉", "答")
+		if err != nil {
+			t.Fatalf("closing the survivor's round after the merge: %v", err)
+		}
+		if topic != live {
+			t.Fatalf("the round closed into %s, not the key the read minted (%s)", topic, live)
+		}
+		kind := memhop.KindEvent
+		rows, err := db.SearchL4(memhop.L4Query{TopicID: &live, Kind: &kind})
+		if err != nil || len(rows) != 1 {
+			t.Fatalf("the round's own event = %+v err %v", rows, err)
+		}
+	})
+
+	t.Run("a round left open on the scene being swallowed cannot be closed", func(t *testing.T) {
+		db, _ := openTestDB(t)
+		survivor := openSession(t, db)
+		// The domain's current scene is the one about to be swallowed, and the read that
+		// created it left a round open on it.
+		swallowed := openSession(t, db)
+		doomed, err := db.Search(memhop.SearchQuery{SceneID: swallowed})
+		if err != nil {
+			t.Fatalf("open the doomed round: %v", err)
+		}
+		abandoned := doomed.NewTopicID
+		if _, err := db.AppendArchive(planEvent(time.Now().UnixMilli(), "tool_call", "这一轮来不及收口")); err != nil {
+			t.Fatalf("append: %v", err)
+		}
+		if err := db.MergeScenes(survivor, []string{swallowed}); err != nil {
+			t.Fatalf("MergeScenes: %v", err)
+		}
+		// The domain's own memory of the round went with the scene: the refusal says 「no turn
+		// is open」 rather than letting the close aim at a scene that no longer exists.
+		_, err = turn(db.Session, "想收掉那个被抛下的轮", "答")
+		if memhop.CodeOf(err) != memhop.ErrInvalidQuery || !strings.Contains(err.Error(), "no turn is open") {
+			t.Fatalf("closing the abandoned round: want ErrInvalidQuery saying \"no turn is open\", got %v", err)
+		}
+		// A fresh read works on the survivor, with a key of its own.
+		next, err := db.Search(memhop.SearchQuery{})
+		if err != nil {
+			t.Fatalf("Search after the merge: %v", err)
+		}
+		if next.Scene.SceneID != survivor {
+			t.Fatalf("the domain resumed %s, want the survivor %s", next.Scene.SceneID, survivor)
+		}
+		kind := memhop.KindEvent
+		rows, err := db.SearchL4(memhop.L4Query{TopicID: &abandoned, Kind: &kind})
+		if err != nil || len(rows) != 1 {
+			t.Fatalf("the abandoned round's own record = %+v err %v, want it still readable by the key it was written under", rows, err)
+		}
+	})
+}
