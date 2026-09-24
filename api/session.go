@@ -242,7 +242,9 @@ func (s *Session) SearchL4(q L4Query) ([]ArchiveSlot, error) {
 // and carries nothing else. CreatedAt is yours to supply and the
 // library never stamps it — a turn records when things were said, not when the write
 // happened — and a non-positive one, or one in the seconds or microsecond band, is
-// refused, because the retention window measures milliseconds.
+// refused, because the retention window measures milliseconds. Bound this call as a tool and
+// the host still fills that field: a schema that asks a model for an epoch in milliseconds
+// gets seconds or nothing back, and a refusal at the write boundary is the cheaper failure.
 //
 // An event names itself with a non-empty EventType and has no speaker, so its Role and
 // ContentType are the library's (0 and text) whatever you set the second one to. An

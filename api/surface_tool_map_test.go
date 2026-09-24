@@ -82,6 +82,15 @@ func TestToolTableMatchesTheGuide(t *testing.T) {
 				t.Errorf("%s: the admin-face method %s appears in the tool table at all", path, method)
 			}
 		}
+		// The paragraph that keeps a model off the clock has to stay where the table is.
+		if !hasWord(section, "`host-filled-keys`") {
+			t.Errorf("%s: the tool table no longer says which keys the host fills itself", path)
+		}
+		for _, key := range []string{"created_at", "seq"} {
+			if !hasWord(section, "`"+key+"`") {
+				t.Errorf("%s: host-filled key %q is no longer named next to the table", path, key)
+			}
+		}
 		if got := tableRows(section); got != len(toolRows) {
 			t.Errorf("%s: the tool table has %d rows, want one per task-face method (%d)",
 				path, got, len(toolRows))

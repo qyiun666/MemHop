@@ -411,6 +411,10 @@ worker 属于哪一种由宿主定，库不替它猜。
 | `plan_update_step` | `Session.PlanNodeUpdate` | `seq`, `title`, `status`, `summary` | 无；被拒的重述不动树一下 |
 | `plan_state` | `Session.PlanState` | 无 | 本轮那片森林，`DoneCount`/`TotalCount` 按每一步汇总 |
 
+其中两个键即使在「模型自己发起调用」的路径上也归**宿主填**（`host-filled-keys`）：`created_at` 与 `seq`。
+让模型给一个毫秒时刻，它有时交来秒级、有时干脆不给，而库在写边界上拒掉这两种尺度、不去猜钟——
+所以宿主在调用前把时间戳盖好，`seq` 留 0 就是「取下一个空槽」。表里其余的键都可以交给模型填。
+
 两件不必让宿主重新发现的事：结构体入参的键就是它的 JSON 名（整面接口一套命名，枚举取值见 §7.6），
 以及那八个管理面方法（`UpdateScene`、`RenameTopic`、`MergeScenes`、`DeleteScene`、`DeleteTopic`、
 `UpdateL3`、`DeleteL3`、`AgentID`）**故意不在表里**——能删记录的口子要走宿主自己的批准路径，不该

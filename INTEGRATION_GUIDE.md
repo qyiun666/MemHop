@@ -535,6 +535,12 @@ when an admin-face method wanders in here.
 | `plan_update_step` | `Session.PlanNodeUpdate` | `seq`, `title`, `status`, `summary` | nothing; a refused update leaves the tree untouched |
 | `plan_state` | `Session.PlanState` | none | the open turn's forest, with `DoneCount`/`TotalCount` summed over every step |
 
+Two of those keys are **the host's, even when the call is model-initiated** (`host-filled-keys`):
+`created_at` and `seq`. A model asked for a millisecond instant will sometimes answer with
+seconds or with nothing, and the library refuses both scales at the write boundary rather than
+guessing a clock — so a host stamps these before the call and leaves `seq` at 0 to mean "the
+next free slot". Everything else in the table a model may legitimately fill in.
+
 Two things a host should not have to rediscover: the keys of a struct argument are its JSON
 names (one scheme for the whole surface, and the enums' own values follow §7.6), and the eight
 admin-face methods (`UpdateScene`, `RenameTopic`, `MergeScenes`, `DeleteScene`, `DeleteTopic`,
