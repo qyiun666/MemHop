@@ -18,6 +18,7 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/core"
 	"github.com/qyiun666/MemHop/internal/scene"
 	"github.com/qyiun666/MemHop/internal/turn"
+	"time"
 )
 
 // Search reads the domain's conversation and opens the turn the host is about to
@@ -36,11 +37,15 @@ func (db *DB) Search(agentID uint64, q SearchQuery) (*SearchResult, error) {
 	}
 	defer ac.Mu.Unlock()
 
-	sceneID, err := db.resolveScene(ac, agentID, q)
+	// One stamp per read: the scene this read opens a turn on, and any scene it creates,
+	// carry the same value, and the domain's counter makes it strictly increasing so two
+	// rounds in the same millisecond still order themselves.
+	stamp := ac.NextUsedStamp(time.Now().UnixMilli())
+	sceneID, err := db.resolveScene(ac, agentID, q, stamp)
 	if err != nil {
 		return nil, err
 	}
-	sceneSlot, err := repo.OpenSceneTurn(db.engine, agentID, sceneID)
+	sceneSlot, err := repo.OpenSceneTurn(db.engine, agentID, sceneID, stamp)
 	if err != nil {
 		return nil, err
 	}
@@ -77,7 +82,7 @@ func (db *DB) Search(agentID uint64, q SearchQuery) (*SearchResult, error) {
 // while the read looked like it had taken one. A named scene is resolved by
 // scene.ResolveExisting, whose refusal reports the scene the host actually pointed
 // at. Continuing never re-checks existence: OpenSceneTurn reads the record next.
-func (db *DB) resolveScene(ac *domain.Context, agentID uint64, q SearchQuery) (uint64, error) {
+func (db *DB) resolveScene(ac *domain.Context, agentID uint64, q SearchQuery, stamp int64) (uint64, error) {
 	if q.SceneID != "" {
 		if q.NewScene {
 			// The two flags ask for opposite things — one names a conversation to go on,
@@ -97,13 +102,13 @@ func (db *DB) resolveScene(ac *domain.Context, agentID uint64, q SearchQuery) (u
 		return 0, err
 	}
 	if q.NewScene {
-		return scene.Create(db.engine, agentID, anchor)
+		return scene.Create(db.engine, agentID, anchor, stamp)
 	}
 	if err := db.ensureScene(ac, agentID); err != nil {
 		return 0, err
 	}
 	if ac.Scene == 0 {
-		return scene.Create(db.engine, agentID, anchor)
+		return scene.Create(db.engine, agentID, anchor, stamp)
 	}
 	if anchor != 0 {
 		return 0, common.NewError(common.ErrInvalidQuery,

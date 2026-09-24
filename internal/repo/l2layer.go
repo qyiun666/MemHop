@@ -7,7 +7,6 @@ package repo
 import (
 	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/repo/core"
-	"time"
 )
 
 // MaxDepth: topic depth threshold that triggers deletion on sinking.
@@ -138,18 +137,21 @@ func MergeScenesL2(engine *core.StorageEngine, agentID uint64, primaryID uint64,
 	return DeleteL2Records(engine, agentID, secondaryIDs)
 }
 
-// OpenSceneTurn bumps the scene's turn counter and returns the updated record,
+// OpenSceneTurn bumps the scene's turn counter and returns the updated record.
+// stamp is the caller's monotonic last-used value (domain.Context.NextUsedStamp):
+// which conversation a reopened domain resumes has to survive two opens inside the same
+// millisecond, so the ordering is decided once, where the domain's memory lives.
 // so the caller reads back the seq it just allocated rather than a stale
 // snapshot. TurnSeq is load-bearing — the turn's topic id hashes it — so a
 // failed write must surface as an error, not a lost increment; one domain's
 // reads and writes are serialised by its lock.
-func OpenSceneTurn(engine *core.StorageEngine, agentID uint64, sceneID uint64) (*core.SceneSlot, error) {
+func OpenSceneTurn(engine *core.StorageEngine, agentID uint64, sceneID uint64, stamp int64) (*core.SceneSlot, error) {
 	slot, err := core.ReadSceneSlot(engine, agentID, sceneID)
 	if err != nil {
 		return nil, err
 	}
 	slot.TurnSeq++
-	slot.LastUsedAt = time.Now().UnixMilli()
+	slot.LastUsedAt = stamp
 	if err := core.WriteSceneSlot(engine, agentID, sceneID, slot); err != nil {
 		return nil, err
 	}

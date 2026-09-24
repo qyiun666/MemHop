@@ -73,7 +73,7 @@ func ResolveExisting(engine *core.StorageEngine, agentID uint64, sceneID uint64,
 // anchor graph is resolved before anything is written: a refusal has to leave no
 // scene behind. Nothing is read back afterwards — freshID proved the id free under
 // the caller's domain lock.
-func Create(engine *core.StorageEngine, agentID uint64, anchor uint64) (uint64, error) {
+func Create(engine *core.StorageEngine, agentID uint64, anchor uint64, stamp int64) (uint64, error) {
 	if anchor != 0 {
 		g, err := repo.ReadSharedGraphL3(engine, anchor)
 		if err != nil {
@@ -86,6 +86,7 @@ func Create(engine *core.StorageEngine, agentID uint64, anchor uint64) (uint64, 
 		return 0, err
 	}
 	slot := core.NewSceneSlot(id, "session:"+common.FormatHash(id))
+	slot.LastUsedAt = stamp
 	slot.L3ID = anchor
 	if err := repo.CreateSceneL2(engine, agentID, &slot); err != nil {
 		return 0, err

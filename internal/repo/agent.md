@@ -26,7 +26,7 @@
   `hash("content:"+topic+":"+seq)` 派生），L5 只剩计划节点、走帧型
   `RecL5PlanNode 0x0F`；id 命名空间不烘层号（场景节点 `scene-node:`、内容槽
   `content:`、计划节点 `plan:`），归档的归属字段叫 `topic_id`，场景记录只剩
-  `turn_seq` 计数器与一个开轮时盖的 `last_used_at`（`omitempty`；读侧恢复「该域当前是哪条会话」靠它，老记录缺这个键就是 0）。
+  `turn_seq` 计数器与一个开轮时盖的 `last_used_at`（`omitempty`；读侧恢复「该域当前是哪条会话」靠它，值由调用方递进来的 `stamp` 写、本层不自己读钟，好让同一毫秒里的两次开轮也分得出先后；老记录缺这个键就是 0）。
   引擎对外的两条遍历（`IndexByType`、`IterAgents`）**交回 id 升序**：快照取自 map 键，不排就没有
   「同一份文件两次给同样答案」，而按位置索引列表、或比对两次读的调用方正需要这条。要别的顺序的
   调用方自己排（`GroupPlanNodes` 按话题、场景读按时间）。

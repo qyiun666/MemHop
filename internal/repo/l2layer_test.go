@@ -167,15 +167,18 @@ func TestOpenSceneTurnAdvancesTurnSeq(t *testing.T) {
 	if err := CreateSceneL2(engine, core.DefaultAgentID, &scene); err != nil {
 		t.Fatalf("create scene: %v", err)
 	}
-	if _, err := OpenSceneTurn(engine, core.DefaultAgentID, sceneID); err != nil {
+	if _, err := OpenSceneTurn(engine, core.DefaultAgentID, sceneID, 100); err != nil {
 		t.Fatalf("first turn: %v", err)
 	}
-	opened, err := OpenSceneTurn(engine, core.DefaultAgentID, sceneID)
+	opened, err := OpenSceneTurn(engine, core.DefaultAgentID, sceneID, 101)
 	if err != nil {
 		t.Fatalf("second turn: %v", err)
 	}
 	if opened.TurnSeq != 2 {
 		t.Fatalf("returned record not the bumped one: %+v", opened)
+	}
+	if opened.LastUsedAt != 101 {
+		t.Fatalf("the stamp handed in was not what the record carries: %+v", opened)
 	}
 	slot, err := core.ReadSceneSlot(engine, core.DefaultAgentID, sceneID)
 	if err != nil {

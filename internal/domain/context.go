@@ -40,6 +40,9 @@ type Context struct {
 	// written under Mu, the domain lock.
 	Scene uint64
 	Turn  uint64
+	// lastUsedStamp is the highest last-used stamp this domain has issued since the
+	// process started; see NextUsedStamp.
+	lastUsedStamp int64
 
 	DreamInFlight map[uint64]struct{} // scenes with a scheduled background Dream
 
@@ -73,4 +76,20 @@ func NewContext(id uint64, parent context.Context, engine *core.StorageEngine, l
 		OpCtx:         ctx,
 		OpCancel:      cancel,
 	}
+}
+
+// NextUsedStamp returns the value to write into a scene record's last_used_at, keeping
+// it strictly increasing within the domain. The field's unit is milliseconds, and two
+// scenes opened inside the same millisecond would otherwise tie — the tie-break is then
+// the smaller scene id, which means the clock decided which conversation a reopened
+// domain resumes: exactly the question this field exists to answer. The floor is
+// per-process memory, so a restored clock that runs backwards can only reorder within
+// one millisecond of its own stamps; nothing across a restart depends on it.
+func (c *Context) NextUsedStamp(now int64) int64 {
+	if now <= c.lastUsedStamp {
+		c.lastUsedStamp++
+	} else {
+		c.lastUsedStamp = now
+	}
+	return c.lastUsedStamp
 }
