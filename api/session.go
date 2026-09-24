@@ -125,7 +125,11 @@ func (s *Session) ListScenes(l3ID string) ([]SceneSlot, error) {
 
 // UpdateScene patches one scene's host-facing metadata (title, L3 anchor) and
 // returns the scene as stored afterwards, so a host confirms an anchor without
-// listing the domain. Nil patch fields keep their stored value.
+// listing the domain. Nil patch fields keep their stored value. A patch that changes
+// nothing — an empty one, or values the scene already holds — writes nothing: the
+// file is append-only, so the confirm read that documented this call would otherwise
+// charge the host by the byte per look, and a retried patch per retry
+// (TestNoOpSceneAndTopicWritesAppendNothing).
 func (s *Session) UpdateScene(sceneID string, patch ScenePatch) (SceneSlot, error) {
 	slot, err := s.session.UpdateScene(sceneID, patch)
 	if err != nil {
@@ -140,7 +144,8 @@ func (s *Session) UpdateScene(sceneID string, patch ScenePatch) (SceneSlot, erro
 // it, and the new name is visible to Search and SceneContext immediately, not at the
 // next consolidation. An empty name is refused: topics are created unnamed, so "" is
 // the absence of a name rather than one. A topic that is not there is ErrNotFound,
-// and nothing is created for it.
+// and nothing is created for it. Renaming to the name the topic already carries writes
+// nothing for the same reason: a retried rename costs no space.
 func (s *Session) RenameTopic(topicID, name string) (TopicSlot, error) {
 	slot, err := s.session.RenameTopic(topicID, name)
 	if err != nil {

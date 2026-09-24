@@ -83,6 +83,7 @@ func (db *DB) UpdateScene(agentID uint64, sceneID string, patch ScenePatch) (cor
 	if err != nil {
 		return core.SceneSlot{}, err
 	}
+	stored := *slot
 	if patch.Name != nil {
 		slot.SceneName = *patch.Name
 	}
@@ -95,6 +96,13 @@ func (db *DB) UpdateScene(agentID uint64, sceneID string, patch ScenePatch) (cor
 				fmt.Sprintf("scene %s is anchored to %s; pass Force to re-anchor", sceneID, common.FormatHash(slot.L3ID)))
 		}
 		slot.L3ID = l3Hash
+	}
+	if *slot == stored {
+		// The patch carried nothing this record does not already hold — an empty
+		// patch is exactly what a host sends to confirm a scene and its anchor
+		// without listing the domain. Appending the identical record would charge
+		// that read by the byte, and a retried write would grow the file per retry.
+		return stored, nil
 	}
 	if err := core.WriteSceneSlot(db.engine, agentID, sceneHash, slot); err != nil {
 		return core.SceneSlot{}, err

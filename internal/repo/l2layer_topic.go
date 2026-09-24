@@ -67,6 +67,12 @@ func RenameTopicL2(engine *core.StorageEngine, agentID uint64, topicID uint64, n
 	if err != nil {
 		return nil, err
 	}
+	if topic.Name == name {
+		// Nothing to write: a retried rename would append an equal record and the
+		// file charges for it, while the answer the caller gets is the same value
+		// either way.
+		return topic, nil
+	}
 	topic.Name = name
 	if err := core.WriteTopicSlot(engine, agentID, topic.ID, topic); err != nil {
 		return nil, err
