@@ -1005,8 +1005,10 @@ Numbers are never reused: `1002` and `9001` are retired and will not be reissued
 
 The loop below is also run inside this repository, round by round against a fake model with no quota and
 no network: `TestInterfaceRoundFlowRunsEndToEnd` (plan a round, record each step's work against
-that step, close the round, spawn a second domain mid-loop, run a second round). So a clone can
-check the sequence without building the two other projects.
+that step, close the round, spawn a second domain mid-loop, run a second round), and
+`TestInterfaceMemoryPortSpawn*` for the shape §11.1 describes — a worker on a second `.meh`, with
+a second process refused by the file's own lock. So a clone can check the sequence without
+building the two other projects.
 
 ```go
 package main
@@ -1112,11 +1114,58 @@ func main() {
     if _, err := db.Dream(context.Background(), ""); err != nil {
         log.Fatal(err)
     }
+
+    // The model asked for a worker: the host's answer is one more Open, on a path of its own
+    // choosing. A second domain in THIS file would share its L3 graph; a second file shares
+    // nothing, so the choice is about what the two agents are allowed to know in common.
+    workerLib, err := api.Open(
+        strings.TrimSuffix(os.Getenv("MEH_PATH"), ".meh") + ".worker.meh",
+        llm, api.DefaultMemHopDefaults,
+        &api.ProfileInput{Name: "researcher", Role: "sub-agent"})
+    if err != nil { log.Fatal(err) }
+    defer workerLib.Close()
+    helper, err := workerLib.Primary()
+    if err != nil { log.Fatal(err) }
+
+    // The same four calls, on the other handle: the loop is not agent-shaped.
+    if _, err := helper.Search(api.SearchQuery{}); err != nil { log.Fatal(err) }
+    if _, err := helper.AppendArchive(api.ArchiveInput{Kind: api.KindEvent,
+        ContentType: api.ContentText, EventType: "tool_call",
+        Content: "delegated work", CreatedAt: time.Now().UnixMilli()}); err != nil { log.Fatal(err) }
+    if _, err := helper.Update(api.TurnEnd{Input: "what is in this project",
+        Output: "a memory engine", Outcome: "answered",
+        CreatedAt: time.Now().UnixMilli()}); err != nil { log.Fatal(err) }
+
+    // Each memory answers for its own agent, and neither listing carries the other's turn.
+    for _, lib := range []*api.DB{lib, workerLib} {
+        session, err := lib.Primary()
+        if err != nil { log.Fatal(err) }
+        ctx, err := session.SceneContext("")
+        if err != nil { log.Fatal(err) }
+        fmt.Printf("%s holds %d turn(s)\n", session.AgentID(), len(ctx.Topics))
+    }
 }
 ```
 
 ---
 
+
+### 11.1 A second agent, on a memory of its own
+
+When the model decides to delegate, the host's answer to that tool call is one more `api.Open`:
+a worker on its own `.meh`, opened exactly like the main one. Nothing in the loop above changes
+for it — the same four calls drive either handle, so a host carries no per-agent type, no id
+table and no second code path (the skeleton in §11 ends by doing this). What differs is only
+isolation. A second **domain inside one file** shares that file's L3 knowledge graph — one
+project's facts, read by every agent in that file — while keeping scenes, originals and profiles
+apart; a second **file** shares nothing at all, not even the graph, and costs one more exclusive
+lock. Choose by whether the two agents are supposed to know the same project.
+
+Two mechanical rules a host meets the first time it moves a file: a live `.meh` holds its
+exclusive lock until the handle is closed (close before renaming, compacting away, or deleting),
+and a path that already exists is reopened rather than recreated — `api.Open` on an existing
+file keeps every domain it holds, and the profile argument is consulted only when the file is
+not there yet.
 
 ### The same shape behind a framework's memory port
 

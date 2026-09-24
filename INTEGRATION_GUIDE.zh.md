@@ -806,11 +806,47 @@ func main() {
     if _, err := db.Dream(context.Background(), ""); err != nil {
         log.Fatal(err)
     }
+
+    // 模型要一个帮手：宿主的回答就是再 Open 一次，路径由宿主自己定。
+    // 同一份文件里的第二个域会共享它的 L3 图；第二个文件什么都不共享——
+    // 这一选的是「两个 agent 允许共同知道什么」。
+    workerLib, err := api.Open(
+        strings.TrimSuffix(os.Getenv("MEH_PATH"), ".meh") + ".worker.meh",
+        llm, api.DefaultMemHopDefaults,
+        &api.ProfileInput{Name: "researcher", Role: "sub-agent"})
+    if err != nil { log.Fatal(err) }
+    defer workerLib.Close()
+    helper, err := workerLib.Primary()
+    if err != nil { log.Fatal(err) }
+
+    // 还是那四次调用，换一个句柄：这条循环不是按 agent 分形状的。
+    if _, err := helper.Search(api.SearchQuery{}); err != nil { log.Fatal(err) }
+    if _, err := helper.AppendArchive(api.ArchiveInput{Kind: api.KindEvent,
+        ContentType: api.ContentText, EventType: "tool_call",
+        Content: "帮手做的事", CreatedAt: time.Now().UnixMilli()}); err != nil { log.Fatal(err) }
+    if _, err := helper.Update(api.TurnEnd{Input: "这个项目里有什么",
+        Output: "一个记忆引擎", Outcome: "answered",
+        CreatedAt: time.Now().UnixMilli()}); err != nil { log.Fatal(err) }
+
+    // 每份记忆只对自己的 agent 说话，两份清单里都不会出现对方的轮次。
+    for _, lib := range []*api.DB{lib, workerLib} {
+        session, err := lib.Primary()
+        if err != nil { log.Fatal(err) }
+        ctx, err := session.SceneContext("")
+        if err != nil { log.Fatal(err) }
+        fmt.Printf("%s 持有 %d 轮\n", session.AgentID(), len(ctx.Topics))
+    }
 }
 ```
 
 ---
 
+
+### 11.1 第二个 agent，用它自己的那份记忆
+
+模型决定分派时，宿主对那次工具调用的回答就是再 `api.Open` 一次：帮手用自己的 `.meh`，打开方式与主 agent 完全一样。上面那条循环对它一字不改——同一个句柄换一下就行，宿主因此不持有「每 agent 一种类型」、也不另开一条代码路径（§11 的骨架结尾就这么做）。不同的只有隔离度：**同一份文件里的第二个域**共享这份文件的 L3 知识图（一个项目的事实，被这份文件里的每个 agent 共读），而场景、原文、画像各自分开；**第二个文件**连图也不共享，代价是多一把排他锁。选哪一个，看的是「这两个 agent 被允许共同知道什么」。
+
+两条机械规则在第一次挪文件时就会遇到：活着的 `.meh` 一直握着排他锁，直到句柄关闭（改名、压实、删除之前先 Close）；已存在的路径是**重开**而不是重建——`api.Open` 打开一份已有文件会留下它的全部域，而 profile 入参只在文件原本不在的时候被用到。
 
 ### 框架记忆端口背后的同一个形状
 
