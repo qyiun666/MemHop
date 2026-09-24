@@ -341,6 +341,8 @@ README 的版本表与 git log。
 
 141. **框架的记忆端口按它的真实形状在仓内过了一遍**（新增 `test/api_interface_framework_port_test.go`；库行为一字未动）。此前那份适配器配方是「两方法」的抽象形状，这次照 meowire 实际的 `nerve.Memory` 重刻：`Recall(ctx, MemoryQuery{CellID,Cue}) ([]Record{Key,Kind,Content []byte,Created}, error)` 与 `Remember(ctx, CycleFacts{CellID,Input,Output,Outcome}) error`，两份都不 import 对方（本地镜像声明，编译期 `var _ port = (*memhopPort)(nil)` 就是那道「形状合不合」的断言）。量到的转换面只剩三处：`Content` 的 string↔[]byte、`Kind` 走它自己的 `String()`（同一串小写词，宿主不必自建表）、`Outcome` 走宿主侧的 `String()`；`Created` 与 `CreatedAt` **原样过**（两侧同为 Unix 毫秒，这条被断言钉住：`1e12 ≤ Created < 1e14`），`Key` 就是库发的 16 位 hex id（宿主可拿它当自己表的键，仍不许自造）。另外两条由调用顺序自己教出来的事实写进注释：端口的两个时间点 1:1 对上 `Search`/`Update`，**适配器因此不持有任何跨调用状态**；顺序倒了 `Remember` 直接答「no turn is open」——那是库在拒，不是它该猜一轮没人开过的账。
 
+142. **合并入口那两支配对的拒法，现在各点自己的名**（改 `api/surface_l2_test.go`；库行为一字未动）。自并（`MergeScenes(A,[A])`）早有闸（`internal/l2.go:161`），断言也有——但只看码。`ErrInvalidQuery` 在同一个入口上扛着两件事：把主场景写进 secondary，和同一个 secondary 列两遍（`internal/l2.go:164-168`，那条注释自己写着「重复说明宿主已经数不清要并哪些了」）。粗码 + 不同消息 = 消息就是契约的一半，于是按本仓一贯标准**成对钉**：各自 `Contains` 自己的句子（`primary` / `listed twice`），任一漂了都红。写的时候又抓到自己的两处错：断言里我先用了「duplicate」这个词（源码是 `listed twice`，跑出来才露馅），以及 `err :=` 撞上同作用域已有的 `err`。负例＝把自并那道闸短路 → 断言红在 `want ErrInvalidQuery`。
+
 ## v1.6.5 — 2026-09-22 — MCP 面整体退役：对外只剩 Go module
 
 1. **`cmd/memhop-mcp` 整包删除**（14 个文件 3109 行）：25 个工具、多租户 HTTP（SSE 与 streamable-http 双传输）、按 `/mcp/<tenant>` 建/取域的租户注册表、`--tenants` 白名单与锚定 db-dir 的读入口一起消失。仓库不再有 server 形态、不再有后台进程，对外只剩「以 Go module 使用 `api`」一种接入。

@@ -6,6 +6,7 @@
 package api
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -46,9 +47,20 @@ func TestSurfaceL2Scenes(t *testing.T) {
 	if err := db.MergeScenes(primary, []string{second.Scene.SceneID}); err != nil {
 		t.Fatalf("merge scenes: %v", err)
 	}
-	// Merging a scene into itself as secondary must be rejected.
-	if err := db.MergeScenes(primary, []string{primary}); CodeOf(err) != ErrInvalidQuery {
-		t.Fatalf("self-merge: want ErrInvalidQuery, got %v", err)
+	// Two refusals share this one entry point and one coarse code, so the message is what
+	// tells a host which of its ids it got wrong: a scene merged into itself, versus the same
+	// secondary named twice. Checked as a pair — either sentence alone would let the other drift.
+	selfErr := db.MergeScenes(primary, []string{primary})
+	if CodeOf(selfErr) != ErrInvalidQuery {
+		t.Fatalf("self-merge: want ErrInvalidQuery, got %v", selfErr)
+	}
+	if !strings.Contains(selfErr.Error(), "primary") {
+		t.Fatalf("the self-merge refusal should name the primary id, got: %v", selfErr)
+	}
+	if err := db.MergeScenes(primary, []string{second.Scene.SceneID, second.Scene.SceneID}); CodeOf(err) != ErrInvalidQuery ||
+		!strings.Contains(err.Error(), "listed twice") {
+		t.Fatalf("a repeated secondary should be refused by a sentence naming the repetition, got code %d (%v)",
+			CodeOf(err), err)
 	}
 	// The merged-away session no longer resolves; a host reading it is told so.
 	if _, err := db.Search(SearchQuery{SceneID: second.Scene.SceneID}); CodeOf(err) != ErrNotFound {
