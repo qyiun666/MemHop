@@ -14,12 +14,14 @@ import (
 // planNode is the in-memory tree node while building/folding. It carries the
 // node's derived IDHash so folding can re-persist it.
 type planNode struct {
-	id         uint64
-	seq        uint32
-	parentSeq  uint32
-	title      string
-	status     uint8
-	summary    string
+	id        uint64
+	seq       uint32
+	parentSeq uint32
+	title     string
+	status    uint8
+	summary   string
+	// folded records that summary is this package's own rollup, not the host's text.
+	folded     bool
 	createdAt  int64
 	finishedAt int64
 	updatedAt  int64
@@ -87,7 +89,7 @@ func Forest(nodes []core.PlanNode) []*planNode {
 		n := nodes[i]
 		bySeq[n.Seq] = &planNode{
 			id: n.IDHash, seq: n.Seq, parentSeq: n.ParentSeq, title: n.Title,
-			status: n.Status, summary: n.Summary,
+			status: n.Status, summary: n.Summary, folded: n.SummaryFolded,
 			createdAt: n.CreatedAt, finishedAt: n.FinishedAt,
 			updatedAt: n.UpdatedAt,
 		}
@@ -171,17 +173,22 @@ func RollupTree(ac *domain.Context, agentID, topicID uint64) error {
 }
 
 // rollupNode recurses children first, then backfills this node's Summary from
-// theirs. A fold needs three things: the node itself is Done, its own Summary is
-// empty (one already written is never clobbered), and every direct child reached a
-// final state — a partial fold reads exactly like a complete one. A failed child
-// with no summary contributes no text but still settles its branch.
+// theirs. A fold needs two things: the node itself is Done, and every direct child
+// reached a final state — a partial fold reads exactly like a complete one. A failed
+// child with no summary contributes no text but still settles its branch.
+//
+// A Summary is rewritten here only while it is the library's own: empty, or carrying the
+// fold marker `UpdateNodeSummaryLocked` leaves behind. That is what keeps a fold complete
+// when a step is added under a Done parent, or when a settled child is re-opened and
+// finishes with different words. A Summary the host wrote has no marker and is never
+// clobbered — by anything in this file.
 func rollupNode(ac *domain.Context, agentID uint64, n *planNode) error {
 	for _, c := range n.children {
 		if err := rollupNode(ac, agentID, c); err != nil {
 			return err
 		}
 	}
-	if len(n.children) == 0 || n.status != core.StatusDone || n.summary != "" {
+	if len(n.children) == 0 || n.status != core.StatusDone || (n.summary != "" && !n.folded) {
 		return nil
 	}
 	parts := make([]string, 0, len(n.children))
@@ -199,6 +206,9 @@ func rollupNode(ac *domain.Context, agentID uint64, n *planNode) error {
 	// Children arrive in creation order, so a folded summary reads in the order
 	// the steps were planned, not the order they happened to be written.
 	summary := strings.Join(parts, "; ")
+	if summary == n.summary {
+		return nil
+	}
 	if err := UpdateNodeSummaryLocked(ac, agentID, n.id, summary); err != nil {
 		return err
 	}

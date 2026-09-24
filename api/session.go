@@ -354,7 +354,10 @@ func (s *Session) PlanNodeAdd(parentSeq uint32, title string) (uint32, error) {
 // outside in_progress / done / failed, or a step this turn never created, leaves the
 // tree exactly as it was. A step that reaches a terminal status can settle its
 // parent: once every direct child of a Done parent is itself terminal, the parent's
-// Summary folds up from its children's. This call writes no content: the events a step
+// Summary folds up from its children's — that text is the engine's own derivation, so it
+// follows the branch: a step planned under a parent that had already closed, or a settled
+// child finished with different words, re-folds it. State a Summary on the parent yourself
+// and the field becomes yours: from then on no rollup rewrites it. This call writes no content: the events a step
 // produced are L4 records, appended with AppendArchive on the same turn.
 func (s *Session) PlanNodeUpdate(step PlanStep) error {
 	return s.session.PlanNodeUpdate(toInternalPlanStep(step))

@@ -263,16 +263,20 @@ const (
 // nobody has written to stops being exempt once its last write falls outside the
 // window, while one still being worked on keeps its tree mid-task.
 type PlanNode struct {
-	IDHash     uint64 `json:"id_hash"`
-	TopicID    uint64 `json:"topic_id"`
-	Seq        uint32 `json:"seq"`        // ordinal inside the topic, never 0
-	ParentSeq  uint32 `json:"parent_seq"` // 0 = root
-	Status     uint8  `json:"status"`
-	Title      string `json:"title,omitempty"`       // empty = the view falls back to Seq
-	Summary    string `json:"summary,omitempty"`     // completion abbreviation
-	CreatedAt  int64  `json:"created_at"`            // stamped once, when the node is created
-	FinishedAt int64  `json:"finished_at,omitempty"` // stamped on a terminal status only
-	UpdatedAt  int64  `json:"updated_at"`
+	IDHash    uint64 `json:"id_hash"`
+	TopicID   uint64 `json:"topic_id"`
+	Seq       uint32 `json:"seq"`        // ordinal inside the topic, never 0
+	ParentSeq uint32 `json:"parent_seq"` // 0 = root
+	Status    uint8  `json:"status"`
+	Title     string `json:"title,omitempty"`   // empty = the view falls back to Seq
+	Summary   string `json:"summary,omitempty"` // completion abbreviation
+	// SummaryFolded marks that Summary is the library's own fold of this step's children,
+	// so a later rollup may re-derive it. Host text never carries it, and an old record that
+	// predates the key reads as host text — the safe direction: a fold is then left alone.
+	SummaryFolded bool  `json:"summary_folded,omitempty"`
+	CreatedAt     int64 `json:"created_at"`            // stamped once, when the node is created
+	FinishedAt    int64 `json:"finished_at,omitempty"` // stamped on a terminal status only
+	UpdatedAt     int64 `json:"updated_at"`
 }
 
 // HashPlanNode derives a plan node id from the owning topic + step ordinal,

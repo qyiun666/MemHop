@@ -557,3 +557,58 @@ func TestInterfacePlanUpdateKeepsTheSummaryItWasNotGiven(t *testing.T) {
 		t.Fatalf("a stated summary did not replace the stored one: %+v", again)
 	}
 }
+
+// A folded parent summary is the branch's conclusion, so it has to keep following the
+// branch: a step added under a parent the host already declared Done, or a settled child
+// re-opened and finished with different text, must not leave the parent stating a summary
+// of the branch as it looked earlier. Host text is a different thing — a summary the host
+// wrote itself is never clobbered, and the two are told apart by the fold's own shape
+// (children's conclusions joined in creation order), not by extra state on the record.
+func TestInterfaceParentFoldFollowsTheBranchItSummarizes(t *testing.T) {
+	db, _ := openTestDB(t)
+	sceneID := openSession(t, db)
+	openTurn(t, db, sceneID)
+
+	root := mustCreate(t, db, 0, "总任务")
+	c1 := mustCreate(t, db, root, "步骤一")
+	c2 := mustCreate(t, db, root, "步骤二")
+	mustUpdate(t, db, c1, memhop.PlanStatusDone, "一的结论")
+	mustUpdate(t, db, c2, memhop.PlanStatusDone, "二的结论")
+	mustUpdate(t, db, root, memhop.PlanStatusDone, "")
+	if got := findPlanNode(t, mustPlanState(t, db), root); got.Summary != "一的结论; 二的结论" {
+		t.Fatalf("the first fold = %q, want both conclusions in plan order", got.Summary)
+	}
+
+	// A step planned after the parent closed: while it is open, the branch is not
+	// settled, so the parent keeps the fold it has rather than growing a partial one.
+	c3 := mustCreate(t, db, root, "步骤三")
+	if got := findPlanNode(t, mustPlanState(t, db), root); got.Summary != "一的结论; 二的结论" {
+		t.Fatalf("an unsettled branch rewrote the fold: %q", got.Summary)
+	}
+	mustUpdate(t, db, c3, memhop.PlanStatusDone, "三的结论")
+	if got := findPlanNode(t, mustPlanState(t, db), root); got.Summary != "一的结论; 二的结论; 三的结论" {
+		t.Fatalf("the settled branch did not re-fold: %q, want the third conclusion added", got.Summary)
+	}
+
+	// Re-opening a settled child unsettles the branch, and finishing it with different
+	// words re-derives the parent's conclusion.
+	mustUpdate(t, db, c1, memhop.PlanStatusInProgress, "")
+	if got := findPlanNode(t, mustPlanState(t, db), root); got.Summary != "一的结论; 二的结论; 三的结论" {
+		t.Fatalf("a branch with an open child re-folded: %q", got.Summary)
+	}
+	mustUpdate(t, db, c1, memhop.PlanStatusDone, "一改了口")
+	if got := findPlanNode(t, mustPlanState(t, db), root); got.Summary != "一改了口; 二的结论; 三的结论" {
+		t.Fatalf("the re-settled branch did not re-fold: %q", got.Summary)
+	}
+
+	// Host text outlives every later rollup.
+	mustUpdate(t, db, root, memhop.PlanStatusDone, "宿主自己写的收口")
+	mustUpdate(t, db, c2, memhop.PlanStatusDone, "二改了口")
+	got := findPlanNode(t, mustPlanState(t, db), root)
+	if got.Summary != "宿主自己写的收口" {
+		t.Fatalf("a rollup overwrote the host's own parent summary: %q", got.Summary)
+	}
+	if child := findPlanNode(t, mustPlanState(t, db), c2); child.Summary != "二改了口" {
+		t.Fatalf("the restated child lost its own conclusion: %+v", child)
+	}
+}

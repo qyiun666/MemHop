@@ -67,6 +67,9 @@ func UpdateNode(ac *domain.Context, agentID uint64, step Step) error {
 	node.Status = u8
 	if step.Summary != "" {
 		node.Summary = step.Summary
+		// Stating a conclusion is the host taking the field over: from here the text is
+		// theirs, and a later rollup leaves it alone.
+		node.SummaryFolded = false
 	}
 	if step.Title != "" {
 		node.Title = step.Title
@@ -83,14 +86,16 @@ func UpdateNode(ac *domain.Context, agentID uint64, step Step) error {
 	return writeNode(ac, agentID, node)
 }
 
-// UpdateNodeSummaryLocked sets a plan node's Summary only — a Status changes
-// where a caller writes it, never because a fold ran. Callers hold ac.Mu.
+// UpdateNodeSummaryLocked writes a fold's result onto one node: its Summary, and the
+// marker saying that text is the library's derivation rather than the host's. A Status
+// changes where a caller writes it, never because a fold ran. Callers hold ac.Mu.
 func UpdateNodeSummaryLocked(ac *domain.Context, agentID, nodeID uint64, summary string) error {
 	node, err := core.ReadPlanNode(ac.Engine, agentID, nodeID)
 	if err != nil {
 		return err
 	}
 	node.Summary = summary
+	node.SummaryFolded = true
 	node.UpdatedAt = time.Now().UnixMilli()
 	return writeNode(ac, agentID, node)
 }
