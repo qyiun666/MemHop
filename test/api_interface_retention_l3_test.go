@@ -54,13 +54,23 @@ func TestInterfaceTheRetentionWindowStopsAtTheKnowledgeGraph(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Dream: %v", err)
 	}
-	if rep.L4RecordsPruned == 0 {
-		t.Fatalf("nothing was swept, so this run cannot say the window stopped anywhere: %+v", rep)
+	if rep.L4RecordsPruned != 2 {
+		t.Fatalf("the pass swept %d content records, want the two the one closed turn owns: %+v", rep.L4RecordsPruned, rep)
 	}
 
+	// Close and reopen: the promise is that the graph is still there on day 31, not that this
+	// process remembers writing it.
+	if err := m.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	m = openMockDB(t, path, llm.srv.URL, sweepOnly)
+	sess, err = m.Primary()
+	if err != nil {
+		t.Fatalf("Primary after reopen: %v", err)
+	}
 	graphs, err := sess.ListL3()
 	if err != nil {
-		t.Fatalf("ListL3 after the sweep: %v", err)
+		t.Fatalf("ListL3 after the reopen: %v", err)
 	}
 	listed := false
 	for _, g := range graphs {

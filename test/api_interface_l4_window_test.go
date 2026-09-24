@@ -93,7 +93,7 @@ func TestInterfaceL4WindowIsTheClockTheReadReports(t *testing.T) {
 	}
 	inWindow := map[string]bool{}
 	for _, w := range windowed {
-		if w.CreatedAt < base || w.CreatedAt > cut {
+		if w.CreatedAt < lo || w.CreatedAt > cut {
 			t.Fatalf("the window returned %s stamped %d, outside [%d,%d] — the predicate and the reported clock disagree",
 				w.ID, w.CreatedAt, lo, cut)
 		}
@@ -122,6 +122,10 @@ func TestInterfaceL4WindowIsTheClockTheReadReports(t *testing.T) {
 	limited, err := sess.SearchL4(memhop.L4Query{Kind: ptr(memhop.KindEvent), Start: base, End: cut, Limit: 2})
 	if err != nil {
 		t.Fatalf("windowed limited event read: %v", err)
+	}
+	if len(limited) != 2 {
+		t.Fatalf("the windowed limited read answered %d rows, want the two the tail comparison expects: %+v",
+			len(limited), limited)
 	}
 	for i := range limited {
 		if limited[i].ID != events[len(events)-2+i].ID {

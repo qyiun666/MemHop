@@ -124,6 +124,10 @@ func TestInterfaceFrameworkPortShapesFitWithoutIdBookkeeping(t *testing.T) {
 			content, created, key = string(r.Content), r.Created, r.Key
 		}
 	}
+	if byKind["event"] != 1 {
+		t.Fatalf("the port read carried %v — an adapter that answers only the dialogue lines "+
+			"loses what a round did: %+v", byKind, records)
+	}
 	if byKind["utterance"] != 2 {
 		t.Fatalf("the port read back %v, want the pair of utterances this round closed: %+v", byKind, records)
 	}

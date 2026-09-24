@@ -16,11 +16,11 @@ import (
 // "same id, two writers" is the ordinary case rather than a corner. The id a node derives
 // from its title has the same property inside one batch.
 //
-// One note the mutants taught: making a node's derived id carry the writing domain changes
-// nothing, because a repeat title is settled by the graph's own title set long before an
-// address is computed, and the last line behind it is the pool's address guard refusing to
-// overwrite a record that is already there. Shared identity is therefore two judgements, not
-// one hash formula — which is why the mutant that does bite is the one that drops the title set.
+// Shared identity is two judgements, not one hash formula: a repeat title is settled by the
+// graph's own title set long before an address is computed, and the pool's address guard is the
+// last line refusing to overwrite a record that is already there. Changing how a node's id is
+// derived therefore cannot duplicate a title on its own — which is what the assertions below
+// must be read against.
 //
 // So the outcomes a host can see have to be single-valued: every caller names the same graph,
 // the file holds one slot for it, every node that was asked for is there exactly once, and a
