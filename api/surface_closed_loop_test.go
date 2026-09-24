@@ -328,6 +328,47 @@ func TestPlanWritesRejectedLeaveTreeUntouched(t *testing.T) {
 	}
 }
 
+// The budgets are the host's contract in bytes, so the number itself is pinned: a change to it is
+// a change to what a host must chunk into, and it should fail here rather than quietly widen the
+// gap between the guide and the code.
+func TestWriteBudgetsAreTheAdvertisedNumbers(t *testing.T) {
+	if MaxEventPayloadBytes != 4*1024 {
+		t.Fatalf("the event budget is %d bytes, want the 4096 the guides tell a host to chunk into",
+			MaxEventPayloadBytes)
+	}
+	if MaxUtterancePayloadBytes != 64*1024 {
+		t.Fatalf("the utterance budget is %d bytes, want 65536", MaxUtterancePayloadBytes)
+	}
+}
+
+// A refused append must not consume a slot: the turn's event track is read by Seq, and the host
+// reasons about its own calls in that order ("the third thing I recorded"). Burning an ordinal
+// on a refusal would leave a hole no later call ever fills — and the budget is checked before
+// any slot is offered, which is exactly what this pins.
+func TestRefusedAppendLeavesNoHoleInTheTrack(t *testing.T) {
+	sess := openSurfaceDB(t)
+	turn := mustTurnKey(t, sess)
+	first, err := sess.AppendArchive(event("step", "one", 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sess.AppendArchive(event("step", strings.Repeat("x", MaxEventPayloadBytes), 2)); err == nil {
+		t.Fatal("the oversized event was supposed to be refused")
+	}
+	second, err := sess.AppendArchive(event("step", "two", 3))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second != first+1 {
+		t.Fatalf("a refusal burned a slot: the accepted appends landed on %d and %d, want them adjacent",
+			first, second)
+	}
+	events := eventsOf(t, sess, turn)
+	if len(events) != 2 || events[0].Seq != first || events[1].Seq != second {
+		t.Fatalf("the turn reads %d events (%+v), want the two that were accepted", len(events), events)
+	}
+}
+
 func TestAppendArchiveRefusesAndStoresNothing(t *testing.T) {
 	sess := openSurfaceDB(t)
 	turn := mustTurnKey(t, sess)
@@ -339,13 +380,15 @@ func TestAppendArchiveRefusesAndStoresNothing(t *testing.T) {
 		t.Fatalf("a refused append stored %d events", len(evs))
 	}
 	// exactly at the budget is accepted — the budget is the whole record, so the
-	// one-byte name leaves the rest to the body
-	if _, err := sess.AppendArchive(event("x", strings.Repeat("a", 4*1024-1), 1)); err != nil {
+	// one-byte name leaves the rest to the body. Every size here is written against the
+	// exported constant, which is what makes the export a checked boundary rather than a
+	// number that may have drifted from the check since the guide was written.
+	if _, err := sess.AppendArchive(event("x", strings.Repeat("a", MaxEventPayloadBytes-1), 1)); err != nil {
 		t.Fatalf("event at the budget limit: %v", err)
 	}
 	// A name is part of the record too: putting the bulk there is the same
 	// oversized event, refused the same way, and it stores nothing.
-	if _, err := sess.AppendArchive(event(strings.Repeat("n", 4*1024), "a", 1)); err == nil {
+	if _, err := sess.AppendArchive(event(strings.Repeat("n", MaxEventPayloadBytes), "a", 1)); err == nil {
 		t.Fatal("an over-budget event name must be refused")
 	}
 	if evs := eventsOf(t, sess, turn); len(evs) != 1 {
@@ -354,12 +397,12 @@ func TestAppendArchiveRefusesAndStoresNothing(t *testing.T) {
 	// A dialogue original gets its own budget, and the same refuse-don't-truncate
 	// rule: 64 KiB is accepted, one rune more is not.
 	if _, err := sess.AppendArchive(ArchiveInput{
-		Kind: KindUtterance, Role: RoleUser, Content: strings.Repeat("a", 64*1024), CreatedAt: 2,
+		Kind: KindUtterance, Role: RoleUser, Content: strings.Repeat("a", MaxUtterancePayloadBytes), CreatedAt: 2,
 	}); err != nil {
 		t.Fatalf("utterance at the budget limit: %v", err)
 	}
 	if _, err := sess.AppendArchive(ArchiveInput{
-		Kind: KindUtterance, Role: RoleUser, Content: strings.Repeat("a", 64*1024+1), CreatedAt: 3,
+		Kind: KindUtterance, Role: RoleUser, Content: strings.Repeat("a", MaxUtterancePayloadBytes+1), CreatedAt: 3,
 	}); err == nil {
 		t.Fatal("an over-budget utterance must be refused, not truncated")
 	}

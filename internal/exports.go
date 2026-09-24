@@ -13,6 +13,7 @@ package internal
 import (
 	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/config"
+	"github.com/qyiun666/MemHop/internal/content"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
@@ -94,6 +95,17 @@ const (
 	// RoleDream 是库给巩固组摘要自己戳的记号：只出得去（SceneContext 与 SearchL4 会带回来），
 	// 进不来——content.ValidateAppend 拒任何带它的写入。
 	RoleDream = core.RoleDream
+)
+
+// ---- write budgets (real definitions in internal/content) ----
+
+// The two payloads a host may write per record. They belong on the surface because a
+// tool result that does not fit one event record has to be split before it is appended —
+// and the number to split against should be something the host reads, not something it
+// copies out of a prose table and discovers by the refusal.
+const (
+	MaxEventPayloadBytes     = content.MaxEventPayload
+	MaxUtterancePayloadBytes = content.MaxUtterancePayload
 )
 
 // ---- agent domain identity ----

@@ -238,7 +238,7 @@ seq, err = db.AppendArchive(api.ArchiveInput{
 永不过期）、未定义的 `ContentType`、
 事件没有 `EventType`、原文带了 `EventType` 或 `NodeSeq`、事件的 `NodeSeq` 指向本轮计划
 从未建出的步骤（`ErrInvalidQuery`，且什么都不落库）、以及值 3 那个角色（融合摘要的标记，
-库自己盖）；超预算同样拒写不截断——事件整条 4 KiB（名字与正文合计）、原文 64 KiB，被剪短的记录读回来和完整的
+库自己盖）；超预算同样拒写不截断——事件整条 `MaxEventPayloadBytes`（4 KiB，名字与正文合计）、原文 `MaxUtterancePayloadBytes`（64 KiB），两个数由门面导出，宿主照着常量切自己那条记录，不必抄文档里的数字，被剪短的记录读回来和完整的
 无法区分。
 
 ### 6.3 轮次结束：`Update(TurnEnd)`

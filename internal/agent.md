@@ -398,7 +398,10 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    两种 Kind 各自的字段归属、预算（事件的 4 KiB 量的是**整条记录**——
    `EventType` 与 `Content` 合起来算，分开各量一道就等于给批量写入留一个免检的口袋）
    与跨 Kind 的 Seq 覆写语义记在
-   `internal/content/agent.md` 与门面注释里，根不复述。
+   `internal/content/agent.md` 与门面注释里，根不复述。两条额度都是对外的东西：真定义在 `content`，
+   门面按同名转发（`MaxEventPayloadBytes` / `MaxUtterancePayloadBytes`），因为超预算是拒写不截断——
+   宿主切分自己那条记录要照着数切，那个数就得有可读的出处，不该只在指南的散文里；门面测试也一并读常量，
+   「导出的数」与「被强制的数」因此不可能各说一套。零留痕包含不占槽位：`Seq` 在校验通过之后才给出，被拒的那一次不会在事件轨里留下一个再不被回填的洞。
    `EventType` 是宿主自定的步骤名，计划绑定事件与裸事件同口径：引擎从不按它
    分支（读回时原样回显那个名字），唯一约束是非空。
    内容只按话题键整体寻址：公开面上没有任何调用接受单条记录的 id 去写，

@@ -49,6 +49,14 @@ const (
 // no write ability: the refusal is enforced at the boundary, not by withholding the name.
 // These are values of ArchiveRole, the same type the shapes above declare their field as,
 // so a host assigns one with no conversion.
+// The per-record write budgets, so a host can size what it appends instead of discovering
+// the boundary through a refusal. `AppendArchive` refuses what exceeds them and never
+// truncates: a shortened record reads as a complete one.
+const (
+	MaxEventPayloadBytes     = internal.MaxEventPayloadBytes
+	MaxUtterancePayloadBytes = internal.MaxUtterancePayloadBytes
+)
+
 const (
 	RoleUser   = internal.RoleUser
 	RoleAgent  = internal.RoleAgent

@@ -286,8 +286,10 @@ next consolidation sweeps the turn's transcript, and a microsecond-scale one nev
 expires), an undefined `ContentType`, an event with no `EventType`, an utterance
 carrying an `EventType` or a `NodeSeq`, an event whose `NodeSeq` names a step this turn
 never created (`ErrInvalidQuery`, and nothing lands), the consolidation role `3` (the
-library marks its own summaries with it), and content over budget — 4 KiB per event record, its name included, 64
-KiB per utterance. Over budget is **refused, never truncated**: a shortened record reads
+library marks its own summaries with it), and content over budget — `MaxEventPayloadBytes`
+(4 KiB) per event record, its name included, and `MaxUtterancePayloadBytes` (64 KiB) per
+utterance; both are exported, so a host chunks what it appends against the number rather than
+a copy of this sentence. Over budget is **refused, never truncated**: a shortened record reads
 back exactly like a complete one.
 
 ### 6.3 Turn end: `Update(TurnEnd)`
