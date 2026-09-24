@@ -392,3 +392,52 @@ func TestInterfaceUpdateRefusesAnOffContractReply(t *testing.T) {
 		t.Fatalf("the retry closed topic %s, want the turn the refused call left open (%s)", closed, topicID)
 	}
 }
+
+// Item 1 of the host's list is 「keep the profile in the prompt every round」, and the round's
+// read is the call that carries it: ProfileBrief has to say what the profile holds *now*, not
+// what it held when the last consolidation ran. Whole-replace is what makes this worth testing
+// separately — a preference the host stopped sending is gone from the brief, not still listed.
+func TestInterfaceProfileBriefReflectsWhatTheHostJustWrote(t *testing.T) {
+	db, _ := openTestDB(t)
+	if err := db.UpdateL0(memhop.ProfileInput{
+		Name: "探针主域", Role: "值守", Personality: "先测量再动手",
+		Preferences: map[string]string{"mode": "strict", "retry": "3"},
+	}); err != nil {
+		t.Fatalf("UpdateL0: %v", err)
+	}
+	res, err := db.Search(memhop.SearchQuery{})
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	for _, want := range []string{"探针主域", "值守", "先测量再动手", "mode=strict", "retry=3"} {
+		if !strings.Contains(res.ProfileBrief, want) {
+			t.Fatalf("the round's read carries a brief without %q: %q", want, res.ProfileBrief)
+		}
+	}
+
+	// The second write replaces the host half whole: the dropped preference must not
+	// survive in the brief, or the digest would be a second source of truth.
+	if err := db.UpdateL0(memhop.ProfileInput{
+		Name: "改名后的主域", Role: "值守", Personality: "先测量再动手",
+		Preferences: map[string]string{"mode": "loose"},
+	}); err != nil {
+		t.Fatalf("second UpdateL0: %v", err)
+	}
+	again, err := db.Search(memhop.SearchQuery{})
+	if err != nil {
+		t.Fatalf("second Search: %v", err)
+	}
+	if !strings.Contains(again.ProfileBrief, "改名后的主域") || !strings.Contains(again.ProfileBrief, "mode=loose") {
+		t.Fatalf("the brief did not follow the rename and the new table: %q", again.ProfileBrief)
+	}
+	if strings.Contains(again.ProfileBrief, "retry") {
+		t.Fatalf("a preference the host stopped sending is still in the brief: %q", again.ProfileBrief)
+	}
+	// The digest is a rendering of the same record GetL0 returns, never a cached copy:
+	// what a host reads back field by field and what it puts in front of the model
+	// cannot disagree after a write.
+	slot, err := db.GetL0()
+	if err != nil || slot.Name != "改名后的主域" || len(slot.Preferences) != 1 {
+		t.Fatalf("GetL0 after the second write = %+v err %v", slot, err)
+	}
+}

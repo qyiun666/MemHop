@@ -165,3 +165,84 @@ func counts(tb testing.TB, m *memhop.DB) (int64, int64) {
 	}
 	return st.FileBytes, st.RecordCount
 }
+
+// Consolidation gives a scene rows the scene listing no longer names directly: the fused
+// parent, and under it the turns it swallowed. A scene delete is only complete if the whole
+// tree goes — so the check runs on a **compacted copy**, where nothing but live records
+// remains and a surviving row cannot hide behind a tombstone or a cache.
+func TestInterfaceDeleteSceneTakesItsFusedGroupWithIt(t *testing.T) {
+	llm := newMockLLM(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "group_delete.meh")
+	m := openMockDB(t, path, llm.srv.URL, noAutoDreamButCompress)
+	db := newTestDB(t, m)
+
+	stamp := int64(1_700_000_000_000)
+	var sceneID string
+	for i := 0; i < 4; i++ {
+		res, err := db.Search(memhop.SearchQuery{NewScene: i == 0})
+		if err != nil {
+			t.Fatalf("Search %d: %v", i, err)
+		}
+		sceneID = res.Scene.SceneID
+		stamp += 1000
+		if _, err := turnOf(db, "融合前的提问", "融合前的回答", stamp); err != nil {
+			t.Fatalf("turn %d: %v", i, err)
+		}
+	}
+	if _, err := db.Dream(context.Background(), ""); err != nil {
+		t.Fatalf("Dream: %v", err)
+	}
+	ctx, err := db.SceneContext(sceneID)
+	if err != nil {
+		t.Fatalf("SceneContext: %v", err)
+	}
+	var sunk, parents int
+	for _, row := range ctx.Topics {
+		if row.Depth > 1 {
+			sunk++
+		} else if row.ChildCount > 0 {
+			parents++
+		}
+	}
+	if sunk == 0 || parents == 0 {
+		t.Fatalf("the pass built no group to delete: %+v", ctx.Topics)
+	}
+
+	if err := db.DeleteScene(sceneID); err != nil {
+		t.Fatalf("DeleteScene: %v", err)
+	}
+	copyPath := filepath.Join(dir, "group_delete_copy.meh")
+	if err := m.CompactTo(copyPath); err != nil {
+		t.Fatalf("CompactTo: %v", err)
+	}
+	if err := m.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	reopened := openMockDB(t, copyPath, llm.srv.URL)
+	defer reopened.Close()
+	primary, err := reopened.Primary()
+	if err != nil {
+		t.Fatalf("Primary on the copy: %v", err)
+	}
+
+	liveBytes, liveRecords := counts(t, reopened)
+	if liveRecords != 1 {
+		t.Fatalf("the compacted copy still holds %d records after its only scene was deleted (want only the domain's profile); bytes=%d",
+			liveRecords, liveBytes)
+	}
+	if scenes, err := primary.ListScenes(""); err != nil || len(scenes) != 0 {
+		t.Fatalf("the copy lists scenes after the delete: %+v err %v", scenes, err)
+	}
+	if nodes, err := primary.ListL1(); err != nil || len(nodes) != 0 {
+		t.Fatalf("the copy keeps a scene node for a deleted scene: %+v err %v", nodes, err)
+	}
+	kind := memhop.KindUtterance
+	for _, row := range ctx.Topics {
+		rows, err := primary.SearchL4(memhop.L4Query{TopicID: &row.TopicID, Kind: &kind})
+		if err != nil || len(rows) != 0 {
+			t.Fatalf("a %s-level turn %s of the deleted scene still answers %d rows (err %v) — its originals were left behind",
+				map[bool]string{true: "sunk", false: "top"}[row.Depth > 1], row.TopicID, len(rows), err)
+		}
+	}
+}
