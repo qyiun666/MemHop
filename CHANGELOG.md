@@ -349,6 +349,8 @@ README 的版本表与 git log。
 - **两条结构性判断照旧成立**：重开这份语料仍**贵于**重开空文件（差值就是「扫一遍语料」），每轮 6 条记录不变。
 文档里这些数从此按「量级 + 复现命令」给，不按单值给；`go test ./test/ -bench BenchmarkEngine -benchtime=200x -count=3` 是复现法。
 
+144. **`IDs` 那条按 id 答的快路径，不许把同设的过滤条件一起带走**（新增 `test/api_interface_l4_filter_matrix_test.go`；库行为一字未动）。门面写得很清楚：`IDs` 是**唯一一个「只设它就按 id 取而不走扫描」**的条件——而仓里自己那条老话就是「快路径绕过过滤谓词是最容易静默失灵的地方」。这次不测实现，测门面承诺的三件事：两个 `Kind` 分片并回去等于不筛的读（按不筛那条自己的序比）、`IDs` 单设只答它点名的那些、`IDs` 与 `Kind`/`Keyword`/`NodeSeq` **同设时另一半照样生效**，外加「点一个不存在的 id 是不选中而不是报错，且不许吞掉旁边的活 id」。负例＝让 id 分支在取数前把同设条件清空 → `IDs+Kind answered [4 条], want the events [2 条] — the id path ignored the companion filter`。写这轮的三次红全是我自己的预期错，也都如实留下：夹具是 4 条不是 5（形状守卫改成精确计数，反而更硬）；用 `retry_policy` 当唯一关键词不成立，因为这一轮的回答行里也有它（换成只出现在事件里的 `grep`）；步骤闭包只含绑到它的那条事件，`turn_outcome` 的 `NodeSeq` 是 0；以及「不存在的 id」我一开始写成保留零键，那是入口就该拒的另一条契约（顺手把它也钉了一条）。
+
 ## v1.6.5 — 2026-09-22 — MCP 面整体退役：对外只剩 Go module
 
 1. **`cmd/memhop-mcp` 整包删除**（14 个文件 3109 行）：25 个工具、多租户 HTTP（SSE 与 streamable-http 双传输）、按 `/mcp/<tenant>` 建/取域的租户注册表、`--tenants` 白名单与锚定 db-dir 的读入口一起消失。仓库不再有 server 形态、不再有后台进程，对外只剩「以 Go module 使用 `api`」一种接入。
