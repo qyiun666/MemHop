@@ -784,7 +784,9 @@ reads back as "this graph holds no such edges".
 value sets no bound — the walk answers with the whole reachable component. That is the
 same reading every `limit` on this surface carries (`L3NodeQuery` and `L4Query` include
 `limit: 0` = no cap), so a tool schema writes one rule for zero, not two. Cyclic edges are
-safe: a node is visited once, so the walk stops at the component rather than spinning.
+safe: a node is visited once, so the walk stops at the component rather than spinning. The result is self-describing at every bound: an edge is reported only when
+all of its members are inside the neighbourhood the walk reached, so a host never gets a relation whose
+end it cannot name without a second call (a hyperedge crossing the bound is left out whole).
 
 `QueryL3Nodes` filters AND together (`IDs` / `Keyword` / `NodeType`), so naming
 only `GraphID` lists that graph's nodes and `Keyword` is case-insensitive — like
