@@ -572,7 +572,7 @@ when an admin-face method wanders in here.
 | `memory_scenes` | `Session.ListScenes` | `l3_id` | the scene list, ordered by record id |
 | `memory_scene_read` | `Session.SceneContext` | `scene_id` | the conversation of one scene, flattened two levels deep |
 | `memory_graph_get` | `Session.GetL3` | `id` | one graph: slot, nodes, hyperedges |
-| `memory_graph_list` | `Session.ListL3` | none | the graphs this file holds |
+| `memory_graph_list` | `Session.ListL3` | none | the graphs this file holds, each as `{id, name, …}` — the `name` is the label an import's `Domain` carried, so a host resolves a project name the model mentions to that graph's `id` at call time and needs no id table of its own |
 | `memory_graph_import` | `Session.ImportL3` | `items` (`title`, `domain`, `node_type`, `content`, `keywords`, `source_ref`, `related`, each with `titles`, `kind`), `mode` | which graphs were touched, what was created/updated/skipped, per-failure lines |
 | `memory_nodes_query` | `Session.QueryL3Nodes` | `graph_id`, `ids`, `keyword`, `node_type`, `limit` | the matching nodes, ordered by id |
 | `memory_subgraph` | `Session.QueryL3Subgraph` | `graph_id`, `start_node_id`, `max_depth`, `edge_kinds` | the reachable neighbourhood as nodes plus edges |

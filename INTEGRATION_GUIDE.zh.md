@@ -431,7 +431,7 @@ worker 属于哪一种由宿主定，库不替它猜。
 | `memory_scenes` | `Session.ListScenes` | `l3_id` | 场景清单，按记录 id 升序 |
 | `memory_scene_read` | `Session.SceneContext` | `scene_id` | 一个场景的对话，摊平到两层 |
 | `memory_graph_get` | `Session.GetL3` | `id` | 一张图：槽、节点、超边 |
-| `memory_graph_list` | `Session.ListL3` | 无 | 这个文件里有哪几张图 |
+| `memory_graph_list` | `Session.ListL3` | 无 | 这份文件里有哪几张图，每张是 `{id, name, …}`——那个 `name` 就是导入时 `Domain` 带的那个标签，所以宿主在调用当下就能把模型提到的项目名换成这张图的 `id`，不必自己养一张 id 表 |
 | `memory_graph_import` | `Session.ImportL3` | `items`（`title`, `domain`, `node_type`, `content`, `keywords`, `source_ref`, `related`——其中每条再带 `titles`, `kind`）, `mode` | 批次碰到哪几张图、建了什么改了什么跳了什么、逐条失败说明 |
 | `memory_nodes_query` | `Session.QueryL3Nodes` | `graph_id`, `ids`, `keyword`, `node_type`, `limit` | 命中的节点，按 id 升序 |
 | `memory_subgraph` | `Session.QueryL3Subgraph` | `graph_id`, `start_node_id`, `max_depth`, `edge_kinds` | 可达邻域：节点加边 |
