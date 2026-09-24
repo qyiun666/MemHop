@@ -652,7 +652,11 @@ nothing (`TestListL1OnAnUndreamedDomainIsEmptyNotNil`), the list comes back in i
 call (`TestListL1SortsByIDHash`), and a node that exists but will not read back fails the call
 instead of being skipped (`TestListL1ReportsUnreadableNode`). Fading is measured in wall-clock
 hours and composes across passes, so two short intervals and one long one arrive at the same
-importance (`TestNodeDecayComposesAcrossPasses`).
+importance (`TestNodeDecayComposesAcrossPasses`). The whole of it is walked on the host's own
+surface, no build tag and no quota: empty before the first `Dream`, one node per settled
+conversation, an edge shared between two conversations that repeat the same keywords, and a
+deleted topic still listed until the next pass rebuilds the snapshot
+(`TestInterfaceDreamBuildsTheAssociationLayer`).
 
 ### L2 scenes
 

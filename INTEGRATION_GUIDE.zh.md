@@ -489,7 +489,9 @@ nodes, err := db.ListL1()   // []api.SceneNodeView —— 只读，没有写入�
 （`TestDeleteSceneLeavesNoOrphansInReadableLayers`）；从没巩固过的域答回 `[]` 而不是「没有」
 （`TestListL1OnAnUndreamedDomainIsEmptyNotNil`）；每次调用都按 id 升序返回（`TestListL1SortsByIDHash`）；
 有一个节点存在却读不回时整次调用失败而不是跳过它（`TestListL1ReportsUnreadableNode`）。衰减按墙上时钟的小时数
-计并且**可复合**：两段短间隔与一段长间隔会落在同一个重要性上（`TestNodeDecayComposesAcrossPasses`）。
+计并且**可复合**：两段短间隔与一段长间隔会落在同一个重要性上（`TestNodeDecayComposesAcrossPasses`）。整件事在宿主那一层
+也被走了一遍（不用 tag、不花额度）：第一次 `Dream` 之前是空表、每条收过轮的场景一个节点、两条反复提到同一组关键词的
+会话之间会有一条共享边、删掉的话题在下一次同步前仍列在快照里（`TestInterfaceDreamBuildsTheAssociationLayer`）。
 
 ### L2 场景管理
 
