@@ -81,8 +81,11 @@ func nodeFilter(q L3NodeQuery) (graph.NodeFilter, error) {
 	return f, nil
 }
 
-// QueryL3Subgraph BFS from startNodeID up to maxDepth (maxDepth<=0 means 1);
-// edgeKinds restricts reachable edges. Nodes and edges come back sorted by id,
+// QueryL3Subgraph BFS from startNodeID up to maxDepth hops; edgeKinds restricts reachable
+// edges. A non-positive maxDepth sets no bound, which is how every `limit` on the L3 and L4
+// reads is read too — one zero, one meaning across the surface; the walk visits each node
+// once, so a cyclic hypergraph terminates at the reachable component rather than spinning.
+// Nodes and edges come back sorted by id,
 // because both listings are assembled from a hash-map scan. A kind outside the
 // vocabulary is refused — the write boundary refuses to store one, and an
 // empty subgraph would read back as "this graph holds no such edges".
@@ -107,9 +110,6 @@ func (db *DB) QueryL3Subgraph(agentID uint64, graphID, startNodeID string, maxDe
 	}
 	if err := graph.CheckSubgraphStart(db.engine, core.SharedPoolAgentID, graphHash, startHash); err != nil {
 		return nil, err
-	}
-	if maxDepth <= 0 {
-		maxDepth = 1
 	}
 
 	// Adjacency: all graph edges (filtered by edgeKinds), hyperedge nodeIDs

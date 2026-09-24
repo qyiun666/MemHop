@@ -304,7 +304,10 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    一律不被采信（`TestAppendEventCannotForgeContentFields`）。
    同一写法管到读侧的过滤条件：`SearchL4` 在进数据层之前把 `Kind`/`Type` 的未定义值、`NodeSeq`
    没带话题键、以及两条时间界的单位各拒一次（界用 `content.CheckQueryBound`，与写入同一个判断），
-   因为一个错单位的界答出来的行集不是宿主能核对的东西。
+   因为一个错单位的界答出来的行集不是宿主能核对的东西。「取多少」这一类入参则共享一条读法：
+   `L3NodeQuery.Limit`、`L4Query.Limit` 与 `QueryL3Subgraph` 的 `maxDepth` **非正即不设界**，判据住在
+   `graph.BfsWithinDepth` 自己身上而不是调用方——钳在调用方会让同一个 0 在两条读上说着相反的话，而
+   `limit` 与 `max_depth` 都是宿主绑成工具后由模型亲手填的键。
 6. **`UpdateScene` 是 `SceneName` 的唯一宿主写者**：场景记录只被 `OpenSceneTurn`
    读改写（它回填整条记录、只动计数），Dream 从不写场景记录，故改名不会被
    后续读取覆盖；建新场景时才写默认名 `session:<id>`（`scene` 私有的 `create`）。

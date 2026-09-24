@@ -724,6 +724,12 @@ empty; a kind outside the six constants is refused with `ErrInvalidQuery`, becau
 the write boundary refuses to store one and an empty subgraph is the answer a host
 reads back as "this graph holds no such edges".
 
+`QueryL3Subgraph`'s `max_depth` counts hops from the start node, and a non-positive
+value sets no bound — the walk answers with the whole reachable component. That is the
+same reading every `limit` on this surface carries (`L3NodeQuery` and `L4Query` include
+`limit: 0` = no cap), so a tool schema writes one rule for zero, not two. Cyclic edges are
+safe: a node is visited once, so the walk stops at the component rather than spinning.
+
 `QueryL3Nodes` filters AND together (`IDs` / `Keyword` / `NodeType`), so naming
 only `GraphID` lists that graph's nodes and `Keyword` is case-insensitive — like
 the L4 keyword filter. Every L3 read comes back sorted by id (its nodes, its

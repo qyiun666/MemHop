@@ -205,7 +205,10 @@ func (s *Session) QueryL3Nodes(q L3NodeQuery) ([]HypergraphNode, error) {
 	return mapSlice(nodes, fromHypergraphNode), nil
 }
 
-// QueryL3Subgraph returns a BFS subgraph, its nodes and edges sorted by id. A node
+// QueryL3Subgraph returns a BFS subgraph, its nodes and edges sorted by id. maxDepth
+// counts hops from the start node, and a non-positive one sets no bound — the walk runs to
+// the reachable component, which is how every limit on this surface is read too, so one
+// zero never means "one hop" here and "everything" there. A node
 // the walk reaches but cannot be read is an error rather than a smaller answer: that
 // node is one an edge named.
 func (s *Session) QueryL3Subgraph(graphID, startNodeID string, maxDepth int, edgeKinds []GraphEdgeKind) (*L3Subgraph, error) {

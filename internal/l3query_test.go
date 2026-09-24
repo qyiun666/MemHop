@@ -4,6 +4,7 @@
 package internal
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/qyiun666/MemHop/internal/common"
@@ -207,13 +208,31 @@ func TestQueryL3SubgraphDepth(t *testing.T) {
 		t.Fatalf("depth 3: want 4 nodes / 3 edges, got %d / %d", len(sub.Nodes), len(sub.Edges))
 	}
 
-	// maxDepth<=0 counts as 1 hop.
-	sub, err = db.QueryL3Subgraph(core.DefaultAgentID, graphHex, common.FormatHash(idA), 0, nil)
+	// A non-positive depth sets no bound — the same reading `limit` carries on the other L3
+	// and L4 reads, so a host or a tool schema never has to know that this one zero means
+	// "one hop" while that one means "everything". Answer is the whole reachable component,
+	// identical to a depth that already covers it.
+	unbounded, err := db.QueryL3Subgraph(core.DefaultAgentID, graphHex, common.FormatHash(idA), 0, nil)
 	if err != nil {
 		t.Fatalf("QueryL3Subgraph depth 0: %v", err)
 	}
-	if len(sub.Nodes) != 2 {
-		t.Fatalf("depth 0: want 2 nodes, got %d", len(sub.Nodes))
+	if len(unbounded.Nodes) != 4 || len(unbounded.Edges) != 3 {
+		t.Fatalf("depth 0: want the whole graph (4 nodes / 3 edges), got %d / %d",
+			len(unbounded.Nodes), len(unbounded.Edges))
+	}
+	whole, err := db.QueryL3Subgraph(core.DefaultAgentID, graphHex, common.FormatHash(idA), 3, nil)
+	if err != nil {
+		t.Fatalf("QueryL3Subgraph depth 3: %v", err)
+	}
+	if !reflect.DeepEqual(unbounded, whole) {
+		t.Fatalf("an unbounded walk differs from a depth that covers the graph:\n %v\n %v", unbounded, whole)
+	}
+	negative, err := db.QueryL3Subgraph(core.DefaultAgentID, graphHex, common.FormatHash(idA), -5, nil)
+	if err != nil {
+		t.Fatalf("QueryL3Subgraph depth -5: %v", err)
+	}
+	if !reflect.DeepEqual(negative, unbounded) {
+		t.Fatalf("depth -5 answered differently from 0")
 	}
 }
 

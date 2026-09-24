@@ -546,6 +546,8 @@ label 会以 `ErrInvalidQuery` 拒掉，而不是留给那个域一个歧义。*
 边种类以 `ErrInvalidQuery` 拒绝——写侧本就拒收它，而滤出一个空子图会被宿主读成「这张图
 没有这种边」。
 
+`QueryL3Subgraph` 的 `max_depth` 数的是从起点走几跳，**非正数即不设界**——走完整张可达分量。这跟本面上所有 `limit` 是同一条读法（`L3NodeQuery` 与 `L4Query` 的 `limit: 0` 都是「不封顶」），所以给模型写 schema 时零只有一条规则，不必一处写「一跳」、另一处写「全部」。环也安全：一个节点只访问一次，走到可达分量即停，不会绕圈（`TestQueryL3SubgraphDepth` 把 0 与「已经覆盖全图的那一档深度」逐字段比相等）。
+
 `QueryL3Nodes` 的条件之间是 **AND**（`IDs` / `Keyword` / `NodeType`），所以只填 `GraphID` 即列出该图全部节点，`Keyword` 忽略大小写——与 L4 的关键词一致。L3 的每一份读都按 id 升序返回（图里的节点、边，`ListL3` 的图槽），`Limit` 取的是这条确定顺序的前 N 个，所以同一个查询每次给出的都是同一份清单。`DeleteL3` 连节点带边整图删掉，再清掉本文件里每个域中指向它的场景锚点；改一个错事实走 `ImportL3` 的 `L3ImportMerge` 模式，不做节点级删除。
 
 库发出的每个 L3 id 都只对应一种记录：`GetL3(节点 id)`、`UpdateL3(节点 id, …)`、`UpdateScene(scene, ScenePatch{L3ID: &节点 id})` 一律 `ErrNotFound`，不会跨种类读到、更不会写到。

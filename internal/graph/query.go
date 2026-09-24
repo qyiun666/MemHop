@@ -96,12 +96,15 @@ func SubgraphAdjacency(engine *core.StorageEngine, agentID uint64, graphID uint6
 	return adj, edges, nil
 }
 
-// BfsWithinDepth returns the ids reachable from start within maxDepth
-// hops (level order, one hop per round), including start itself.
+// BfsWithinDepth returns the ids reachable from start within maxDepth hops (level order,
+// one hop per round), including start itself. A non-positive maxDepth sets no bound and the
+// walk runs to the reachable component — the same reading `limit` carries on every other
+// L3 and L4 read, so one zero means one thing across the surface. The walk cannot spin:
+// a node is visited once, so a cycle in the hypergraph ends the round rather than the run.
 func BfsWithinDepth(start uint64, adj map[uint64]map[uint64]struct{}, maxDepth int) map[uint64]struct{} {
 	visited := map[uint64]struct{}{start: {}}
 	queue := []uint64{start}
-	for depth := 0; depth < maxDepth && len(queue) > 0; depth++ {
+	for depth := 0; (maxDepth <= 0 || depth < maxDepth) && len(queue) > 0; depth++ {
 		var next []uint64
 		for _, cur := range queue {
 			for nb := range adj[cur] {
