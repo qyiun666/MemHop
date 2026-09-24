@@ -456,6 +456,33 @@ err = db.UpdateL0(&api.ProfileInput{Name: "..."})
 
 `Personality` 是唯一有两个写者的字段，也是唯一**不被继承**的那一项：Dream 的蒸馏会用模型从本域记忆里推出来的人格摘要替换它，所以读回来的是两者中较晚的那一个。因此一次省略 `Personality` 的 `UpdateL0` 会清掉上一趟蒸出的摘要，下一趟再重新演化——想保住就从 `GetL0` 把它带回来。`Name`、`Role`、`Preferences` 只有宿主一个写者——而这半是**整次写入替换，不做合并**：只写一条偏好就会丢掉其余，省略 `Role` 即清空它，nil 表与空表是同一个答案。这是「还能删得掉东西」的代价——按 key 合并会让一条偏好永远没有去掉的办法——所以改一项的姿势是先 `GetL0` 拿表、改完再整张写回（`TestUpdateL0WritesTheHostHalfWhole` 两头都钉住）。蒸馏那一半无论如何都被继承，宿主写不动它。
 
+### L1 场景关联（Dream 认为什么和什么有关）
+
+```go
+nodes, err := db.ListL1()   // []api.SceneNodeView —— 只读，没有写入口
+```
+
+`ListL1` 是这一层唯一的入口，而且**只读**：Dream 是这一层唯一的写者。一个有过收束轮次的场景会有一个节点；
+它的 `importance` 从 `1.0` 起只降不升，节点之间的边由这些场景名下各轮的关键词轨建起来。
+下面这张表就是那个形状的全部 key，逐字段对齐（`l1-node-fields`）：
+
+| 字段 | 回答的是什么 |
+|---|---|
+| `id` / `scene_id` | 这个节点，以及它代表的场景；一个场景一个节点 |
+| `topic_ids` | **上一次 Dream 同步**在该场景下找到哪些话题——是一份快照而不是实时列举：删掉的话题在下一次同步重建之前仍会列在里面 |
+| `edge_ids` | 这个节点所在的共现边。**边本身没有读口**：一个 id 能告诉你的只有一件事——共享它的两个节点被 Dream 判为相关 |
+| `importance` | 这道痕迹现在还多强，取值 `(0,1]`，自上次「这段记忆要紧」之后一路衰减 |
+| `valence` / `arousal` | Dream 蒸馏到它上面的情感读数，各在 `[0,1]`——**0 是一个读数**（「极负面」/「完全平静」），不是「没测过」；中性在 `0.5`，强度按离中性点多远算。这是画像三条轴里的两条：节点记录上没有 dominance，所以节点的情感不是「缩小版的 `ProfileSlot.EmotionState`」 |
+| `emotion_set` | 有没有哪一趟真的盖过这两个值：这是区分「被蒸成 (0,0)」与「从没被测过」的唯一依据 |
+| `created_at` / `updated_at` | 毫秒。`updated_at` 是**衰减钟**：场景的话题集合变了、有一趟把它衰减了一遍、或蒸馏盖上了与现值不同的读数时它会走——所以它答的是「这段记忆最近一次要紧是什么时候」，不是「什么时候写下的」 |
+
+宿主在这层能做什么、不能做什么：没有任何写入口（不像 L0 还有一份入参形状），节点与边都不能手工删，
+遗忘只发生在 `Dream` 里——一个不再被写的域仍需跑一趟才会缩小。场景被删时它的节点跟着走
+（`TestDeleteSceneLeavesNoOrphansInReadableLayers`）；从没巩固过的域答回 `[]` 而不是「没有」
+（`TestListL1OnAnUndreamedDomainIsEmptyNotNil`）；每次调用都按 id 升序返回（`TestListL1SortsByIDHash`）；
+有一个节点存在却读不回时整次调用失败而不是跳过它（`TestListL1ReportsUnreadableNode`）。衰减按墙上时钟的小时数
+计并且**可复合**：两段短间隔与一段长间隔会落在同一个重要性上（`TestNodeDecayComposesAcrossPasses`）。
+
 ### L2 场景管理
 
 | 方法 | 说明 |

@@ -607,6 +607,37 @@ reading the profile, editing the map, and writing it back (`TestUpdateL0WritesTh
 pins the replacement and the read-merge-write path). The distilled half is inherited either way,
 so no host write can fade it.
 
+### L1 scene associations (what Dream thinks relates to what)
+
+```go
+nodes, err := db.ListL1()   // []api.SceneNodeView — read-only: there is no write surface
+```
+
+`ListL1` is the only access, and it is read-only: **Dream is the single writer** of this layer.
+A node exists per scene that has settled turns; its `importance` starts at `1.0` and only falls,
+and the edges between nodes are built from the keyword tracks of the turns those scenes hold.
+The table is that shape's key list, field for field (`l1-node-fields`):
+
+| Field | What it answers |
+|---|---|
+| `id` / `scene_id` | the node and the scene it stands for; one node per scene |
+| `topic_ids` | which topics the **last Dream sync** found under the scene — a snapshot, not a live listing: a topic deleted since still appears until the next pass rebuilds it |
+| `edge_ids` | the co-occurrence edges this node sits on. There is **no read for an edge itself**: the only thing an id tells you is that two nodes sharing one were judged related by Dream |
+| `importance` | how strong the trace still is, in `(0,1]`, decaying since the last time the memory mattered |
+| `valence` / `arousal` | the emotional reading Dream distilled onto it, each in `[0,1]` — **0 is a reading** ("extremely negative" / "completely calm"), not "unmeasured"; the neutral point is `0.5` and distance from it is the strength. These are two of the three axes a profile carries: the node record has no dominance, so a node's emotion is not a smaller `ProfileSlot.EmotionState` |
+| `emotion_set` | whether any pass ever stamped those two, which is the only way to tell a distilled `(0,0)` from a never-measured node |
+| `created_at` / `updated_at` | milliseconds. `updated_at` is the **decay clock**: it moves when the scene's topic set changes, when a pass fades the node, and when a distillation stamps values that actually differ — so it answers "when did this memory last matter", not "when was it written" |
+
+What a host can and cannot do here: nothing is writable (no L0-style input shape exists for it),
+no edge or node can be deleted by hand, and forgetting happens only inside `Dream` — a domain that
+stops being written to still needs a pass to shrink. A node whose scene is deleted goes with it
+(`TestDeleteSceneLeavesNoOrphansInReadableLayers`), an undreamed domain answers `[]` rather than
+nothing (`TestListL1OnAnUndreamedDomainIsEmptyNotNil`), the list comes back in id order on every
+call (`TestListL1SortsByIDHash`), and a node that exists but will not read back fails the call
+instead of being skipped (`TestListL1ReportsUnreadableNode`). Fading is measured in wall-clock
+hours and composes across passes, so two short intervals and one long one arrive at the same
+importance (`TestNodeDecayComposesAcrossPasses`).
+
 ### L2 scenes
 
 | Method | Meaning |
