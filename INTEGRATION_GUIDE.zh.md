@@ -452,10 +452,10 @@ worker 属于哪一种由宿主定，库不替它猜。
 
 ```go
 prof, err := db.GetL0()                       // *api.ProfileSlot —— 读回全量
-err = db.UpdateL0(&api.ProfileInput{Name: "..."})
+err = db.UpdateL0(api.ProfileInput{Name: "..."})   // by value, like SubAgent
 ```
 
-`UpdateL0` 收 `ProfileInput`，这个类型里就只有宿主那四项——`Name`、`Role`、`Personality`、`Preferences`。库自有的几项不是「传了不生效」，而是根本不在形状里，也就传不进来：`EmotionState` 与 `MBTI` 只由 Dream 演化，`UpdatedAtMs` 由库戳写，`AgentType` 在域创建时就已定。一次写入从记录里继承的是那两个蒸馏信号与 `AgentType`，`UpdatedAtMs` 由它自己戳，所以不必先 `GetL0` 再回填。蒸馏那一半只由 Dream 维护，库不再提供单独的蒸馏入口。
+`UpdateL0` **按值**收 `ProfileInput`，与 `SubAgent` 同一形态：一次写入总要指名一份画像，所以并不存在「没有画像」这个状态需要一根指针来承载——三个入口里只有 `Open` 收 `*ProfileInput`，因为那里「没传」有另一层意思：「不播种」。这个类型里就只有宿主那四项——`Name`、`Role`、`Personality`、`Preferences`。库自有的几项不是「传了不生效」，而是根本不在形状里，也就传不进来：`EmotionState` 与 `MBTI` 只由 Dream 演化，`UpdatedAtMs` 由库戳写，`AgentType` 在域创建时就已定。一次写入从记录里继承的是那两个蒸馏信号与 `AgentType`，`UpdatedAtMs` 由它自己戳，所以不必先 `GetL0` 再回填。蒸馏那一半只由 Dream 维护，库不再提供单独的蒸馏入口。
 
 这套形状里有一个值「Go 读得到、JSON 编不出」：类型词 `MBTI.type`。它每次读都由那四维现推，从不落盘
 （`mbti-hidden-derivation`），这样盘上的事实只有那四条轴，词永远不会与轴各说一套。要把画像放进 prompt 就用

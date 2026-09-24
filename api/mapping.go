@@ -61,10 +61,7 @@ func fromProfileSlot(s internal.ProfileSlot) ProfileSlot {
 
 // toCoreProfileSlot maps the host-writable half of the profile; the library-owned
 // half is inherited by the write itself.
-func toCoreProfileSlot(s *ProfileInput) internal.ProfileSlot {
-	if s == nil {
-		return internal.ProfileSlot{}
-	}
+func toCoreProfileSlot(s ProfileInput) internal.ProfileSlot {
 	return internal.ProfileSlot{
 		Name:        s.Name,
 		Role:        s.Role,

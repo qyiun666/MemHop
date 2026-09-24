@@ -92,7 +92,7 @@ func TestInterfaceAgentDomainsAreIsolated(t *testing.T) {
 
 	// A profile belongs to one domain too, and each sub-agent domain is stamped
 	// as one: the identity is the library's, not the caller's.
-	if err := sa.UpdateL0(&memhop.ProfileInput{Name: "Only alpha"}); err != nil {
+	if err := sa.UpdateL0(memhop.ProfileInput{Name: "Only alpha"}); err != nil {
 		t.Fatalf("UpdateL0: %v", err)
 	}
 	alphaL0, err := sa.GetL0()

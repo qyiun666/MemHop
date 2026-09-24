@@ -178,7 +178,7 @@ func TestSurfaceL0Profile(t *testing.T) {
 	if err != nil || prof == nil {
 		t.Fatalf("GetL0 on fresh DB must return empty profile: %v", err)
 	}
-	if err := db.UpdateL0(&ProfileInput{Name: "memhop", Role: "assistant"}); err != nil {
+	if err := db.UpdateL0(ProfileInput{Name: "memhop", Role: "assistant"}); err != nil {
 		t.Fatalf("UpdateL0: %v", err)
 	}
 	got, err := db.GetL0()
@@ -188,8 +188,10 @@ func TestSurfaceL0Profile(t *testing.T) {
 	if got.Name != "memhop" || got.Role != "assistant" {
 		t.Fatalf("profile round-trip mismatch: %+v", got)
 	}
-	if err := db.UpdateL0(nil); CodeOf(err) != ErrInvalidQuery {
-		t.Fatalf("UpdateL0(nil): want ErrInvalidQuery, got %v", err)
+	// The argument can no longer be absent — it is a value, not a pointer — so the refusal
+	// this shape owes is the one a blank name still gets.
+	if err := db.UpdateL0(ProfileInput{}); CodeOf(err) != ErrInvalidQuery {
+		t.Fatalf("UpdateL0(empty name): want ErrInvalidQuery, got %v", err)
 	}
 }
 

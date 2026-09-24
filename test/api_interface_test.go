@@ -326,7 +326,7 @@ func TestInterfaceOneDistillationPerTurn(t *testing.T) {
 
 func TestInterfaceL0(t *testing.T) {
 	db, _ := openTestDB(t)
-	slot := &memhop.ProfileInput{
+	slot := memhop.ProfileInput{
 		Name:        "测试画像",
 		Preferences: map[string]string{"language": "Go"},
 	}

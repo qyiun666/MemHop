@@ -38,14 +38,16 @@ type DB struct {
 // repairs a torn tail — what a refusal guarantees is only that nothing new appears.
 // profile is optional only in the sense that an existing file may already have settled
 // its primary; a new file always needs one, because "whose memory is this" has no other
-// answer. Name is required and trimmed. llm is validated before the path is touched,
+// answer. That is the only reason this door takes a pointer where SubAgent and UpdateL0
+// take the value: nil here means "do not seed", and neither of those calls has such a
+// reading. Name is required and trimmed. llm is validated before the path is touched,
 // and there is no fallback for a call it cannot make.
 // defaults may be the zero value: every knob left at 0 takes the library default, so
 // tuning one field does not require copying the whole table first.
 func Open(path string, llm LlmConfig, defaults MemHopDefaults, profile *ProfileInput) (*DB, error) {
 	var primary *internal.ProfileSlot
 	if profile != nil {
-		slot := toCoreProfileSlot(profile)
+		slot := toCoreProfileSlot(*profile)
 		primary = &slot
 	}
 	d, err := internal.OpenDB(path, llm, defaults, primary)
@@ -75,7 +77,7 @@ func (d *DB) Primary() (*Session, error) {
 // here on. The profile is written only if the domain has none yet, so a crash between
 // registration and the profile is finished off by the next call with the same name.
 func (d *DB) SubAgent(llm LlmConfig, profile ProfileInput) (*Session, error) {
-	s, err := d.db.SubAgent(llm, toCoreProfileSlot(&profile))
+	s, err := d.db.SubAgent(llm, toCoreProfileSlot(profile))
 	if err != nil {
 		return nil, err
 	}

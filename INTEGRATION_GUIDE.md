@@ -587,10 +587,13 @@ The file-level lifecycle and diagnostics sit on `api.DB` instead (9): `Primary` 
 
 ```go
 prof, err := db.GetL0()                       // *api.ProfileSlot — the full record
-err = db.UpdateL0(&api.ProfileInput{Name: "..."})
+err = db.UpdateL0(api.ProfileInput{Name: "..."})   // by value, like SubAgent
 ```
 
-`UpdateL0` takes a `ProfileInput`, which holds exactly the four fields a host
+`UpdateL0` takes a `ProfileInput` **by value**, the way `SubAgent` takes it: a write
+always names a profile, so there is no absent-profile state for a pointer to carry — only
+`Open` takes `*ProfileInput`, because "no profile" there means "do not seed an existing
+file". The type itself holds exactly the four fields a host
 owns — `Name`, `Role`, `Personality`, `Preferences`. The rest of the stored
 profile is not in that shape because it is not the host's to state: `EmotionState`
 and `MBTI` are evolved by Dream, `UpdatedAtMs` is stamped by the library, and

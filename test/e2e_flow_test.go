@@ -108,7 +108,7 @@ func TestE2EL0Profile(t *testing.T) {
 	}
 	// A write states only the host-owned half, so the read-modify-write carries
 	// over what it is keeping by name.
-	if err := db.UpdateL0(&memhop.ProfileInput{
+	if err := db.UpdateL0(memhop.ProfileInput{
 		Name:        slot.Name,
 		Role:        slot.Role,
 		Personality: "热爱户外运动的用户",

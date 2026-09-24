@@ -88,17 +88,16 @@ func (s *Session) GetL0() (*ProfileSlot, error) {
 }
 
 // UpdateL0 writes the host-owned profile fields (Name / Role / Personality /
-// Preferences) — the whole of ProfileInput. Name is required here as it is at Open
-// and SubAgent: a blank name is refused, not stored. The library-owned half of the
+// Preferences) — the whole of ProfileInput, taken by value the way SubAgent takes it:
+// there is no "no profile" this call could mean, so the shape carries no pointer to
+// leave nil. Name is required here as it is at Open and SubAgent: a blank name is
+// refused, not stored. The library-owned half of the
 // stored profile is inherited by the write itself (EmotionState, MBTI, AgentType,
 // UpdatedAtMs), so a profile edit never moves a domain between primary and sub and
 // never wipes the two distilled signals. Personality is the one exception: this
 // write does not inherit it, so omitting it clears the summary the last Dream pass
 // distilled, and the next pass evolves it again.
-func (s *Session) UpdateL0(profile *ProfileInput) error {
-	if profile == nil {
-		return NewError(ErrInvalidQuery, "UpdateL0: profile is required")
-	}
+func (s *Session) UpdateL0(profile ProfileInput) error {
 	coreSlot := toCoreProfileSlot(profile)
 	return s.session.UpdateL0(&coreSlot)
 }

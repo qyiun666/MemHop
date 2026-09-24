@@ -126,7 +126,7 @@ func closedSurface(sess *Session, lib *DB, gid, nodeID, sceneID, topicID string)
 		"Session.Search":       func() error { _, e := sess.Search(SearchQuery{}); return e },
 		"Session.SceneContext": func() error { _, e := sess.SceneContext(""); return e },
 		"Session.GetL0":        func() error { _, e := sess.GetL0(); return e },
-		"Session.UpdateL0":     func() error { return sess.UpdateL0(&ProfileInput{Name: "p"}) },
+		"Session.UpdateL0":     func() error { return sess.UpdateL0(ProfileInput{Name: "p"}) },
 		"Session.ListL1":       func() error { _, e := sess.ListL1(); return e },
 		"Session.ListScenes":   func() error { _, e := sess.ListScenes(""); return e },
 		"Session.UpdateScene":  func() error { _, e := sess.UpdateScene(sceneID, ScenePatch{}); return e },

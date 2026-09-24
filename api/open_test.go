@@ -55,7 +55,7 @@ func TestOpenSettlesThePrimaryAndCreatesSubAgents(t *testing.T) {
 
 	// Two domains, two memories: an edit in one is not visible in the other, and
 	// a host write cannot move a domain between the two identities.
-	if err := sub.UpdateL0(&ProfileInput{Name: "worker", Role: "edited"}); err != nil {
+	if err := sub.UpdateL0(ProfileInput{Name: "worker", Role: "edited"}); err != nil {
 		t.Fatalf("sub UpdateL0: %v", err)
 	}
 	if again, err := primary.GetL0(); err != nil || again.Role != "assistant" {
@@ -227,7 +227,7 @@ func TestADomainIsAddressableByTheIDTheLibraryIssued(t *testing.T) {
 	if len(workerID) != 16 || workerID == helperID || workerID == primaryID {
 		t.Fatalf("three domains answered %q %q %q, want three distinct 16-hex ids", primaryID, workerID, helperID)
 	}
-	if err := worker.UpdateL0(&ProfileInput{Name: "worker", Role: "helper", Personality: "先写测试再动手"}); err != nil {
+	if err := worker.UpdateL0(ProfileInput{Name: "worker", Role: "helper", Personality: "先写测试再动手"}); err != nil {
 		t.Fatalf("worker UpdateL0: %v", err)
 	}
 
