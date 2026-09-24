@@ -21,6 +21,7 @@
   比窗口慢的端点归「端点拒绝」那一档（`ErrLLM`），不归「调用方已尽」那一档（那是宿主自己的
   ctx，报错了会把人去支去看自己的上下文），也不进退避重试——慢不是 429 也不是 5xx，
   每重跑一次就多占一个窗口的域锁（`TestSlowEndpointIsAbandonedInsideItsOwnWindow`）。
+- 调用方选的 token 预算要走到**请求体**里才算存在：`Chat` 交来的 `maxTokens` 就是发出去的 `max_tokens`，升级那一趟发的是较大的那个，两者相等（调用方没留余量）或第一次不是截断而是拒绝时**不发第二趟**（`TestOutputCeilingReachesTheRequestItWasNamedFor`、`TestRefusedRequestIsNotEscalated`，读的是服务端收到的 `max_tokens`）。本包其余用例都通过假传输跑，它们能证调用方怎么选档位，证不了数字有没有出网——少了这条，「升级重试」可以在完全不起作用的情况下全绿。
 - 一次调用的结论分三档：端点拒绝或回复不成形 → `ErrLLM`；回复被输出上限截断 →
   `ErrLLM` 且 cause 为 `ErrTruncated`（升级预算的重试靠这个判定）；调用方的上下文
   已尽 → `ErrCancelled`，cause 留着 `ctx.Err()`。第三种不是端点的失败：一次被撤掉的
