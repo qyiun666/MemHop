@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -43,7 +44,14 @@ func TestGuideSkeletonActuallyRuns(t *testing.T) {
 				t.Fatalf("write main.go: %v", err)
 			}
 
-			bin := filepath.Join(dir, guide.skel)
+			// `go build` appends .exe where the platform needs one, so exec'ing the name we
+			// asked for would look for a file that was never written: on Windows the binary is
+			// <name>.exe and the plain name answers "executable file not found in %PATH%".
+			name := guide.skel
+			if runtime.GOOS == "windows" {
+				name += ".exe"
+			}
+			bin := filepath.Join(dir, name)
 			build := exec.Command(goBin, "build", "-o", bin, ".")
 			build.Dir = dir
 			build.Env = append(os.Environ(), "GOFLAGS=-mod=mod", "GOPROXY=off")
@@ -106,7 +114,10 @@ func TestSkeletonExtractionToleratesCRLF(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read %s: %v", name, err)
 		}
-		if err := os.WriteFile(windows, []byte(strings.ReplaceAll(string(raw), "\n", "\r\n")), 0o644); err != nil {
+		// Normalise first: a checkout that already carries CRLF would otherwise get a
+		// doubled carriage return here, and one TrimSuffix could not take it back off.
+		crlf := strings.ReplaceAll(strings.ReplaceAll(string(raw), "\r\n", "\n"), "\n", "\r\n")
+		if err := os.WriteFile(windows, []byte(crlf), 0o644); err != nil {
 			t.Fatalf("write CRLF copy: %v", err)
 		}
 		if got, want := extractSkeleton(t, windows), extractSkeleton(t, path); got != want {

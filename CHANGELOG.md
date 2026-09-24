@@ -282,6 +282,11 @@ README 的版本表与 git log。
 
 125. **CI 的 `-race` 步骤从 `./internal/...` 放宽到整仓——实测只贵 4.4 秒**（`.github/workflows/workflow.yml`；库行为一字未动）。此前报价的「+15s」是拿 `./internal/...` 一段估的，没人量过整套；本轮实测 `go test -race ./...` 墙钟 29.4s 对基线 25.0s（+18%），**放宽的成本比想象低一个量级**。范围也有实质理由：轮末排定的后台巩固跑在自己的 goroutine 上，而它真正会与谁赛跑——是宿主面的用例（`test/` 里那条 `TestInterfaceConsolidationIsScheduledByTheRoundClose` 与它逼出来的桩计数加锁），只 race `internal` 恰好把这一层排除在外。顺带核了一遍工作流没有把事件字段插进 shell（唯一的 `${{ }}` 是 `matrix.os`），改这一步不引入注入面。AGENTS 里那句旧报价同步改准。
 
+126. **Windows 那一遍 CI 实测回来，把我上一轮的修复自己打回两处**（`test/guide_skeleton_test.go`；库行为一字未动）。推送后 runner 的判决是：macOS 与 Ubuntu 全绿，Windows 只剩三条红，全在指南骨架这一族，而**两条都是我为「本机绿、runner 红」写的补丁自己的 Windows 盲点**——它们恰好证明那句判据：句柄一类只能在真平台上验，而我补的两处也一样。
+① `go build -o <name>` 在 Windows 上会自动补 `.exe`，产物叫 `skeleton-en.exe`，而我 exec 的是 `<name>`，报「executable file not found in %PATH%」；修成按平台给名字。
+② `TestSkeletonExtractionToleratesCRLF` 在 Windows 上反而自己红了：CI 检出的 markdown **本来就带 CRLF**，我再把 `\n` 换成 `\r\n` 就成了 `\r\r\n`，而提取器一行只剥得掉一个 `\r`。修成先把原文归一到 LF 再造 CRLF 副本——这条正是「造变体前先看清当前平台给的是什么」的实例。
+另：这一族第一次在真 Windows 上跑通，也说明第 109 条那批「谁开谁关」的句柄修复生效了（上一轮的九条 TempDir 红全部消失）。
+
 ## v1.6.5 — 2026-09-22 — MCP 面整体退役：对外只剩 Go module
 
 1. **`cmd/memhop-mcp` 整包删除**（14 个文件 3109 行）：25 个工具、多租户 HTTP（SSE 与 streamable-http 双传输）、按 `/mcp/<tenant>` 建/取域的租户注册表、`--tenants` 白名单与锚定 db-dir 的读入口一起消失。仓库不再有 server 形态、不再有后台进程，对外只剩「以 Go module 使用 `api`」一种接入。
