@@ -202,6 +202,13 @@ func TestOpenDBRefusesIncompleteArguments(t *testing.T) {
 			t.Fatalf("content_retention_ms %d: want ErrConfig, got %v", ms, err)
 		}
 	}
+	// The same ceiling rule on the endpoint: seconds that no longer fit a duration are the
+	// absence of a timeout, which would let a hung endpoint hold a domain's lock open.
+	hung := testLLMConfig()
+	hung.TimeoutSecs = math.MaxInt
+	if _, err := OpenDB(filepath.Join(dir, "c.meh"), hung, DefaultMemHopDefaults, primaryProfile("x")); common.CodeOf(err) != common.ErrConfig {
+		t.Fatalf("a timeout past the representable ceiling: want ErrConfig, got %v", err)
+	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatalf("read the directory: %v", err)

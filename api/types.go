@@ -19,7 +19,10 @@ type (
 	// embedding service and no dimension to declare. TimeoutSecs is the whole HTTP
 	// call's budget in seconds and MaxOutputTokens the cap on one reply; leave
 	// either at 0 and the library answers with its own default (120 seconds,
-	// 8192 tokens).
+	// 8192 tokens). A TimeoutSecs the client cannot represent is refused at the door: past
+	// 9223372036 seconds the value no longer fits a duration, and a wrapped one reads as no
+	// timeout at all — the very outcome the zero spelling exists to avoid, since a hung
+	// endpoint would then hold its domain's lock.
 	LlmConfig = internal.LlmConfig
 	// MemHopDefaults holds the host-facing business knobs (consolidation
 	// thresholds, the idle-domain TTL and the content retention window);

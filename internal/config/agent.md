@@ -9,8 +9,9 @@
 
 ## 契约
 
-- 本包的校验只有两处，各自贴着自己的类型：`LlmConfig.Validate`（端点三项必填，**这个端点自己**
-  的规则，只拿到一份 `LlmConfig` 的调用方不必凑出整份库配置才能校验它）与
+- 本包的校验只有两处，各自贴着自己的类型：`LlmConfig.Validate`（端点三项必填，加上超时是否还
+  装得进一个 duration——**这个端点自己**的规则，只拿到一份 `LlmConfig` 的调用方不必凑出整份库配置
+  才能校验它）与
   `MemHopDefaults.Validate`（保留窗是否可表示，见「陷阱」）。两条规则都没有第二份副本。
 - `MemHopConfig` 不带校验：它的每一半各有各的判法（端点问 `LlmConfig.Validate`，旋钮问
   `MemHopDefaults.Validate`，路径问开文件的那个调用方），本包再判一遍就是同一规则的第二份副本，

@@ -75,7 +75,7 @@ import "github.com/qyiun666/MemHop/api"
 | APIURL | ✅ | OpenAI 兼容端点 URL |
 | APIKey | ✅ | API Key（宿主从环境变量注入，禁止硬编码） |
 | Model | ✅ | 模型名 |
-| TimeoutSecs | 否（0＝没填） | 整次 HTTP 调用的秒预算；没填由库答 120。0 永远不会被当成「不限超时」——那会让一次挂死的端点把域锁一直占着。 |
+| TimeoutSecs | 否（0＝没填） | 整次 HTTP 调用的秒预算；没填由库答 120。0 永远不会被当成「不限超时」——那会让一次挂死的端点把域锁一直占着。同一个理由也管住了上界：超过 9223372036 秒就装不进一个 duration，绕回来的超时等于「没有超时」，所以 `Open` 会以 `ErrConfig` 拒掉。 |
 | MaxOutputTokens | 否（0＝没填） | 单次回复的上限；没填由库答 8192。提示词的预算就是按这个天花板算的，所以留空才是常态。 |
 
 ### `MemHopDefaults` 常用覆盖项
