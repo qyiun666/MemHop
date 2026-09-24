@@ -178,6 +178,15 @@ func (s *Session) ListL3() ([]HypergraphSlot, error) {
 // whether or not the label moved, so a nil name is the spelling of "stamp it, change
 // nothing" and an empty one is refused rather than erasing the label that addresses
 // the graph.
+//
+// What a rename never touches is the id. It stays the one ImportL3 or ListL3 handed
+// over, and from then on it is no longer the hash of the label the graph carries, so
+// every address a host holds for this graph — a scene's L3 anchor, a GetL3 or
+// QueryL3Subgraph argument — keeps the id it was given rather than re-deriving one from
+// the new label. Both labels still route to it while the rename stands: the new one by
+// the label on the record, the label it was created under by the id that derives from
+// it, which is why re-importing under either extends this graph instead of starting a
+// second one (TestUpdateL3RenameSurvivesReimport).
 func (s *Session) UpdateL3(id string, name *string) (*L3Graph, error) {
 	g, err := s.session.UpdateL3(id, name)
 	if err != nil {

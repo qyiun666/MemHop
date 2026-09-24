@@ -703,6 +703,20 @@ what a read returns can be written back without dereferencing anything.
 edge sets keyed by kind plus sorted titles, and a replay of the same copy still at three edges.
 
 `GetL3` / `ListL3` / `QueryL3Nodes` / `QueryL3Subgraph` / `UpdateL3` / `DeleteL3`.
+
+**Renaming, and what a rename does not move.** `UpdateL3(id, &label)` changes a graph's label
+and answers with the whole graph; a `nil` label changes nothing but still stamps the graph's
+`UpdatedAt`, and an empty one is refused rather than erasing the label that addresses it. The
+new label has to be free — a domain label is how `ImportL3` routes a batch, so renaming onto a
+label another graph carries is `ErrInvalidQuery` instead of an ambiguous domain. What never
+moves is the **id**: from the rename on it is no longer `hash(label)`, so a scene's anchor and
+every read argument keep the id `ImportL3` / `ListL3` handed over — the library never asks a
+host to derive one. Both labels still route to that graph while the rename stands (the new one
+by the label on its record, the label it was created under by the id derived from it), so
+re-importing under either extends it instead of starting a twin
+(`TestUpdateL3RenameSurvivesReimport`). Updating a *node* is the same import path: a node is
+addressed by graph plus title, so re-import that title with `merge` or `overwrite`.
+
 Deletion has one granularity: the whole graph. `QueryL3Subgraph`'s `edgeKinds`
 narrows the walk to the kinds named and leaves the condition out when the list is
 empty; a kind outside the six constants is refused with `ErrInvalidQuery`, because

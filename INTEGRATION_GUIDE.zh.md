@@ -530,7 +530,18 @@ res, err := db.ImportL3([]api.L3ImportItem{{
 就是这段配方带断言：逐节点比字段、按 kind 加排序后的标题集合比边、同一份复制再来一遍仍是三条边。
 
 
-`GetL3` / `ListL3` / `QueryL3Nodes` / `QueryL3Subgraph` / `UpdateL3` / `DeleteL3`。删除只有一个粒度：整图。
+`GetL3` / `ListL3` / `QueryL3Nodes` / `QueryL3Subgraph` / `UpdateL3` / `DeleteL3`。
+
+**改名，以及改名不动的那部分。** `UpdateL3(id, &label)` 改的是一张图的 label，交回整张图；
+`label` 给 `nil` 什么都不改但仍然戳一次图的 `UpdatedAt`，给空串则拒——而不是把指认这张图的那个 label 擦掉。
+新 label 必须是没人占的：域 label 正是 `ImportL3` 用来路由一批数据的东西，改成一个另一张图已经带着的
+label 会以 `ErrInvalidQuery` 拒掉，而不是留给那个域一个歧义。**id 是永远不动的那一样**：从改名起它就不再是
+`hash(label)` 了，所以场景上的锚、每条读参数里的图 id，都继续用 `ImportL3` / `ListL3` 交过来的那一个——库从不要求宿主自己算一个。
+改名成立期间**两个 label 都还路由到这张图**（新的那个靠记录上的 label，当初建图用的那个靠从它派生的 id），
+所以在哪一个下面再导入都是延伸这张图，而不是另起一张（`TestUpdateL3RenameSurvivesReimport`）。
+更新一个**节点**走的还是那条导入路：节点由「图 + 标题」定位，所以带着同一个标题以 `merge` 或 `overwrite` 再导一次。
+
+删除只有一个粒度：整图。
 `QueryL3Subgraph` 的 `edgeKinds` 只走点名的那几种边，空清单即不加这条约束；六个常量之外的
 边种类以 `ErrInvalidQuery` 拒绝——写侧本就拒收它，而滤出一个空子图会被宿主读成「这张图
 没有这种边」。
