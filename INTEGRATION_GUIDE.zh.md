@@ -568,7 +568,7 @@ res, err := db.ImportL3([]api.L3ImportItem{{
 什么时候变过」，一次没变的事没有答案可给；这也是「重放一次改名会收敛」而不是「让一张没碰过的图看起来刚变过」的理由。**id 是永远不动的那一样**：从改名起它就不再是
 `hash(label)` 了，所以场景上的锚、每条读参数里的图 id，都继续用 `ImportL3` / `ListL3` 交过来的那一个——库从不要求宿主自己算一个。
 改名成立期间**两个 label 都还路由到这张图**（新的那个靠记录上的 label，当初建图用的那个靠从它派生的 id），
-所以在哪一个下面再导入都是延伸这张图，而不是另起一张（`TestUpdateL3RenameSurvivesReimport`）。
+所以在哪一个下面再导入都是延伸这张图，而不是另起一张（`TestUpdateL3RenameSurvivesReimport`）；宿主面那半边——锚与读参数仍认旧 id、两条标签各自导入进来都落在同一张图——由 `TestInterfaceGraphRenameKeepsItsIdAndBothLabelsRoute` 钉住。
 更新一个**节点**走的还是那条导入路：节点由「图 + 标题」定位，所以带着同一个标题以 `merge` 或 `overwrite` 再导一次。
 
 删除只有一个粒度：整图。

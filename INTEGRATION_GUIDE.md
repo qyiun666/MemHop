@@ -763,7 +763,7 @@ every read argument keep the id `ImportL3` / `ListL3` handed over — the librar
 host to derive one. Both labels still route to that graph while the rename stands (the new one
 by the label on its record, the label it was created under by the id derived from it), so
 re-importing under either extends it instead of starting a twin
-(`TestUpdateL3RenameSurvivesReimport`). Updating a *node* is the same import path: a node is
+(`TestUpdateL3RenameSurvivesReimport`, and at the host face `TestInterfaceGraphRenameKeepsItsIdAndBothLabelsRoute`). Updating a *node* is the same import path: a node is
 addressed by graph plus title, so re-import that title with `merge` or `overwrite`.
 
 Deletion has one granularity: the whole graph. `QueryL3Subgraph`'s `edgeKinds`

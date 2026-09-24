@@ -107,6 +107,35 @@ func TestInterfaceDreamBuildsTheAssociationLayer(t *testing.T) {
 	if len(third) != 2 {
 		t.Fatalf("a second Dream minted extra nodes: %+v", third)
 	}
+	// Delete the last turn that scene had left, and the node goes with it at the next
+	// pass: a scene node is a derivation of the turns it names, so a row naming nothing
+	// is not a fading memory but a ghost the decay and the profile would keep pairing.
+	// The scene itself stays listed — deleting its turns is not deleting the conversation.
+	last := nodeFor(t, third, first).TopicIDs
+	if len(last) != 1 {
+		t.Fatalf("the rebuilt snapshot = %+v, want the one surviving turn", last)
+	}
+	if err := db.DeleteTopic(last[0]); err != nil {
+		t.Fatalf("DeleteTopic the last turn: %v", err)
+	}
+	if _, err := db.Dream(context.Background(), ""); err != nil {
+		t.Fatalf("third Dream: %v", err)
+	}
+	fourth, err := db.ListL1()
+	if err != nil {
+		t.Fatalf("ListL1 after the last turn went: %v", err)
+	}
+	for _, n := range fourth {
+		if n.SceneID == first {
+			t.Fatalf("the scene keeps a node naming turns that no longer exist: %+v", n)
+		}
+	}
+	if len(fourth) != 1 {
+		t.Fatalf("the other conversation lost its node too: %+v", fourth)
+	}
+	if ctx, err := db.SceneContext(first); err != nil || len(ctx.Topics) != 0 {
+		t.Fatalf("the emptied scene reports %+v err %v, want an empty transcript it still owns", ctx, err)
+	}
 }
 
 func nodeFor(t *testing.T, nodes []memhop.SceneNodeView, sceneID string) memhop.SceneNodeView {

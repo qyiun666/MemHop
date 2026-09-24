@@ -125,3 +125,63 @@ func assertImportedNode(t *testing.T, n memhop.HypergraphNode, graphID, idHash s
 		t.Fatalf("node keywords = %q, want the imported track", n.Keywords)
 	}
 }
+
+// Renaming a graph is a label change and nothing else: the id a scene anchored on and the
+// host's own node ids stay put, and after the change **both** labels reach the same graph —
+// the one it was created under, because the id derives from that first label, and the new
+// one, because the slots are also matched by name. That is the difference between a rename
+// and a split, and the tool schema a host publishes for ImportL3 carries a label, not an id.
+func TestInterfaceGraphRenameKeepsItsIdAndBothLabelsRoute(t *testing.T) {
+	db, _ := openTestDB(t)
+	first, err := db.ImportL3([]memhop.L3ImportItem{
+		{Title: "引擎", Domain: "memhop", NodeType: "concept", Content: "记忆库"},
+		{Title: "格式", Domain: "memhop", NodeType: "concept", Content: "26 字节帧"},
+	}, memhop.L3ImportSkip)
+	if err != nil || len(first.CreatedIDs) != 2 || len(first.GraphIDs) != 1 {
+		t.Fatalf("first import: %+v err %v", first, err)
+	}
+	graphID := first.GraphIDs[0]
+	anchored, err := db.Search(memhop.SearchQuery{NewScene: true, L3ID: graphID})
+	if err != nil {
+		t.Fatalf("anchor a scene on the graph: %v", err)
+	}
+
+	renamed, err := db.UpdateL3(graphID, "记忆引擎项目")
+	if err != nil {
+		t.Fatalf("UpdateL3: %v", err)
+	}
+	if renamed.Slot.ID != graphID {
+		t.Fatalf("the rename moved the graph: %s -> %s", graphID, renamed.Slot.ID)
+	}
+	if renamed.Slot.Name != "记忆引擎项目" || len(renamed.Nodes) != 2 {
+		t.Fatalf("the rename did not restatement the label or disturbed the members: %+v", renamed.Slot)
+	}
+
+	// The anchor is keyed by id, so a label change leaves the scene's listing alone.
+	scenes, err := db.ListScenes(graphID)
+	if err != nil || len(scenes) != 1 || scenes[0].SceneID != anchored.Scene.SceneID {
+		t.Fatalf("anchored listing after the rename = %+v err %v", scenes, err)
+	}
+
+	// Both labels reach the same graph, and neither of them opens a second one.
+	for _, label := range []string{"记忆引擎项目", "memhop"} {
+		batch, err := db.ImportL3([]memhop.L3ImportItem{
+			{Title: "来自 " + label, Domain: label, NodeType: "concept", Content: "同一张图"},
+		}, memhop.L3ImportSkip)
+		if err != nil {
+			t.Fatalf("import by label %q: %v", label, err)
+		}
+		if len(batch.GraphIDs) != 1 || batch.GraphIDs[0] != graphID {
+			t.Fatalf("importing the domain as %q resolved %v, want the one graph %s — a rename must not split it",
+				label, batch.GraphIDs, graphID)
+		}
+	}
+	graphs, err := db.ListL3()
+	if err != nil || len(graphs) != 1 {
+		t.Fatalf("ListL3 after imports by both labels = %+v err %v, want the single renamed graph", graphs, err)
+	}
+	nodes, err := db.QueryL3Nodes(memhop.L3NodeQuery{GraphID: graphID})
+	if err != nil || len(nodes) != 4 {
+		t.Fatalf("the graph now holds %+v err %v, want the two original nodes plus the two labelled imports", nodes, err)
+	}
+}
