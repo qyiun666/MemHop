@@ -514,6 +514,12 @@ so there is no need to `GetL0` and fill values back, and no read-only field can 
 smuggled in — the compiler refuses. The distilled half refreshes
 automatically with Dream: there is no standalone distill entry point.
 
+One value on this surface exists in a Go read but not in a JSON encoding: the type word
+`MBTI.type`. It is derived from the four axes on every read and never persisted (`mbti-hidden-derivation`),
+so the axes stay the only fact on disk and the word can never drift from them. Put a profile into a
+prompt through `ProfileBrief`, whose `mbti: ESFP` line is already rendered — do not re-derive the word
+from the axes, and do not expect a marshalled `ProfileSlot` to carry it.
+
 `Personality` is the one field with two writers, and the one a write does *not*
 inherit: Dream's distillation replaces it with the personality summary the model
 derived from this domain's memories, so it reads back as whichever of the two ran

@@ -36,12 +36,14 @@ type SearchResult struct {
 // host's own word for the arm that ended the turn (a decision-loop kernel's status
 // name), which the engine stores verbatim and never branches on — the same posture
 // an event's EventType has. CreatedAt is milliseconds, like every other timestamp on
-// this surface.
+// this surface. The field keys follow the surface's one naming rule — snake_case json
+// tags on everything a host can pass in or read back — so a host that builds a tool
+// schema for this call writes the same keys it writes for every other one.
 type TurnEnd struct {
-	Input     string
-	Output    string
-	Outcome   string
-	CreatedAt int64
+	Input     string `json:"input"`
+	Output    string `json:"output"`
+	Outcome   string `json:"outcome,omitempty"`
+	CreatedAt int64  `json:"created_at"`
 }
 
 // SceneMessage is one L4 utterance inside a scene context topic. Type says
@@ -168,11 +170,12 @@ type L4Query struct {
 
 // ScenePatch is the partial-update payload of UpdateScene; nil fields are left
 // unchanged. An empty L3ID clears the anchor; Force is read only by the
-// re-anchor path.
+// re-anchor path. Absence is what nil carries here, so every key is optional on the
+// wire: a patch that sets nothing sends nothing.
 type ScenePatch struct {
-	Name  *string
-	L3ID  *string
-	Force bool
+	Name  *string `json:"name,omitempty"`
+	L3ID  *string `json:"l3_id,omitempty"`
+	Force bool    `json:"force,omitempty"`
 }
 
 // DreamStage is one pipeline phase's outcome inside a DreamReport.

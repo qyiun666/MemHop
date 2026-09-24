@@ -384,6 +384,11 @@ err = db.UpdateL0(&api.ProfileInput{Name: "..."})
 
 `UpdateL0` 收 `ProfileInput`，这个类型里就只有宿主那四项——`Name`、`Role`、`Personality`、`Preferences`。库自有的几项不是「传了不生效」，而是根本不在形状里，也就传不进来：`EmotionState` 与 `MBTI` 只由 Dream 演化，`UpdatedAtMs` 由库戳写，`AgentType` 在域创建时就已定。一次写入从记录里继承的是那两个蒸馏信号与 `AgentType`，`UpdatedAtMs` 由它自己戳，所以不必先 `GetL0` 再回填。蒸馏那一半只由 Dream 维护，库不再提供单独的蒸馏入口。
 
+这套形状里有一个值「Go 读得到、JSON 编不出」：类型词 `MBTI.type`。它每次读都由那四维现推，从不落盘
+（`mbti-hidden-derivation`），这样盘上的事实只有那四条轴，词永远不会与轴各说一套。要把画像放进 prompt 就用
+`ProfileBrief`——它那句 `mbti: ESFP` 已经渲染好了；既别自己去从轴上推那个词，也别指望序列化出来的
+`ProfileSlot` 会带着它。
+
 `Personality` 是唯一有两个写者的字段，也是唯一**不被继承**的那一项：Dream 的蒸馏会用模型从本域记忆里推出来的人格摘要替换它，所以读回来的是两者中较晚的那一个。因此一次省略 `Personality` 的 `UpdateL0` 会清掉上一趟蒸出的摘要，下一趟再重新演化——想保住就从 `GetL0` 把它带回来。`Name`、`Role`、`Preferences` 只有宿主一个写者——而这半是**整次写入替换，不做合并**：只写一条偏好就会丢掉其余，省略 `Role` 即清空它，nil 表与空表是同一个答案。这是「还能删得掉东西」的代价——按 key 合并会让一条偏好永远没有去掉的办法——所以改一项的姿势是先 `GetL0` 拿表、改完再整张写回（`TestUpdateL0WritesTheHostHalfWhole` 两头都钉住）。蒸馏那一半无论如何都被继承，宿主写不动它。
 
 ### L2 场景管理
