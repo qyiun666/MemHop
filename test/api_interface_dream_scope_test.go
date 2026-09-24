@@ -45,7 +45,9 @@ func TestInterfaceDreamScopesConsolidationButNotRetention(t *testing.T) {
 	m := openMockDB(t, filepath.Join(t.TempDir(), "scope.meh"), llm.srv.URL,
 		func(d *internal.MemHopDefaults) {
 			d.DreamCompressMinTopics = 2
-			d.ContentRetentionMs = 1000
+			// 60s: settling the turns ahead of the pass costs LLM round trips, and a
+			// 1s window let a slow runner's own turns cross it before the Dream ran.
+			d.ContentRetentionMs = 60000
 			d.SceneDreamTopicThreshold = -1
 		})
 	db := newTestDB(t, m)

@@ -305,7 +305,11 @@ func TestInterfaceDreamReportsCancellation(t *testing.T) {
 func TestInterfaceDreamReportsWhatItSwept(t *testing.T) {
 	llm := newMockLLM(t)
 	db := newTestDB(t, openMockDB(t, filepath.Join(t.TempDir(), "sweep.meh"), llm.srv.URL,
-		func(d *memhop.MemHopDefaults) { d.ContentRetentionMs = 1000 }))
+		func(d *memhop.MemHopDefaults) {
+			// 60s: the fresh turn must stay inside the window until the pass however
+			// slow the runner; the old turn is a day past it either way.
+			d.ContentRetentionMs = 60000
+		}))
 	sceneID := openSession(t, db)
 
 	old := time.Now().Add(-24 * time.Hour).UnixMilli()

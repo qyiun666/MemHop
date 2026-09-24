@@ -129,7 +129,11 @@ func TestSubAgentEndpointSurvivesIdleReclaim(t *testing.T) {
 	// it — and the read holds the turn, so a TTL shorter than one turn takes would
 	// reclaim the context out from under the turn itself. What this test needs is a
 	// reclaim between two turns: a TTL the pause overshoots and a single turn does not.
-	defaults.AgentIdleTTLMs = 100
+	// A turn's budget is not just its LLM round trip: a loaded runner can stall this
+	// goroutine past a 100ms TTL between the two calls of one turn (the CI failure
+	// that sized this margin), and the close's own sweep would then drop the turn
+	// the read just opened. 2s is past any such stall; the pause below is past the TTL.
+	defaults.AgentIdleTTLMs = 2000
 	db, err := OpenDB(filepath.Join(t.TempDir(), "idle.meh"),
 		LlmConfig{APIURL: primarySrv.URL, APIKey: "test", Model: "mock"},
 		defaults, primaryProfile("primary"))
@@ -148,7 +152,7 @@ func TestSubAgentEndpointSurvivesIdleReclaim(t *testing.T) {
 		t.Fatalf("the first turn took %d distillations on the sub endpoint, want 1", got)
 	}
 
-	time.Sleep(300 * time.Millisecond) // long enough for the 100ms TTL to have passed
+	time.Sleep(2500 * time.Millisecond) // past the 2s TTL, so the sweep has a context to take
 	runTurn(t, sub)
 
 	if got := subCalls.Load(); got != 2 {
@@ -374,7 +378,7 @@ func TestSubAgentRefusedWhileATenantKeyWillNotResolve(t *testing.T) {
 func TestIdleReclaimRefusesTheDroppedRound(t *testing.T) {
 	srv := mockLLMServer(t, turnKeywords)
 	defaults := DefaultMemHopDefaults
-	defaults.AgentIdleTTLMs = 100 // longer than the gap inside a step, shorter than a pause
+	defaults.AgentIdleTTLMs = 2000 // longer than any stall inside a step, shorter than the pause
 	db, err := OpenDB(filepath.Join(t.TempDir(), "midround.meh"),
 		LlmConfig{APIURL: srv.URL, APIKey: "test", Model: "mock"},
 		defaults, primaryProfile("primary"))
@@ -399,7 +403,7 @@ func TestIdleReclaimRefusesTheDroppedRound(t *testing.T) {
 		t.Fatalf("append before the pause: %v", err)
 	}
 
-	time.Sleep(300 * time.Millisecond) // the round pauses longer than the TTL
+	time.Sleep(2500 * time.Millisecond) // the round pauses longer than the TTL
 
 	err = func() error {
 		_, err := sub.AppendArchive(core.ArchiveSlot{

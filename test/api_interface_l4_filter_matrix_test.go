@@ -62,7 +62,7 @@ func TestInterfaceL4FiltersComposeRatherThanShortCircuit(t *testing.T) {
 	}
 	// The unfiltered read spans both topics' records; the per-topic partitions must rejoin to
 	// exactly its own subset, in its own order.
-	if joined := append(append([]string{}, utterances...), events...); !sameSet(joined, within(all, utterances, events)) {
+	if joined := append(append([]string{}, utterances...), events...); !sameOrder(joined, within(all, utterances, events)) {
 		t.Fatalf("the two Kind halves do not rejoin the unfiltered read: %v vs %v", joined, all)
 	}
 
@@ -130,12 +130,37 @@ func within(all []string, parts ...[]string) []string {
 	return out
 }
 
-func sameSet(a, b []string) bool {
+// sameOrder is the exact-sequence comparison, for assertions where both sides
+// come from one query width whose order the read itself pins.
+func sameOrder(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
 	}
 	for i := range a {
 		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// sameSet compares membership only. The two reads this test joins answer in two
+// different documented orders — a topic-scoped read in Seq, a domain-wide read
+// in (CreatedAt, id) — and the fixture's two stamps can land in the same
+// millisecond on a fast runner, letting the id tie-break disagree with Seq (the
+// CI failure that split this from sameOrder). Which rows survive a companion
+// filter is the claim here; each width's own order is the order gate's business.
+func sameSet(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	seen := make(map[string]int, len(a))
+	for _, id := range a {
+		seen[id]++
+	}
+	for _, id := range b {
+		seen[id]--
+		if seen[id] < 0 {
 			return false
 		}
 	}

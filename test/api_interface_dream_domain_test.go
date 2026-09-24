@@ -24,7 +24,11 @@ import (
 func TestInterfaceDreamStaysInsideItsOwnDomain(t *testing.T) {
 	llm := newMockLLM(t)
 	path := filepath.Join(t.TempDir(), "two_domains.meh")
-	knobs := func(d *memhop.MemHopDefaults) { d.ContentRetentionMs = 1000 }
+	// 60s, not 1s: the window has to separate the day-old record from the rest at
+	// any runner's pace. Settling the turns ahead of the Dream already costs real
+	// LLM round trips, and a 1s window let a slow runner's own turns age out with
+	// the planted record (the CI failure that widened this).
+	knobs := func(d *memhop.MemHopDefaults) { d.ContentRetentionMs = 60000 }
 
 	m := openMockDB(t, path, llm.srv.URL, knobs)
 	alpha := newTestDB(t, m)
