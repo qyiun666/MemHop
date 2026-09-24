@@ -239,6 +239,8 @@ README 的版本表与 git log。
 
 105. **第十二遍探针：按 id 直取的那条路也验一遍跨域隔离，并顺手把「共享池」这条边界钉住**（只加用例 `TestInterfaceIsolationHoldsOnTheIdAddressedPaths`；行为一字未动）。此前域隔离只在**关键词扫描**那条路上验过，而最容易漏掉 `agentID` 的恰是按 id 直取与按 id 写入那几条：新用例先坐实 beta 拿 alpha 的归档 id 直读得到 0 行（同时用 beta 自己的读作对照，免得写成「永远匹配不中的过滤器」），再坐实拿别人的轮次键写一律 `ErrNotFound`（`DeleteTopic`/`RenameTopic` 都拒，不静默 no-op，之后 alpha 那轮两行原样在）——「我以为已经改掉了」和「这个键不归我管」是两种完全不同的宿主处境。另一半是刻意不隔离的地方：L3 知识图是文件级公共池，子域查得到主域/兄弟域导入的图（`GetL3`、`QueryL3Nodes` 都读得到），而场景列举仍旧各归各域。两面合起来才是「按域完全隔离 + 唯 L3 共享」这句话的可执行版本。**负例**：把公共池的节点列举改成按默认域取（一种看起来很安全的过度隔离）→ 红在 `beta cannot reach the shared graph alpha imported: … Nodes:[]`。探针这一遍另外确认四条本来即对、无需改的：主场景合并后仍留在自己场景上并铸出新的轮次键、采纳来的锚不打断轮次计数、把锚改到同一个标签是 no-op、改到别的标签不带 `Force` 即拒且带出当前锚的 id。过程中又被自家夹具抓两次（把场景 id 当轮次键、多余的 GetL0 断言），均按实测改正。离线接口面 63 → 64 条。
 
+106. **把「提炼失败时到底写了什么」这句说过头的话改准**（`AGENTS.md` 依赖条与门面 `Update` 注释；两份指南本就写对；无代码、无新用例）。`AGENTS.md` 原写「LLM 返回不可解析即 `ErrLLM` 上抛，`Update` 那一轮不写」——字面读起来像整次收口什么都没落盘，而实测（也是既有用例 `TestInterfaceUpdateRefusesAnOffContractReply` 钉着的）是：**该轮不产出话题**，但那两条对话原文在提炼之前就已写在轮次键下面，重试同一轮原地覆写这两格并补出话题。指南两处一直按实情写着（“a failed distillation writes no topic and leaves the turn open for a retry”“a failed call or an empty extraction leaves no half-recorded topic — while the records already on the turn…”），漏的是门面注释与总览句各自少一句「已经写下的那些留在盘上」。门面补上这句，AGENTS 按实测改写。这一条不改行为，只把一处会让宿主误判「要重放整轮」的说法改准。
+
 ## v1.6.5 — 2026-09-22 — MCP 面整体退役：对外只剩 Go module
 
 1. **`cmd/memhop-mcp` 整包删除**（14 个文件 3109 行）：25 个工具、多租户 HTTP（SSE 与 streamable-http 双传输）、按 `/mcp/<tenant>` 建/取域的租户注册表、`--tenants` 白名单与锚定 db-dir 的读入口一起消失。仓库不再有 server 形态、不再有后台进程，对外只剩「以 Go module 使用 `api`」一种接入。

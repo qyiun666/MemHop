@@ -75,7 +75,8 @@ func (s *Session) Search(q SearchQuery) (*SearchResult, error) {
 //
 // One LLM call, inside the domain lock; the only other call on this surface that
 // talks to the model is Dream. A failed call leaves the turn open, so the host may
-// close it again. This is the whole of what a turn's ending needs: which scene and
+// close it again — the two dialogue lines that call already wrote stay on disk (the refusal is
+// about the topic, not about what was said), and the retry rewrites those same two slots. This is the whole of what a turn's ending needs: which scene and
 // which turn are the library's to remember, so a host running one agent over one
 // library names no ids and carries no keys between calls. What the turn recorded
 // while it ran is AppendArchive's, and a turn whose originals the retention window
