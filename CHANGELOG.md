@@ -207,6 +207,8 @@ README 的版本表与 git log。
 
 同一条改动入库后立刻把自己的说法收窄了一处，因为它说过头了：`AGENTS.md` 与 `internal/repo/agent.md` 先写的是「宿主侧没有裸 `uint8` 的轴」，而 `ProfileSlot.AgentType` 至今仍是裸 `uint8`。真正的判据不是「它是个小整数」而是「宿主会写它、或按它过滤」——域身份只有库这一支笔在戳（`ProfileInput` 里没有那一格），计划节点的三个状态值对外形态是字符串，两者的数字都不需要这面接口承诺词表，所以 §7.6 那张表没有它们的两行是**对的**，两份指南因此各补一段说明这张表的适用范围。
 
+90. **子 agent 的 `Name` 从此挪不动**（`internal/l0.go` 写口新增一道拒绝；`api.Session.UpdateL0` 与 `api.DB.SubAgent` 注释、两份指南 §7 的 L0 段、`AGENTS.md` 字段所有权条、`internal/agent.md` 第 8 条同步；新用例 `test/api_interface_multi_test.go` 的 `TestInterfaceSubAgentNameIsItsHandle`）：清单第 1 条要「L0 可以给用户查看更新字段」，门面也早就写着「名字在创建时冻结」（`SubAgent` 的注释）——可此前没有任何东西挡住宿主把画像里的 `Name` 写成别的拼法。原因在于这个名字有**两份**：`SubAgent` 查的是注册表记录，`UpdateL0` 写的只有画像那一份。用临时探针实测一遍（跑完即删）：给一个注册为 `worker` 的子域写 `Name:"renamed"` 会成功落库，于是同一时刻 `Agents()` 仍报 `worker`、画像报 `renamed`，而 `SubAgent("renamed")` 开出**旁边一个空域**——宿主以为自己在改显示名，实际拿到一次不报错的失忆。修法沿用库里一贯姿势：**在写边界拒**，改名、带空白的 `" worker "`、尾随零宽空格的 `worker\u200b` 一律 `ErrInvalidQuery` 且零落盘，照抄自己那个键才是普通写入；例外按判据写明——主域不靠名字被寻址（`Primary()` 不收名字），它的 `Name` 才是自由文本、注册表跟着它走（实测钉住）。这条对外是**收紧**（越界写法从静默变成报错），随 tag 生效。**负例**：摘掉那道拒绝 → 红在 `UpdateL0(Name="renamed"): want ErrInvalidQuery, got <nil>`。同一改动也让三处既有测试不再顺手改名（`api/surface_test.go`、`api/surface_multi_test.go`、`test/api_interface_multi_test.go` 的画像隔离用例改用 `Role` 表达——那本来才是它要验的东西）。离线接口面 40 → 41 条。
+
 ## v1.6.5 — 2026-09-22 — MCP 面整体退役：对外只剩 Go module
 
 1. **`cmd/memhop-mcp` 整包删除**（14 个文件 3109 行）：25 个工具、多租户 HTTP（SSE 与 streamable-http 双传输）、按 `/mcp/<tenant>` 建/取域的租户注册表、`--tenants` 白名单与锚定 db-dir 的读入口一起消失。仓库不再有 server 形态、不再有后台进程，对外只剩「以 Go module 使用 `api`」一种接入。

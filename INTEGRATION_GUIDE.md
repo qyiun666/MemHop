@@ -618,6 +618,15 @@ so there is no need to `GetL0` and fill values back, and no read-only field can 
 smuggled in — the compiler refuses. The distilled half refreshes
 automatically with Dream: there is no standalone distill entry point.
 
+`Name` is required, and on a **sub-agent** domain it is not a field this call can move: the name a
+domain was created with is the tenant key `SubAgent` opens it by (held in the file's registry), while
+`UpdateL0` reaches only the profile's own copy. Writing another spelling there would move one copy and
+not the other — the old name still opening this memory, the new name opening a fresh empty domain
+beside it, and `Agents()` calling the domain something its profile no longer says. That write is
+therefore refused (`ErrInvalidQuery`) and nothing lands. The file's own primary domain is addressed by
+`Primary()` and by no name, so its label stays free text that the roster follows
+(`TestInterfaceSubAgentNameIsItsHandle` pins both halves).
+
 One value on this surface exists in a Go read but not in a JSON encoding: the type word
 `MBTI.type`. It is derived from the four axes on every read and never persisted (`mbti-hidden-derivation`),
 so the axes stay the only fact on disk and the word can never drift from them. Put a profile into a

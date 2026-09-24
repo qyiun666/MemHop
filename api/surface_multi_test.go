@@ -32,7 +32,7 @@ func TestSurfaceSessionMethods(t *testing.T) {
 	m, s := openSurfaceSession(t, llm.URL)
 	defer m.Close()
 
-	if err := s.UpdateL0(ProfileInput{Name: "worker"}); err != nil {
+	if err := s.UpdateL0(ProfileInput{Name: "surface", Role: "the sweep's domain"}); err != nil {
 		t.Fatalf("session updateL0: %v", err)
 	}
 	if _, err := s.GetL0(); err != nil {

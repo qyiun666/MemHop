@@ -178,14 +178,16 @@ func TestSurfaceL0Profile(t *testing.T) {
 	if err != nil || prof == nil {
 		t.Fatalf("GetL0 on fresh DB must return empty profile: %v", err)
 	}
-	if err := db.UpdateL0(ProfileInput{Name: "memhop", Role: "assistant"}); err != nil {
+	// The handle this domain was registered under is not a field to rewrite, so the
+	// round-trip is written on the Role (the refusal is TestInterfaceSubAgentNameIsItsHandle).
+	if err := db.UpdateL0(ProfileInput{Name: "surface", Role: "assistant"}); err != nil {
 		t.Fatalf("UpdateL0: %v", err)
 	}
 	got, err := db.GetL0()
 	if err != nil {
 		t.Fatalf("GetL0 after update: %v", err)
 	}
-	if got.Name != "memhop" || got.Role != "assistant" {
+	if got.Name != "surface" || got.Role != "assistant" {
 		t.Fatalf("profile round-trip mismatch: %+v", got)
 	}
 	// The argument can no longer be absent — it is a value, not a pointer — so the refusal

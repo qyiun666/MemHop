@@ -91,22 +91,24 @@ func TestInterfaceAgentDomainsAreIsolated(t *testing.T) {
 	}
 
 	// A profile belongs to one domain too, and each sub-agent domain is stamped
-	// as one: the identity is the library's, not the caller's.
-	if err := sa.UpdateL0(memhop.ProfileInput{Name: "Only alpha"}); err != nil {
+	// as one: the identity is the library's, not the caller's. The handle itself is
+	// not a field this write can move (TestInterfaceSubAgentNameIsItsHandle), so the
+	// domain-owned text written here is the Role.
+	if err := sa.UpdateL0(memhop.ProfileInput{Name: "alpha", Role: "only alpha"}); err != nil {
 		t.Fatalf("UpdateL0: %v", err)
 	}
 	alphaL0, err := sa.GetL0()
 	if err != nil {
 		t.Fatalf("alpha GetL0: %v", err)
 	}
-	if alphaL0.Name != "Only alpha" || alphaL0.AgentType != memhop.AgentTypeSub {
-		t.Fatalf("alpha's profile = %+v, want its own name stamped as a sub-agent", alphaL0)
+	if alphaL0.Name != "alpha" || alphaL0.Role != "only alpha" || alphaL0.AgentType != memhop.AgentTypeSub {
+		t.Fatalf("alpha's profile = %+v, want its own handle and role, stamped as a sub-agent", alphaL0)
 	}
 	betaL0, err := sb.GetL0()
 	if err != nil {
 		t.Fatalf("beta GetL0: %v", err)
 	}
-	if betaL0.Name == "Only alpha" {
+	if betaL0.Role == "only alpha" {
 		t.Fatalf("beta saw alpha's profile: %+v", betaL0)
 	}
 	if betaL0.AgentType != memhop.AgentTypeSub {
@@ -172,6 +174,72 @@ func TestInterfaceSubAgentDomainSurvivesReopen(t *testing.T) {
 	fresh := mustSub(t, reopened, llm.srv.URL, "gamma")
 	if scenes, err := fresh.ListScenes(""); err != nil || len(scenes) != 0 {
 		t.Fatalf("a fresh name inherited memory: %+v err %v", scenes, err)
+	}
+}
+
+// A sub-agent's Name is the handle its door is filed under, so `UpdateL0` cannot move
+// it: the write is refused, one name stays in both the roster and the profile, and the
+// door opens the same memory. Before this refusal a host that renamed its worker's
+// profile got a roster saying one thing and a profile another, and opening the worker by
+// its new name answered with an empty domain — amnesia with no error to read. The
+// primary is exempt because nothing addresses it by name, so its label is free text.
+func TestInterfaceSubAgentNameIsItsHandle(t *testing.T) {
+	llm := newMockLLM(t)
+	m := openMockDB(t, filepath.Join(t.TempDir(), "names.meh"), llm.srv.URL)
+	t.Cleanup(func() { _ = m.Close() })
+	url := llm.srv.URL
+
+	worker := mustSub(t, m, url, "worker")
+	id := worker.AgentID()
+	scene := settleOneTurn(t, worker, "worker 的第一轮", "记下了")
+
+	for _, want := range []string{"renamed", " worker ", "worker\u200b"} {
+		if err := worker.UpdateL0(memhop.ProfileInput{Name: want, Role: "helper"}); memhop.CodeOf(err) != memhop.ErrInvalidQuery {
+			t.Fatalf("UpdateL0(Name=%q): want ErrInvalidQuery, got %v", want, err)
+		}
+	}
+	stored, err := worker.GetL0()
+	if err != nil || stored.Name != "worker" || stored.Role != "" {
+		t.Fatalf("a refused rename left the profile moved: %+v err %v", stored, err)
+	}
+	if agents, err := m.Agents(); err != nil || len(agents) != 2 {
+		t.Fatalf("roster after the refusals = %+v err %v, want the two domains it started with", agents, err)
+	} else {
+		for _, a := range agents {
+			if a.ID == id && a.Name != "worker" {
+				t.Fatalf("the roster names the domain %q while its profile says %q", a.Name, stored.Name)
+			}
+		}
+	}
+	if again := mustSub(t, m, url, "worker"); again.AgentID() != id {
+		t.Fatalf("SubAgent(%q) opened a second domain %s instead of %s", "worker", again.AgentID(), id)
+	}
+	if scenes, err := worker.ListScenes(""); err != nil || len(scenes) != 1 || scenes[0].SceneID != scene {
+		t.Fatalf("the domain's own memory moved: %+v err %v", scenes, err)
+	}
+
+	// The same handle restated is an ordinary write, and so is the other half of the
+	// record: only a different Name is refused.
+	if err := worker.UpdateL0(memhop.ProfileInput{Name: "worker", Role: "helper"}); err != nil {
+		t.Fatalf("restating the handle: %v", err)
+	}
+	if slot, err := worker.GetL0(); err != nil || slot.Role != "helper" || slot.Name != "worker" {
+		t.Fatalf("profile after the accepted write = %+v err %v", slot, err)
+	}
+	if err := worker.UpdateL0(memhop.ProfileInput{}); memhop.CodeOf(err) != memhop.ErrInvalidQuery {
+		t.Fatalf("empty Name: want ErrInvalidQuery, got %v", err)
+	}
+
+	primary, err := m.Primary()
+	if err != nil {
+		t.Fatalf("Primary: %v", err)
+	}
+	if err := primary.UpdateL0(memhop.ProfileInput{Name: "renamed-primary", Role: "the file's own domain"}); err != nil {
+		t.Fatalf("the primary's label is free text: %v", err)
+	}
+	agents, err := m.Agents()
+	if err != nil || len(agents) != 2 || agents[0].Name != "renamed-primary" || !agents[0].Primary {
+		t.Fatalf("the roster does not follow the primary's own name: %+v err %v", agents, err)
 	}
 }
 

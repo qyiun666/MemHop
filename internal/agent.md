@@ -351,6 +351,11 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    `Name` 是三个写画像的入口（`Open` 播种主域、`SubAgent` 建/取注册域、
    `UpdateL0` 改）共同的必填项：域就靠它被称呼，`UpdateL0` 是唯一能把它清掉的
    口，所以空白名一律 `ErrInvalidQuery` 拒绝，而不是存下一个无从指认的画像。
+   子域的那个 `Name` 同时是 `SubAgent` 开门用的租户键（住在注册表记录里），本条写口
+   只写得到画像里的副本，所以两者不符一律 `ErrInvalidQuery` 拒掉而不是改一半——留下的是
+   「旧名开得出这段记忆、新名开出一个空域」这种不报错的失忆。主域不靠名字被寻址
+   （`Primary()` 不收名字），它的 `Name` 才是自由文本。
+
 9. **L3 的 id 与边身份**：`core.readJSON` 校验帧内记录类型，种类不符即
    `ErrNotFound`（否则 `UpdateL3(节点 id)` 会把节点记录改写成图槽）；
    `CreateEdgeL3` 的 id 含 kind，导入按「排序成员 + kind」的语义键去重，

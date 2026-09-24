@@ -68,9 +68,11 @@ func (d *DB) Primary() (*Session, error) {
 
 // SubAgent returns the handle of the sub-agent domain named profile.Name, creating that
 // domain the first time and handing back the same one every time after. The name is a
-// tenant key and is frozen at creation: editing the profile's Name later does not move
-// the domain, and asking for a name nobody registered opens a second domain instead of
-// finding the first. Name is required, trimmed, and capped at 256 bytes.
+// tenant key and is frozen at creation: UpdateL0 refuses to write any other Name onto this
+// domain, because that call reaches the profile's copy while SubAgent resolves the registry's,
+// and asking for a name nobody registered opens a second domain instead of finding the first
+// — so a rename that only moved one copy would hand a host an empty memory under the name it
+// just chose. Name is required, trimmed, and capped at 256 bytes.
 //
 // llm is this domain's own endpoint, so a sub-agent can run on a different model from
 // the primary; naming the same domain again replaces the endpoint its turns use from

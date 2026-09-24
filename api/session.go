@@ -97,7 +97,13 @@ func (s *Session) GetL0() (*ProfileSlot, error) {
 // Preferences) — the whole of ProfileInput, taken by value the way SubAgent takes it:
 // there is no "no profile" this call could mean, so the shape carries no pointer to
 // leave nil. Name is required here as it is at Open and SubAgent: a blank name is
-// refused, not stored. The library-owned half of the
+// refused, not stored. For a sub-agent it must also be the name that domain was
+// registered under — that string is the key SubAgent opens the door by, and this write
+// reaches only the profile's copy of it, so a different spelling is refused
+// (ErrInvalidQuery) rather than leaving the roster and the profile naming one domain
+// two things (TestInterfaceSubAgentNameIsItsHandle). The file's own primary domain is
+// addressed by Primary() and by no name, so its label is free text the roster follows.
+// The library-owned half of the
 // stored profile is inherited by the write itself (EmotionState, MBTI, AgentType,
 // UpdatedAtMs), so a profile edit never moves a domain between primary and sub and
 // never wipes the two distilled signals. Personality is the one exception: this
