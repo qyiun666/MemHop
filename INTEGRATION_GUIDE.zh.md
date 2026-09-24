@@ -384,6 +384,38 @@ worker 属于哪一种由宿主定，库不替它猜。
 所以模型给的词与调用带的数字之间就是宿主侧一小张映射表——这份映射归宿主，因为引擎除了校验取值
 以外不按任何词表名分支。
 
+### 7.7 把它们绑成 LLM 工具
+
+一张表，任务面一个方法一行：该向模型索要哪些键，交回来什么放进 prompt。键名就是门面那些形状
+自己的 JSON 名，所以 `api/surface_tool_map_test.go` 会在某个结构体多出一个表里没列的字段、或
+管理面方法混进这张表时报错。
+
+| 工具名（建议） | 调用 | 模型要交的键 | 交回给 prompt 的东西 |
+|---|---|---|---|
+| `memory_search` | `Session.Search` | `scene_id`, `l3_id`, `new_scene` | 画像与其紧凑摘要、场景、已收束的各轮话题、这次开出的话题 id |
+| `memory_record` | `Session.AppendArchive` | `kind`, `seq`, `content_type`, `role`, `event_type`, `node_seq`, `created_at`, `content` | 这条记录占下的槽位序号 |
+| `memory_close_turn` | `Session.Update` | `input`, `output`, `outcome`, `created_at` | 这一轮的话题，其字段里带着刚蒸出的关键词轨 |
+| `memory_dream` | `Session.Dream` | `scene_id` | `DreamReport`：各阶段与计数 |
+| `memory_profile_get` | `Session.GetL0` | 无 | 整份画像 |
+| `memory_profile_update` | `Session.UpdateL0` | `name`, `role`, `personality`, `preferences` | 无；下一次读见着 |
+| `memory_associations` | `Session.ListL1` | 无 | 本域的场景节点，带重要度与蒸馏出的信号 |
+| `memory_scenes` | `Session.ListScenes` | `l3_id` | 场景清单，按记录 id 升序 |
+| `memory_scene_read` | `Session.SceneContext` | `scene_id` | 一个场景的对话，摊平到两层 |
+| `memory_graph_get` | `Session.GetL3` | `id` | 一张图：槽、节点、超边 |
+| `memory_graph_list` | `Session.ListL3` | 无 | 这个文件里有哪几张图 |
+| `memory_graph_import` | `Session.ImportL3` | `items`（`title`, `domain`, `node_type`, `content`, `keywords`, `source_ref`, `related`——其中每条再带 `titles`, `kind`）, `mode` | 批次碰到哪几张图、建了什么改了什么跳了什么、逐条失败说明 |
+| `memory_nodes_query` | `Session.QueryL3Nodes` | `graph_id`, `ids`, `keyword`, `node_type`, `limit` | 命中的节点，按 id 升序 |
+| `memory_subgraph` | `Session.QueryL3Subgraph` | `graph_id`, `start_node_id`, `max_depth`, `edge_kinds` | 可达邻域：节点加边 |
+| `memory_archive_search` | `Session.SearchL4` | `keyword`, `start`, `end`, `ids`, `topic_id`, `type`, `kind`, `node_seq`, `limit` | 命中的记录，按这条读自己的顺序 |
+| `plan_add_step` | `Session.PlanNodeAdd` | `parent_seq`, `title` | 此后指认这一步的序号 |
+| `plan_update_step` | `Session.PlanNodeUpdate` | `seq`, `title`, `status`, `summary` | 无；被拒的重述不动树一下 |
+| `plan_state` | `Session.PlanState` | 无 | 本轮那片森林，`DoneCount`/`TotalCount` 按每一步汇总 |
+
+两件不必让宿主重新发现的事：结构体入参的键就是它的 JSON 名（整面接口一套命名，枚举取值见 §7.6），
+以及那八个管理面方法（`UpdateScene`、`RenameTopic`、`MergeScenes`、`DeleteScene`、`DeleteTopic`、
+`UpdateL3`、`DeleteL3`、`AgentID`）**故意不在表里**——能删记录的口子要走宿主自己的批准路径，不该
+是一张工具 schema。
+
 ## 8. 各层 API 速查
 
 26 个会话方法按使用者分两类：

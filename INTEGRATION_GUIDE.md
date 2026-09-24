@@ -507,6 +507,40 @@ set rather than reading it as "unset"), so the mapping between a model's word an
 a call carries is one small table on the host side — and it is the host's, because the engine
 does not branch on any of these names beyond validation.
 
+### 7.7 Binding these as LLM tools
+
+One table, one row per task-face method: the key names a model should be asked for, and what
+comes back to put in the prompt. The keys are the JSON names of the facade's own shapes, so
+`api/surface_tool_map_test.go` fails when a struct gains a field the table does not list, or
+when an admin-face method wanders in here.
+
+| tool name (suggested) | call | keys the model fills | what comes back for the prompt |
+|---|---|---|---|
+| `memory_search` | `Session.Search` | `scene_id`, `l3_id`, `new_scene` | profile + its brief, the scene, its settled topics, the topic id now open |
+| `memory_record` | `Session.AppendArchive` | `kind`, `seq`, `content_type`, `role`, `event_type`, `node_seq`, `created_at`, `content` | the slot the record took |
+| `memory_close_turn` | `Session.Update` | `input`, `output`, `outcome`, `created_at` | the turn's topic, its keyword track among its fields |
+| `memory_dream` | `Session.Dream` | `scene_id` | the `DreamReport`: stages and counts |
+| `memory_profile_get` | `Session.GetL0` | none | the whole profile |
+| `memory_profile_update` | `Session.UpdateL0` | `name`, `role`, `personality`, `preferences` | nothing; the next read shows it |
+| `memory_associations` | `Session.ListL1` | none | this domain's scene nodes with importance and the distilled signals |
+| `memory_scenes` | `Session.ListScenes` | `l3_id` | the scene list, ordered by record id |
+| `memory_scene_read` | `Session.SceneContext` | `scene_id` | the conversation of one scene, flattened two levels deep |
+| `memory_graph_get` | `Session.GetL3` | `id` | one graph: slot, nodes, hyperedges |
+| `memory_graph_list` | `Session.ListL3` | none | the graphs this file holds |
+| `memory_graph_import` | `Session.ImportL3` | `items` (`title`, `domain`, `node_type`, `content`, `keywords`, `source_ref`, `related`, each with `titles`, `kind`), `mode` | which graphs were touched, what was created/updated/skipped, per-failure lines |
+| `memory_nodes_query` | `Session.QueryL3Nodes` | `graph_id`, `ids`, `keyword`, `node_type`, `limit` | the matching nodes, ordered by id |
+| `memory_subgraph` | `Session.QueryL3Subgraph` | `graph_id`, `start_node_id`, `max_depth`, `edge_kinds` | the reachable neighbourhood as nodes plus edges |
+| `memory_archive_search` | `Session.SearchL4` | `keyword`, `start`, `end`, `ids`, `topic_id`, `type`, `kind`, `node_seq`, `limit` | the records that matched, in the read's own order |
+| `plan_add_step` | `Session.PlanNodeAdd` | `parent_seq`, `title` | the ordinal that step is addressed by from now on |
+| `plan_update_step` | `Session.PlanNodeUpdate` | `seq`, `title`, `status`, `summary` | nothing; a refused update leaves the tree untouched |
+| `plan_state` | `Session.PlanState` | none | the open turn's forest, with `DoneCount`/`TotalCount` summed over every step |
+
+Two things a host should not have to rediscover: the keys of a struct argument are its JSON
+names (one scheme for the whole surface, and the enums' own values follow §7.6), and the eight
+admin-face methods (`UpdateScene`, `RenameTopic`, `MergeScenes`, `DeleteScene`, `DeleteTopic`,
+`UpdateL3`, `DeleteL3`, `AgentID`) are deliberately absent — a model that can destroy records
+needs the host's approval path, not a tool schema.
+
 ## 8. Layer API quick reference
 
 The 26 session methods split by audience:
