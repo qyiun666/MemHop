@@ -314,6 +314,8 @@ README 的版本表与 git log。
 
 138. **删场景时 L1 的两半不同步：节点立刻走，边引用留给下一次巩固**（新增 `test/api_interface_l1_after_delete_test.go`，并把 `internal/delete_scene_orphans_test.go` 里那条「L1 不参与比较」的理由改准；库行为一字未动）。此前那句理由写着「被删场景的超边由下一趟 decay 清掉，而它不是任何宿主读得回来的记录」——**这话对边记录成立，对边引用不成立**：`ListL1()` 交回的 `SceneNodeView` 里 `edge_ids` 是宿主看得见的一串 id，而 `ListL1` 走的正是 `RecL1SceneNode` 的严格扫描（读侧没有替谁过滤，`internal/l1.go:33`），所以这个窗口是真的。两个场景各三、经一趟巩固被一条共现边连起来之后：`DeleteScene` 当场就把自己那个 L1 节点删了（`internal/l2.go:393` 那句 right away 名副其实），但**存活节点的 `edge_ids` 仍点着那条已无起点的边**，要等下一次 `Dream` 才摘。用例把这两半各钉一条，并给「窗口确实存在」配前置守卫（若哪天删除顺手清了边，那条断言会先红，而不是让最后一句默默变成空话）。负例：把删除级联里 `DeleteSceneNodeL1` 那一步跳过 → `L1 still lists 2 node(s) after one of two scenes was deleted`，回显里两个节点还带着同一个 `EdgeIDs`，正是共享边的形状。两份指南 L1 那行按实测补了一句：别把 `edge_ids` 当活的连接键。
 
+139. **「事件只能绑到本轮树上已有的那一步」现在两头都有断言了**（新增 `test/api_interface_plan_attribution_test.go`；库行为一字未动，两份指南各补半句）。指南 §6.2 早就承诺「`NodeSeq` 指向本 turn 从未创建过的一步 → `ErrInvalidQuery` 且零留痕」（EN 第 291 行、zh 第 651 行），宿主面上却一条断言都没有——先当探针量一遍确认行为与承诺一致（拒、错误里点名第几步、下一次 `PlanNodeAdd` 仍拿到紧邻的 2 号，不吃序号），再钉成测试，并把承诺**推到指南此前没说出口的那一头**：被保留窗扫掉的步骤同样不在树上，事件不许再指回去。这条判据不是挑剔：一轮的发号取「幸存节点最高序号」与「事件点名最高序号」两处的高，接受一个指向幽灵步骤的事件，等于替一条不存在的记录永久占住一段号。用例两臂各钉一条并各配前置（扫掉那臂先确证 `L5NodesPruned==1` 且 `PlanState` 计数归零，再问事件），负例＝把 `AppendArchive` 里那道 `HasSeq` 闸短路 → 两臂各自红在自己的断言上（`got code 0 (<nil>)` / 「may not reach back」）。
+
 ## v1.6.5 — 2026-09-22 — MCP 面整体退役：对外只剩 Go module
 
 1. **`cmd/memhop-mcp` 整包删除**（14 个文件 3109 行）：25 个工具、多租户 HTTP（SSE 与 streamable-http 双传输）、按 `/mcp/<tenant>` 建/取域的租户注册表、`--tenants` 白名单与锚定 db-dir 的读入口一起消失。仓库不再有 server 形态、不再有后台进程，对外只剩「以 Go module 使用 `api`」一种接入。

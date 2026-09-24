@@ -289,7 +289,8 @@ milliseconds: a seconds-scale record is already older than the retention window,
 next consolidation sweeps the turn's transcript, and a microsecond-scale one never
 expires), an undefined `ContentType`, an event with no `EventType`, an utterance
 carrying an `EventType` or a `NodeSeq`, an event whose `NodeSeq` names a step this turn
-never created (`ErrInvalidQuery`, and nothing lands), the consolidation role `3` (the
+never created, **or one a retention sweep has since taken away** (`ErrInvalidQuery`, and nothing
+lands; a refused append consumes no ordinal either), the consolidation role `3` (the
 library marks its own summaries with it), and content over budget — `MaxEventPayloadBytes`
 (4 KiB) per event record, its name included, and `MaxUtterancePayloadBytes` (64 KiB) per
 utterance; both are exported, so a host chunks what it appends against the number rather than
