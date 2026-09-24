@@ -540,10 +540,11 @@ res, err := db.ImportL3([]api.L3ImportItem{{
 
 `GetL3` / `ListL3` / `QueryL3Nodes` / `QueryL3Subgraph` / `UpdateL3` / `DeleteL3`。
 
-**改名，以及改名不动的那部分。** `UpdateL3(id, &label)` 改的是一张图的 label，交回整张图；
-`label` 给 `nil` 什么都不改但仍然戳一次图的 `UpdatedAt`，给空串则拒——而不是把指认这张图的那个 label 擦掉。
-新 label 必须是没人占的：域 label 正是 `ImportL3` 用来路由一批数据的东西，改成一个另一张图已经带着的
-label 会以 `ErrInvalidQuery` 拒掉，而不是留给那个域一个歧义。**id 是永远不动的那一样**：从改名起它就不再是
+**改名，以及改名不动的那部分。** `UpdateL3(id, label)` 改的是一张图的 label，交回整张图；给空串则拒——
+而不是把指认这张图的那个 label 擦掉。新 label 必须是没人占的：域 label 正是 `ImportL3` 用来路由一批数据的东西，
+改成一个另一张图已经带着的 label 会以 `ErrInvalidQuery` 拒掉，而不是留给那个域一个歧义。
+**改成它已经带着的那个标签什么都不写**：调用成功，图的 `UpdatedAt` 原地不动——那口钟答的是「这张图的内容
+什么时候变过」，一次没变的事没有答案可给；这也是「重放一次改名会收敛」而不是「让一张没碰过的图看起来刚变过」的理由。**id 是永远不动的那一样**：从改名起它就不再是
 `hash(label)` 了，所以场景上的锚、每条读参数里的图 id，都继续用 `ImportL3` / `ListL3` 交过来的那一个——库从不要求宿主自己算一个。
 改名成立期间**两个 label 都还路由到这张图**（新的那个靠记录上的 label，当初建图用的那个靠从它派生的 id），
 所以在哪一个下面再导入都是延伸这张图，而不是另起一张（`TestUpdateL3RenameSurvivesReimport`）。

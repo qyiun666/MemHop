@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/repo"
@@ -421,7 +422,7 @@ func TestL3GraphWritesRejectNodeID(t *testing.T) {
 	nodeID := common.FormatHash(graph.Nodes[0].IDHash)
 
 	name := "hijacked"
-	if _, err := db.UpdateL3(core.DefaultAgentID, nodeID, &name); common.CodeOf(err) != common.ErrNotFound {
+	if _, err := db.UpdateL3(core.DefaultAgentID, nodeID, name); common.CodeOf(err) != common.ErrNotFound {
 		t.Fatalf("UpdateL3 over a node id: %v", err)
 	}
 	if err := db.DeleteL3(core.DefaultAgentID, nodeID); common.CodeOf(err) != common.ErrNotFound {
@@ -574,8 +575,7 @@ func TestUpdateL3RejectsNameCollision(t *testing.T) {
 	alpha := importOne(t, db, "alpha", "a1")
 	importOne(t, db, "beta", "b1")
 
-	taken := "beta"
-	if _, err := db.UpdateL3(core.DefaultAgentID, common.FormatHash(alpha), &taken); common.CodeOf(err) != common.ErrInvalidQuery {
+	if _, err := db.UpdateL3(core.DefaultAgentID, common.FormatHash(alpha), "beta"); common.CodeOf(err) != common.ErrInvalidQuery {
 		t.Fatalf("rename onto a taken label: code=%d err=%v", common.CodeOf(err), err)
 	}
 	// The graph must be untouched by the refused rename.
@@ -586,28 +586,37 @@ func TestUpdateL3RejectsNameCollision(t *testing.T) {
 	if g.Slot.Name != "alpha" {
 		t.Fatalf("refused rename changed the name to %q", g.Slot.Name)
 	}
-	// Renaming to the name it already has is a no-op patch, not a collision.
-	self := "alpha"
-	if _, err := db.UpdateL3(core.DefaultAgentID, common.FormatHash(alpha), &self); err != nil {
-		t.Fatalf("rename onto own name: %v", err)
+	// Renaming onto the label the graph already carries succeeds and writes nothing:
+	// the slot clock means "this graph's content changed", so a call that changed
+	// nothing leaves it exactly where it was. That is also what makes a replayed
+	// rename converge instead of making an untouched graph look freshly edited.
+	same, err := db.UpdateL3(core.DefaultAgentID, common.FormatHash(alpha), "alpha")
+	if err != nil {
+		t.Fatalf("rename onto the label it carries: %v", err)
 	}
-	// A free label still renames.
-	free := "gamma"
-	if _, err := db.UpdateL3(core.DefaultAgentID, common.FormatHash(alpha), &free); err != nil {
+	if same.Slot.UpdatedAt != g.Slot.UpdatedAt {
+		t.Fatalf("a no-op rename moved the graph's clock from %d to %d",
+			g.Slot.UpdatedAt, same.Slot.UpdatedAt)
+	}
+	// A free label still renames, and that write does move the clock.
+	time.Sleep(2 * time.Millisecond)
+	if _, err := db.UpdateL3(core.DefaultAgentID, common.FormatHash(alpha), "gamma"); err != nil {
 		t.Fatalf("rename onto a free label: %v", err)
 	}
-	// The label it now carries is free again, so an empty one is refused: a graph
-	// with no label is one ImportL3 can never address again.
-	blank := ""
-	if _, err := db.UpdateL3(core.DefaultAgentID, common.FormatHash(alpha), &blank); common.CodeOf(err) != common.ErrInvalidQuery {
+	// An empty label is refused: a graph with no label is one ImportL3 can never
+	// address again.
+	if _, err := db.UpdateL3(core.DefaultAgentID, common.FormatHash(alpha), ""); common.CodeOf(err) != common.ErrInvalidQuery {
 		t.Fatalf("an empty label must be refused, code=%d err=%v", common.CodeOf(err), err)
 	}
-	if _, err := db.UpdateL3(core.DefaultAgentID, common.FormatHash(alpha), nil); err != nil {
-		t.Fatalf("a nil name is the no-change spelling: %v", err)
-	}
 	after, err := db.GetL3(core.DefaultAgentID, common.FormatHash(alpha))
-	if err != nil || after.Slot.Name != "gamma" {
-		t.Fatalf("the refused rename left its mark: name=%q err=%v", after.Slot.Name, err)
+	if err != nil {
+		t.Fatalf("get alpha: %v", err)
+	}
+	if after.Slot.Name != "gamma" {
+		t.Fatalf("the refused rename left its mark: name=%q", after.Slot.Name)
+	}
+	if after.Slot.UpdatedAt == g.Slot.UpdatedAt {
+		t.Fatalf("the real rename did not move the clock: %d", after.Slot.UpdatedAt)
 	}
 }
 

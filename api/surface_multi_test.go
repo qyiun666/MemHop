@@ -121,7 +121,7 @@ func TestSurfaceSessionMethods(t *testing.T) {
 		t.Fatalf("session getL3: %v", err)
 	}
 	rn := "nn"
-	if _, err := s.UpdateL3(gid, &rn); err != nil {
+	if _, err := s.UpdateL3(gid, rn); err != nil {
 		t.Fatalf("session updateL3: %v", err)
 	}
 	nodes, err := s.QueryL3Nodes(L3NodeQuery{GraphID: gid, NodeType: "c"})

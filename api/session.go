@@ -172,11 +172,11 @@ func (s *Session) ListL3() ([]HypergraphSlot, error) {
 // UpdateL3 renames a graph and returns it. The new label has to be free: a domain
 // label is how ImportL3 addresses a graph, so renaming onto a label another graph
 // already carries is refused with ErrInvalidQuery instead of leaving that domain
-// ambiguous. Renaming onto the label the graph already has changes nothing but
-// succeeds, and it still moves the graph's UpdatedAt: this call stamps that clock
-// whether or not the label moved, so a nil name is the spelling of "stamp it, change
-// nothing" and an empty one is refused rather than erasing the label that addresses
-// the graph.
+// ambiguous, and an empty one is refused rather than erasing the label that
+// addresses the graph. Renaming onto the label the graph already carries is not an
+// error and not a write: the slot's UpdatedAt is a content-change clock, so a call
+// that changes nothing leaves it exactly where it was, which is what makes a
+// replayed rename converge instead of making an untouched graph look freshly edited.
 //
 // What a rename never touches is the id. It stays the one ImportL3 or ListL3 handed
 // over, and from then on it is no longer the hash of the label the graph carries, so
@@ -186,7 +186,7 @@ func (s *Session) ListL3() ([]HypergraphSlot, error) {
 // the label on the record, the label it was created under by the id that derives from
 // it, which is why re-importing under either extends this graph instead of starting a
 // second one (TestUpdateL3RenameSurvivesReimport).
-func (s *Session) UpdateL3(id string, name *string) (*L3Graph, error) {
+func (s *Session) UpdateL3(id string, name string) (*L3Graph, error) {
 	g, err := s.session.UpdateL3(id, name)
 	if err != nil {
 		return nil, err

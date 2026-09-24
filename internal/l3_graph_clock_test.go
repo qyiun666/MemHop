@@ -159,12 +159,10 @@ func TestGraphSlotClockAnswersChangeNotAccess(t *testing.T) {
 	}
 
 	// A label is part of what the graph is, so renaming it counts as a change too.
-	if _, err := db.UpdateL3(core.DefaultAgentID, common.FormatHash(opsID), ptrToString("pipelines")); err != nil {
+	if _, err := db.UpdateL3(core.DefaultAgentID, common.FormatHash(opsID), "pipelines"); err != nil {
 		t.Fatalf("rename the graph: %v", err)
 	}
 	if got := slots(); got[opsID] == 2000 {
 		t.Errorf("renaming a graph left its clock at %d, want it moved forward", got[opsID])
 	}
 }
-
-func ptrToString(s string) *string { return &s }

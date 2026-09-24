@@ -354,7 +354,8 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    `CreateEdgeL3` 的 id 含 kind，导入按「排序成员 + kind」的语义键去重，
    故同一对节点可并存多种关系。标签就是这张图的地址：宿主拿 `Domain` 找图，图 id
    又由它派生，所以两道写口都不接受空标签——导入条目缺 `Domain` 即拒，`UpdateL3`
-   改名给空串也拒（`nil` 才是「不改名」），改到别的图已占用的标签同样拒。
+   改名给空串也拒，改到别的图已占用的标签同样拒；而**改成它自己已带的那个标签什么都不写**（不追加记录、
+   也不盖钟），因为那口钟的意义就在下一句。
    `ImportL3` 结果带 `GraphIDs`
    （图 id = `hash(Domain)`，没有别的公开调用能渲染它）。图槽的 `UpdatedAt` 是**内容变化钟**：
    一次批次只给它真写过节点或边的图盖一次钟，`GraphIDs` 报的是「解析到的图」，与这份

@@ -147,12 +147,13 @@ func (db *DB) ImportL3(agentID uint64, items []L3ImportItem, mode L3ImportMode) 
 	return result, nil
 }
 
-// UpdateL3 partially updates a graph slot (currently Name only). The new name
-// has to be free: a domain label addresses a graph for the import path, so
-// two slots under one label would resolve ambiguously. An empty name is
-// refused for the same reason in the other direction; a nil name is the
-// "change nothing" spelling.
-func (db *DB) UpdateL3(agentID uint64, id string, name *string) (*L3Graph, error) {
+// UpdateL3 renames a graph. A domain label addresses a graph for the import path,
+// so a label another graph already carries is refused rather than left ambiguous,
+// and an empty one is refused because it names nothing. Renaming onto the label the
+// graph already carries writes nothing at all and still succeeds: the slot's
+// UpdatedAt is a content-change clock, so a no-op must leave it where it is — that
+// is also what makes a replayed rename converge instead of re-stamping.
+func (db *DB) UpdateL3(agentID uint64, id, name string) (*L3Graph, error) {
 	ac, err := db.lockSharedPool(agentID)
 	if err != nil {
 		return nil, err
@@ -162,16 +163,18 @@ func (db *DB) UpdateL3(agentID uint64, id string, name *string) (*L3Graph, error
 	if err != nil {
 		return nil, common.NewError(common.ErrInvalidQuery, "parse l3 id", err)
 	}
-	if name != nil {
-		if *name == "" {
-			return nil, common.NewError(common.ErrInvalidQuery,
-				"a graph label is how ImportL3 finds the graph, so an empty one names nothing", nil)
-		}
-		if err := graph.CheckName(db.engine, core.SharedPoolAgentID, graphHash, *name); err != nil {
-			return nil, err
-		}
+	if name == "" {
+		return nil, common.NewError(common.ErrInvalidQuery,
+			"a graph label is how ImportL3 finds the graph, so an empty one names nothing", nil)
 	}
-	slot, err := repo.UpdateGraphL3(db.engine, core.SharedPoolAgentID, graphHash, name)
+	moves, err := graph.CheckRename(db.engine, core.SharedPoolAgentID, graphHash, name)
+	if err != nil {
+		return nil, err
+	}
+	if !moves {
+		return db.getL3Graph(id)
+	}
+	slot, err := repo.UpdateGraphL3(db.engine, core.SharedPoolAgentID, graphHash, &name)
 	if err != nil {
 		return nil, err
 	}

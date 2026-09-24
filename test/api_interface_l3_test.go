@@ -94,7 +94,7 @@ func TestInterfaceL3(t *testing.T) {
 	}
 
 	newName := "改名"
-	if _, err := db.UpdateL3(graphID, &newName); err != nil {
+	if _, err := db.UpdateL3(graphID, newName); err != nil {
 		t.Fatalf("UpdateL3: %v", err)
 	}
 	if err := db.DeleteL3(graphID); err != nil {

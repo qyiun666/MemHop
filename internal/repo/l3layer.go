@@ -138,10 +138,12 @@ func DeleteGraphL3(engine *core.StorageEngine, agentID uint64, id uint64) error 
 	return err
 }
 
-// UpdateGraphL3 partially updates a graph slot (currently Name only) and always
-// moves UpdatedAt forward. A nil name is therefore a stamp: the way a caller
-// whose write landed on the graph's nodes and edges, not on its label, records
-// that the graph changed.
+// UpdateGraphL3 writes a graph slot's label and moves UpdatedAt with it: this
+// function only ever accompanies a change, since the slot clock is what a host
+// reads to ask "which graph did I touch last". A nil name is the stamp an import
+// batch makes for the nodes and edges it just wrote under that graph — the caller
+// that already knows its own content moved, so it never reaches for the nil to make
+// an untouched graph look changed.
 func UpdateGraphL3(engine *core.StorageEngine, agentID uint64, id uint64, name *string) (*core.HypergraphSlot, error) {
 	slot, err := core.ReadGraphSlot(engine, agentID, id)
 	if err != nil {

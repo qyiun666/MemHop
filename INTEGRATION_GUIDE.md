@@ -719,11 +719,14 @@ edge sets keyed by kind plus sorted titles, and a replay of the same copy still 
 
 `GetL3` / `ListL3` / `QueryL3Nodes` / `QueryL3Subgraph` / `UpdateL3` / `DeleteL3`.
 
-**Renaming, and what a rename does not move.** `UpdateL3(id, &label)` changes a graph's label
-and answers with the whole graph; a `nil` label changes nothing but still stamps the graph's
-`UpdatedAt`, and an empty one is refused rather than erasing the label that addresses it. The
-new label has to be free — a domain label is how `ImportL3` routes a batch, so renaming onto a
-label another graph carries is `ErrInvalidQuery` instead of an ambiguous domain. What never
+**Renaming, and what a rename does not move.** `UpdateL3(id, label)` changes a graph's label
+and answers with the whole graph; an empty label is refused rather than erasing the one that
+addresses it. The new label has to be free — a domain label is how `ImportL3` routes a batch, so
+renaming onto a label another graph carries is `ErrInvalidQuery` instead of an ambiguous domain.
+Renaming onto the label the graph already carries **writes nothing**: it succeeds and leaves the
+graph's `UpdatedAt` where it was, because that clock answers "when did this graph's content
+change" and a no-op has no answer to give — which is also what makes a replayed rename converge
+instead of making an untouched graph look freshly edited. What never
 moves is the **id**: from the rename on it is no longer `hash(label)`, so a scene's anchor and
 every read argument keep the id `ImportL3` / `ListL3` handed over — the library never asks a
 host to derive one. Both labels still route to that graph while the rename stands (the new one

@@ -128,21 +128,30 @@ func preferGraphID(name string, cur, next uint64) bool {
 	return next < cur
 }
 
-// CheckName refuses a rename onto a label another graph of this domain already
-// carries. The scan is strict for the same reason as the seeding one: a slot the
-// engine cannot decode still holds its label.
-func CheckName(engine *core.StorageEngine, agentID uint64, id uint64, name string) error {
+// CheckRename judges a proposed graph label once, for the caller that is about to
+// write it. It refuses a label another graph of this domain already carries, and
+// reports whether the label would move at all: a rename onto the label the graph
+// already carries has nothing to write, and the clock on a graph slot means "its
+// content changed" — stamping it for a no-op would make an untouched graph look
+// freshly edited. The scan is strict for the same reason as the seeding one: a
+// slot the engine cannot decode still holds its label.
+func CheckRename(engine *core.StorageEngine, agentID uint64, id uint64, name string) (bool, error) {
 	slots, err := core.CollectAllGraphSlots(engine, agentID)
 	if err != nil {
-		return err
+		return false, err
 	}
+	moves := false
 	for _, g := range slots {
-		if g.IDHash != id && g.Name == name {
-			return common.NewError(common.ErrInvalidQuery,
+		if g.IDHash == id {
+			moves = g.Name != name
+			continue
+		}
+		if g.Name == name {
+			return false, common.NewError(common.ErrInvalidQuery,
 				fmt.Sprintf("graph %s already carries the label %q", common.FormatHash(g.IDHash), name))
 		}
 	}
-	return nil
+	return moves, nil
 }
 
 // Result is the report the batch has accumulated so far.

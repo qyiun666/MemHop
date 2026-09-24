@@ -120,7 +120,7 @@ func (s *Session) ImportL3(items []L3ImportItem, mode L3ImportMode) (*L3ImportRe
 	return s.db.ImportL3(s.agentID, items, mode)
 }
 
-func (s *Session) UpdateL3(id string, name *string) (*L3Graph, error) {
+func (s *Session) UpdateL3(id, name string) (*L3Graph, error) {
 	return s.db.UpdateL3(s.agentID, id, name)
 }
 

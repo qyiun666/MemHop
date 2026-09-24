@@ -39,7 +39,7 @@ func TestSurfaceL3Knowledge(t *testing.T) {
 		t.Fatalf("get l3 graph: %v", err)
 	}
 	newName := "renamed-domain"
-	if _, err := db.UpdateL3(graphID, &newName); err != nil {
+	if _, err := db.UpdateL3(graphID, newName); err != nil {
 		t.Fatalf("update l3: %v", err)
 	}
 	nodes, err := db.QueryL3Nodes(L3NodeQuery{GraphID: graphID, Keyword: "rust"})
@@ -75,7 +75,7 @@ func TestSurfaceL3GraphLabelIsUnique(t *testing.T) {
 	alphaID := common.FormatHash(common.HashID("alpha"))
 
 	taken := "beta"
-	if _, err := db.UpdateL3(alphaID, &taken); CodeOf(err) != ErrInvalidQuery {
+	if _, err := db.UpdateL3(alphaID, taken); CodeOf(err) != ErrInvalidQuery {
 		t.Fatalf("rename onto a taken label: code=%v err=%v", CodeOf(err), err)
 	}
 	g, err := db.GetL3(alphaID)
@@ -84,10 +84,10 @@ func TestSurfaceL3GraphLabelIsUnique(t *testing.T) {
 	}
 	// A free label still renames, and renaming back onto itself is a no-op.
 	free := "alpha-project"
-	if _, err := db.UpdateL3(alphaID, &free); err != nil {
+	if _, err := db.UpdateL3(alphaID, free); err != nil {
 		t.Fatalf("rename onto a free label: %v", err)
 	}
-	if _, err := db.UpdateL3(alphaID, &free); err != nil {
+	if _, err := db.UpdateL3(alphaID, free); err != nil {
 		t.Fatalf("rename onto its own label: %v", err)
 	}
 	// The label a graph was renamed to keeps addressing that same graph.

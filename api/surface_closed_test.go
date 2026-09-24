@@ -140,7 +140,7 @@ func closedSurface(sess *Session, lib *DB, gid, nodeID, sceneID, topicID string)
 			_, e := sess.ImportL3([]L3ImportItem{{Title: "n", Domain: "d"}}, L3ImportSkip)
 			return e
 		},
-		"Session.UpdateL3": func() error { _, e := sess.UpdateL3(gid, ptr("other")); return e },
+		"Session.UpdateL3": func() error { _, e := sess.UpdateL3(gid, "other"); return e },
 		"Session.DeleteL3": func() error { return sess.DeleteL3(gid) },
 		"Session.QueryL3Nodes": func() error {
 			_, e := sess.QueryL3Nodes(L3NodeQuery{GraphID: gid})

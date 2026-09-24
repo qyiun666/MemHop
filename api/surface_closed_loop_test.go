@@ -156,7 +156,7 @@ func TestImportL3ReadsBackEveryField(t *testing.T) {
 func TestUpdateL3RenameSurvivesReimport(t *testing.T) {
 	sess := openSurfaceDB(t)
 	_, gid := importGraph(t, sess, L3ImportOverwrite)
-	renamed, err := sess.UpdateL3(gid, ptr("proj/renamed"))
+	renamed, err := sess.UpdateL3(gid, "proj/renamed")
 	if err != nil || renamed.Slot.Name != "proj/renamed" || renamed.Slot.ID != gid {
 		t.Fatalf("UpdateL3: %+v err=%v", renamed.Slot, err)
 	}
