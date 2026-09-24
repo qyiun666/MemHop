@@ -278,6 +278,16 @@ rep, err := db.Dream(ctx, "")       // sceneID 传 "" = 遍历域内全部场景
 执行 L2→L1→L0 压缩 / 衰减 / 画像蒸馏（多次 LLM 调用，耗时较长）——放后台 goroutine 或对话间隔执行。
 返回结构化 `*DreamReport` 供宿主观测：`ConsolidatedScenes / L2TopicsCompressed / L1NodesAdded|Removed / L1EdgesAdded|Removed / L0Updated`，外加 `Stages []DreamStage{Name, Status, DurationMs}`（状态取值 `ok | skipped | cancelled | error`）。其中三个数容易被读错：`L2TopicsCompressed` 数的是**沉进融合组的话题**，不是组数；`L1NodesAdded` 数的是同步这一步**写过**的场景节点，含只因话题集变了而被回戳的既有节点，不只是新建的那些；`L1EdgesAdded` 数的是本轮新建**或抬权**的共现边。两个移除计数横跨「陈旧重建」与「衰减」两个阶段，并各自把它带走的边一并算进去。空报告表示无内容可巩固，不算错误；管线中途失败时部分填充的报告随错误一起返回。场景读回上下文的规模不是一条硬上限：depth-1 话题数越过 `SceneDreamTopicThreshold` 就调度该场景 Dream，Dream 只把 LLM 判定成一组的话题合并上去，没被选中的仍留在 depth-1。
 
+`Stages` 按这一趟实际跑的顺序交回，名字是一套封闭集（`dream-stage-order`）：
+
+`l4_prune` → `l5_prune` → `l2_compress` → `index_rebuild` → `l1_nodes` → `l1_hyperedges` → `l1_rebuild` → `l1_decay` → `l0_distill`
+
+两条裁剪排最前，所以「没什么可巩固」的域照样会甩掉过期的内容与计划节点。`l2_compress` 是问模型分组那一次；
+`index_rebuild` 在任何 L1 阶段读它之前把重建好的 L2Meta 装上；`l1_nodes`/`l1_hyperedges` 是同步与共现建边，
+`l1_rebuild` 摘掉陈旧节点，`l1_decay` 做衰减与修剪，`l0_distill` 写画像那一趟。**没跑到的阶段是从列表里缺席**，
+不会被标成 `skipped`——`skipped` 说的是这一步跑了、但它自己决定什么也不做，跟一趟被中途取消是两码事。
+（`TestInterfaceDreamReportsEveryStageInOrder`。）
+
 ### 6.5 接决策循环内核
 
 一个 `.meh` 文件、一个决策循环、一个 agent 域——公开面就是照这个形状做的。开着的场景与

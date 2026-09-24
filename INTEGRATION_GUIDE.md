@@ -332,6 +332,18 @@ Usually **the host does not need to call it**: once a scene's depth-1 topic coun
 Runs L2→L1→L0 compression / decay / profile distillation (several LLM calls, slow) — keep it in a goroutine or between turns.
 Returns a structured `*DreamReport`: `ConsolidatedScenes / L2TopicsCompressed / L1NodesAdded|Removed / L1EdgesAdded|Removed / L0Updated` plus `Stages []DreamStage{Name, Status, DurationMs}` (status `ok | skipped | cancelled | error`). Three of those figures are easy to misread: `L2TopicsCompressed` counts the topics sunk into fused groups, not the number of groups; `L1NodesAdded` counts the scene nodes the sync wrote, which includes an existing node re-stamped because its topic set moved, not only newly created ones; and `L1EdgesAdded` counts the co-occurrence edges created **or strengthened** by the pass. The two removal counters span both stages that remove — the stale rebuild and the decay — and count the edges each took with it as well as the nodes. An empty report is not an error; a mid-pipeline failure returns the partial report with the error. What a host reads back is bounded by convergence, not by a cap: passing the threshold schedules that scene's Dream, and Dream only merges the groups the model judges one — topics it never picked stay at depth 1.
 
+`Stages` arrives in the order the pass runs them, and the names are a closed set (`dream-stage-order`):
+
+`l4_prune` → `l5_prune` → `l2_compress` → `index_rebuild` → `l1_nodes` → `l1_hyperedges` → `l1_rebuild` → `l1_decay` → `l0_distill`
+
+The two prunes lead so a domain with nothing to consolidate still sheds expired content and plan nodes.
+`l2_compress` is the model call that fuses groups; `index_rebuild` installs the rebuilt L2Meta before any
+L1 stage reads it; `l1_nodes` and `l1_hyperedges` are the sync and the co-occurrence build, `l1_rebuild`
+drops stale nodes, `l1_decay` fades and prunes, and `l0_distill` writes the profile pass. A stage the
+pass never reached is **absent** from the list rather than marked `skipped`: `skipped` means the stage ran
+and decided to do nothing, which is a different answer from a run cancelled on the way there.
+(`TestInterfaceDreamReportsEveryStageInOrder`.)
+
 ### 6.5 Driving it from a decision-loop kernel
 
 One `.meh` file, one decision loop, one agent domain is the shape this surface is built
