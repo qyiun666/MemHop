@@ -18,7 +18,12 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.26'
+          # Read the version out of the module instead of pinning one here: a second
+          # copy of that fact drifts, and it already did — the module has required
+          # go 1.27.0 since 9549159 while this file still said 1.26, so every run
+          # installed a toolchain the build then refused and quietly upgraded past
+          # by downloading the real one.
+          go-version-file: go.mod
 
       - name: Build
         run: go build ./...
@@ -39,6 +44,13 @@ jobs:
       - name: Unit tests (public SDK and internal suites)
         run: go test ./...
 
+      # The integration guides carry a runnable skeleton each; `go build` of the
+      # packages never compiles it, so a guide a host copies verbatim can rot
+      # silently. This is the machine check behind the promise that a host can paste the guide and build.
+      - name: Guides compile (both integration guides' skeletons)
+        if: runner.os != 'Windows'
+        run: make check-guides
+
       - name: Unit tests (race)
         run: go test -race ./internal/...
 
@@ -46,5 +58,5 @@ jobs:
       # MEMHOP_TEST_LLM_KEY the suite skips, so this step mainly verifies
       # that the integration-tagged code compiles on all platforms.
       - name: Integration tests (skipped without LLM credentials)
-        if: runner.os == 'Linux'
+        if: runner.os != 'Windows'
         run: go test -tags=integration ./test/...

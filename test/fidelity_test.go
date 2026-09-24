@@ -310,7 +310,10 @@ func TestDreamCompressionFidelity(t *testing.T) {
 	}
 
 	// Judge whether the surface keywords still carry the running theme.
-	source := strings.Join(related[:4], "；") // the core 4 turns hold all facts
+	// The judge has to be shown every utterance that was ingested. Handing it a 4-line window while
+	// the session holds 25 manufactures a verdict of 「hallucinated」 for keywords that came from the
+	// other 21 lines — the failure lands on the review's evidence set, not on the engine.
+	source := strings.Join(related, "；")
 	v := judgeFaithful(t, judge, model, source, kws)
 	t.Logf("post-dream fidelity=%v surface=%d topics kws=%v reason=%s", v.Faithful, len(after.Topics), kws, v.Reason)
 	if !v.Faithful {
