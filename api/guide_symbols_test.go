@@ -351,3 +351,95 @@ func publishedIdents(tb testing.TB) (names map[string]bool) {
 	}
 	return names
 }
+
+// A living document that cites a test by name is telling a host where the evidence lives, and
+// the guides, the facade comments and the module agent.md files are rewritten across rounds
+// while tests get renamed or folded into one another. So every TestXxx written in one of those
+// files has to resolve to a test that actually exists. A run-pattern prefix (`-run TestInterface`,
+// `TestInterface*`) counts, because that is how the same file tells a host what to execute; a name
+// that is neither a test nor a prefix of one is a pointer to nowhere. README and CHANGELOG are
+// out of scope on purpose: they describe a release as of its own date, and a name retired by a
+// later round is history there, not a broken link.
+func TestLivingDocsCiteTestsThatExist(t *testing.T) {
+	defined := definedTestNames(t)
+	cited := map[string][]string{}
+	sources := []string{"../INTEGRATION_GUIDE.md", "../INTEGRATION_GUIDE.zh.md"}
+	for _, dir := range []string{".", "../internal"} {
+		err := filepath.WalkDir(dir, func(path string, e fs.DirEntry, err error) error {
+			if err != nil || e.IsDir() {
+				return err
+			}
+			name := e.Name()
+			if strings.HasSuffix(name, "_test.go") {
+				return nil
+			}
+			if strings.HasSuffix(name, ".go") || name == "agent.md" {
+				sources = append(sources, path)
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("walk %s: %v", dir, err)
+		}
+	}
+	testRef := regexp.MustCompile(`\bTest[A-Za-z0-9_]*`)
+	for _, path := range sources {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		for _, name := range testRef.FindAllString(string(raw), -1) {
+			if resolves(name, defined) {
+				continue
+			}
+			cited[name] = append(cited[name], path)
+		}
+	}
+	for name, where := range cited {
+		t.Errorf("%s is cited as evidence by %s, but no such test is defined (and it is not a -run prefix)",
+			name, strings.Join(where, ", "))
+	}
+}
+
+// definedTestNames collects every test function in the repository, walking past the package
+// boundary because the guides cite cases that live in api/, internal/ and test/ alike.
+func definedTestNames(tb testing.TB) []string {
+	tb.Helper()
+	var names []string
+	err := filepath.WalkDir("..", func(path string, e fs.DirEntry, err error) error {
+		if err != nil || e.IsDir() || !strings.HasSuffix(e.Name(), "_test.go") {
+			return err
+		}
+		file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.SkipObjectResolution)
+		if err != nil {
+			return err
+		}
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if ok && fn.Recv == nil && strings.HasPrefix(fn.Name.Name, "Test") {
+				names = append(names, fn.Name.Name)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		tb.Fatalf("walk the repository for tests: %v", err)
+	}
+	sort.Strings(names)
+	if len(names) < 200 {
+		tb.Fatalf("only %d test functions found — the walk stopped working", len(names))
+	}
+	return names
+}
+
+func resolves(citation string, defined []string) bool {
+	i := sort.SearchStrings(defined, citation)
+	if i < len(defined) && defined[i] == citation {
+		return true
+	}
+	// A -run pattern names the front of a set of tests, not one of them.
+	if i < len(defined) && strings.HasPrefix(defined[i], citation) {
+		return true
+	}
+	return false
+}

@@ -143,7 +143,7 @@ type DBStats struct {
 // between FileBytes before it and FileBytes after, and the rewrite is a fixed point —
 // measured on the offline corpus, 19 700 bytes to 17 827 with the same 47 live records,
 // and a file with nothing left to reclaim comes out no larger a second time
-// (18 830 to 18 680; TestInterfaceCompactTo pins both halves).
+// (18 830 to 18 680; TestInterfaceCompactedCopyAnswersIdentically pins both halves).
 // It takes no domain lock, so it answers while domains are busy.
 func (d *DB) Stats() (DBStats, error) {
 	size, records, err := d.db.Stats()

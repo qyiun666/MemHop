@@ -43,7 +43,7 @@ type Session struct {
 // one — NewScene, or the domain's first scene. Handed in along with a scene this read
 // continues, named or not, it is refused (ErrInvalidQuery) rather than dropped: an
 // anchor that did nothing must not look adopted. UpdateScene moves the anchor of a
-// scene that exists.
+// scene that exists, and only when ScenePatch.Force names the move.
 func (s *Session) Search(q SearchQuery) (*SearchResult, error) {
 	res, err := s.session.Search(q)
 	if err != nil {
@@ -137,7 +137,12 @@ func (s *Session) ListScenes(l3ID string) ([]SceneSlot, error) {
 
 // UpdateScene patches one scene's host-facing metadata (title, L3 anchor) and
 // returns the scene as stored afterwards, so a host confirms an anchor without
-// listing the domain. Nil patch fields keep their stored value. A patch that changes
+// listing the domain. Nil patch fields keep their stored value. Moving a scene that
+// already has an anchor to a different L3 domain needs Force: without it the call is
+// refused (ErrInvalidQuery), because a move loses the old anchor and an accidental
+// patch should not cost a host its project listing. Clearing the anchor (L3ID set to
+// "") needs no Force — that direction is reversible.
+// A patch that changes
 // nothing — an empty one, or values the scene already holds — writes nothing: the
 // file is append-only, so the confirm read that documented this call would otherwise
 // charge the host by the byte per look, and a retried patch per retry
