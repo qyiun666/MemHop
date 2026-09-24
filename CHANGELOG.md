@@ -287,6 +287,8 @@ README 的版本表与 git log。
 ② `TestSkeletonExtractionToleratesCRLF` 在 Windows 上反而自己红了：CI 检出的 markdown **本来就带 CRLF**，我再把 `\n` 换成 `\r\n` 就成了 `\r\r\n`，而提取器一行只剥得掉一个 `\r`。修成先把原文归一到 LF 再造 CRLF 副本——这条正是「造变体前先看清当前平台给的是什么」的实例。
 另：这一族第一次在真 Windows 上跑通，也说明第 109 条那批「谁开谁关」的句柄修复生效了（上一轮的九条 TempDir 红全部消失）。
 
+127. **把「接入者要写的那 40 行适配器」搬进本仓，成为可执行的配方**（新用例 `test/api_interface_memory_port_test.go`、两份指南各加一节、`PlanState` 两处补上「没有开着的轮时怎么答」；库行为一字未动）。三仓接线的事实是这样的：meowire 只声明一个两方法的经验端口（`Recall`/`Remember`），memhop 与 meowire 互相都不 import，所以**中间那段适配器一直住在别人的分支里**——objective 说「尽量做到集成就可以直接用」，缺的正是这段能被复制、且被断言过的映射。用例里那份适配器全部状态只有一个 `*Session` 句柄：`begin()` 是开轮那次 `Search`（顺手留下读回的 `ProfileBrief`），`recall()` 纯读（`SceneContext` + `PlanState`，绝不再 `Search`），`remember()` 是一次 `Update` 带走框架自己那个结局词。断言钉四点：适配器不持任何 id（重启换个新适配器照样召回两轮）、**四次召回只收一轮**（框架每轮 Think 多次是常态，召回绝不能烧轮次）、结局词逐字回到事件轨、超预算写入带错误回来而轮还开着（拒绝之后重试落在同一轮）。**这份配方当场量出一处接口文档缺口**：第一版适配器让 `recall()` 在重启后直接跑，撞上 `PlanState` 的「no turn is open」——`ErrInvalidQuery`。行为是对的（手上没有开着的轮，计划树自然没有），但指南原先只写「读的是开着的那一轮」，没写**没人开着时它怎么答**，接入者照表实现就会把「没有进行中的计划」当成存储故障中断整轮。于是把这句话补进两份指南的 L5 表行与 §L5 正文，适配器也按「一次答案而不是一个故障」处理它。指南新增的小节点名本用例，`make check-guides`、门面符号门禁与活文档引用门禁都过。
+
 ## v1.6.5 — 2026-09-22 — MCP 面整体退役：对外只剩 Go module
 
 1. **`cmd/memhop-mcp` 整包删除**（14 个文件 3109 行）：25 个工具、多租户 HTTP（SSE 与 streamable-http 双传输）、按 `/mcp/<tenant>` 建/取域的租户注册表、`--tenants` 白名单与锚定 db-dir 的读入口一起消失。仓库不再有 server 形态、不再有后台进程，对外只剩「以 Go module 使用 `api`」一种接入。

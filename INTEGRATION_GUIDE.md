@@ -574,7 +574,7 @@ when an admin-face method wanders in here.
 | `memory_archive_search` | `Session.SearchL4` | `keyword`, `start`, `end`, `ids`, `topic_id`, `type`, `kind`, `node_seq`, `limit` | the records that matched, in the read's own order |
 | `plan_add_step` | `Session.PlanNodeAdd` | `parent_seq`, `title` | the ordinal that step is addressed by from now on |
 | `plan_update_step` | `Session.PlanNodeUpdate` | `seq`, `title`, `status`, `summary` | nothing; a refused update leaves the tree untouched |
-| `plan_state` | `Session.PlanState` | none | the open turn's forest, with `DoneCount`/`TotalCount` summed over every step |
+| `plan_state` | `Session.PlanState` | none | the open turn's forest, with `DoneCount`/`TotalCount` summed over every step; while no turn is open it answers `ErrInvalidQuery` — that is "nothing in progress", not a storage failure |
 
 The table is checked against the shapes rather than trusted: `TestToolArgumentsDecodeIntoEveryInputShape`
 decodes each tool's argument object straight into the input struct and requires every key to land — a
@@ -896,7 +896,9 @@ steps and this turn's surviving events bound to a step — so a turn's numbering
 an ordinal an event still speaks of is never handed to a new step (the two age separately, and a
 step swept by the retention window can leave an event naming it). There is no plan id and no path
 string to mint, the plan calls name no topic id (they act on the turn `Search` opened), and
-`PlanState()` is how a tree comes back.
+`PlanState()` is how a tree comes back, and it reads the turn `Search` opened: with no turn open it
+refuses with `ErrInvalidQuery`, which a caller should read as an empty answer rather than a
+broken library.
 
 | Call | Meaning |
 |---|---|
@@ -1111,6 +1113,19 @@ func main() {
 
 ---
 
+
+### The same shape behind a framework's memory port
+
+An agent framework usually owns its own two-method port — open a round per invocation, recall before
+every model call, hand the invocation's facts back once — and the integrator writes the adapter.
+`TestInterfaceMemoryPortAdapterHoldsNoIds` is that adapter, executable in this repository: its whole
+state is one `*Session` handle, `begin()` is the `Search` that opens the round and keeps the
+`ProfileBrief` that read hands back, `recall()` is pure (`SceneContext` plus `PlanState`, never a
+second `Search` — four recalls still settle one round), and `remember()` is one `Update` carrying
+the framework's own outcome word. Two claims it pins are easy to write wrong from the reference
+alone: `PlanState` answers `ErrInvalidQuery` while no turn is open, which means "nothing in
+progress" and must not abort the invocation; and an over-budget write comes back as an error with
+the round still open, so the retry lands on that round instead of minting a new one.
 
 ## 12. Pitfalls
 

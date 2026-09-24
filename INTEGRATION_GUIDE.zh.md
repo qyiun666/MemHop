@@ -644,7 +644,7 @@ _, err := db.AppendArchive(api.ArchiveInput{
 | `seq, err := db.PlanNodeAdd(0, title)` | 用第一个根步骤开出本轮的计划树，并交回此后指认该步的序号。一轮的树起初一个步骤也没有，所以本轮第一次有计划也走这个调用；没有单独的「建树」调用 |
 | `seq, err := db.PlanNodeAdd(parentSeq, title)` | 给树加一个步骤并拿到它的序号。`parentSeq` 为 `0` 即把该步挂在顶层，这也是一个森林再加一个根；其他取值必须指认这棵树上已有的步骤——父序号不在树上即 `ErrNotFound`，且不会顺手长出这个父。新建的步骤就是 `in_progress`，所以这里不索要状态；标题可以先留空、之后由 `PlanNodeUpdate` 补，留空时视图按序号显示这一步 |
 | `err := db.PlanNodeUpdate(api.PlanStep{Seq: seq, Status: api.PlanStatusDone, Summary: s})` | 重述一个步骤：它的 `Status` 加上本节点自己的 `Title`/`Summary`。`Status` 每次都必须给出（没有「保持原样」的写法），而 `Title`/`Summary` 留空即保留现值——改一步既不会倒退它的标题。**父节点那句折出来的 `Summary` 是引擎自己那份派生值**：这一枝在其下再变化（已收口的父节点下又添一步、一个已了结的子步换了结论）就再折一次；你要是亲自在父节点上写了 `Summary`，那一句就是宿主的文本，任何汇总都不再改写它。一步到达终态就记下 `FinishedAt`；把一个已定的步骤重述成 `in_progress` 会把它重新打开，并清掉那个完成时间。一个状态为 done 的父节点，其**直接子全部到达终态**后，它的摘要由孩子们折上来，之后这一枝再变就重折。词表外的状态、本轮从未建出的序号（`ErrNotFound`）都在**动节点之前**被拒，树保持得和拒之前一模一样。这个调用不写任何内容 |
-| `tree, err := db.PlanState()` | 读森林视图（`PlanTree.Roots` + `DoneCount` / `TotalCount`，两个计数按**每棵树的每一步**汇总，不是只数根；每个 `PlanNodeView` 带 `Seq` / `ParentSeq` / `Status` / `Summary` / `Children`）——重启恢复计划树也走这个 |
+| `tree, err := db.PlanState()` | 读森林视图（`PlanTree.Roots` + `DoneCount` / `TotalCount`，两个计数按**每棵树的每一步**汇总，不是只数根；每个 `PlanNodeView` 带 `Seq` / `ParentSeq` / `Status` / `Summary` / `Children`）——重启恢复计划树也走这个；手上没有开着的轮时它答 `ErrInvalidQuery`——那是「没有进行中的计划」，不是库坏了 |
 | `db.AppendArchive(ev)`（`ev.NodeSeq` 非 0） | 把事件绑到**本轮树上已有的某一步**。那一步必须先存在：一个谁都没建出来的序号会让整条记录被拒（`ErrInvalidQuery`）且零留痕——事件指了一个计划里没有的步骤，就是计划与记录对不上，树是 `PlanNodeAdd` 的事；写错的序号也因此静悄悄多不开一棵树。`EventType` **由宿主自定**，与裸轮次事件同口径——引擎不按它分支，只经 `SearchL4` 原样回显那个名字，空值即 `ErrInvalidQuery`。惯例名（给读者的共享词表，不是许可集）：`plan_step`、`llm_request`、`llm_output`、`tool_call`、`tool_result`、`subagent_spawn`、`subagent_done`、`context_inject`、`ask_user`、`user_reply` |
 
 状态只有三个值，各一种字符串写法：`api.PlanStatusInProgress`（`in_progress`）、`api.PlanStatusDone`（`done`）、`api.PlanStatusFailed`（`failed`）。引擎不保留「已计划、未开始」这一态——一步存在是因为宿主建了它，而它一存在就在进行中。
@@ -808,6 +808,15 @@ func main() {
 
 ---
 
+
+### 框架记忆端口背后的同一个形状
+
+agent 框架通常自带一个两方法的端口——每次调用开一轮、每次模型调用前召回、结束时把这一轮的事实交回去——适配器由接入者来写。
+`TestInterfaceMemoryPortAdapterHoldsNoIds` 就是那份适配器，在本仓可执行：它全部状态只有一个 `*Session` 句柄；`begin()` 就是开轮的
+那次 `Search`，并留下读回的 `ProfileBrief`；`recall()` 是纯读（`SceneContext` 加 `PlanState`，绝不再 `Search`——四次召回仍只收一轮）；
+`remember()` 是一次 `Update`，把框架自己那个结局词原样带走。它钉住两件只看接口表容易写错的事：没有开着的轮时 `PlanState` 答
+`ErrInvalidQuery`，意思是「手上没有进行中的计划」，不该据此中断这一轮；超预算的写入带错误回来而轮还开着，所以被拒之后的重试落在
+同一轮，而不是另起一轮。
 
 ## 12. 陷阱清单
 
