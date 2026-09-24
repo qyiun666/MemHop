@@ -547,12 +547,12 @@ res, err := db.ImportL3([]api.L3ImportItem{{
 // 返回 GraphIDs / CreatedIDs / UpdatedIDs / SkippedCount / EdgesCreated / Errors
 ```
 
-`Related` 目标按标题在同图内解析，可在同批条目的后文（两阶段导入）。超边的身份是「成员节点 **+ kind**」，所以同一对节点可以同时挂 `related` 与 `part_of`；重导入同一批不会重复建边（按排序成员 + kind 去重）。无法解析 / 自引用 / 非法 kind 的条目记入 `Errors`。
+`Related` 目标按标题在同图内解析，可在同批条目的后文（两阶段导入）。超边的身份是「成员节点 **+ kind**」，所以同一对节点可以同时挂 `related` 与 `part_of`；重导入同一批不会重复建边（按排序成员 + kind 去重）。去重认的是那个集合，不是写法：换一个成员当锚、把 titles 换个顺序、甚至重启之后再报同一个事实，都是 no-op——既不多一条边，也不报一次错（`TestInterfaceRelationIdentityIgnoresOrderAndAnchor`）。无法解析 / 自引用 / 非法 kind 的条目记入 `Errors`。
 
 `GraphIDs` 让这条路闭环：图 id = `hash(Domain)`，公开面上没有任何调用能渲染这个派生，所以 `ImportL3` 直接把它报出来——把场景挂到图上（`SearchQuery.L3ID` / `UpdateScene`）要的正是这个 id。
 **把一张图复制进另一个文件。** 公共池是按文件算的，所以自己开一个 `.meh` 的 worker 起手没有项目知识，
 而这条复制全程只走公开面：`GetL3` 交回节点（带标题）与超边（成员 id 列表），宿主就一个节点写一条
-`L3ImportItem`，再把每条边挂到它序号最小的成员名下作为那条目的 `Related`——超边是无序集，选谁当锚
+`L3ImportItem`，再把每条边挂到它序号最小的成员名下作为那条目的 `Related`——超边是无序集，选谁当锚、titles 按什么顺序给，
 都不丢东西。两件事实值得写下来：图的 id 由标签派生，所以用同一个 `Domain` 导入会让副本落在另一个文件
 里**同一个 id** 上；而 `SourceRef` 读写两侧都是普通 `string`（空串就是「没有位置引用」，也正是编码时
 那个键缺席的意思），读回来的东西可以直接写回去，不必解引用。`TestInterfaceGraphCopyBetweenLibraries`

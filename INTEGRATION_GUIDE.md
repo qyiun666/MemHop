@@ -734,7 +734,11 @@ res, err := db.ImportL3([]api.L3ImportItem{{
 in the batch (two-phase import). A hyperedge is identified by its member nodes
 **plus its kind**, so one node pair can hold `related` and `part_of` at the same
 time, and re-importing a batch does not duplicate edges (deduped on sorted
-members + kind). Unresolvable / self / invalid-kind entries land in `Errors`.
+members + kind). What is deduped is that set, not the phrasing: the same fact
+restated from another member, with its titles in another order, and again after a
+restart, is a no-op — neither a second edge nor an error
+(`TestInterfaceRelationIdentityIgnoresOrderAndAnchor`). Unresolvable / self /
+invalid-kind entries land in `Errors`.
 
 `GraphIDs` is what closes the loop: a graph id is `hash(Domain)` and no other
 public call renders that derivation, so `ImportL3` reports it directly —
@@ -744,7 +748,7 @@ public call renders that derivation, so `ImportL3` reports it directly —
 `.meh` starts with no project knowledge, and the copy is all public surface: `GetL3` hands back
 the nodes (with their titles) and the hyperedges (as member ids), so a host writes one
 `L3ImportItem` per node and hangs each edge under its lowest member as that item's `Related` —
-a hyperedge is an unordered set, so which member anchors it loses nothing. Two facts are worth
+a hyperedge is an unordered set, so neither which member anchors it nor the order its titles arrive in loses anything. Two facts are worth
 writing down: a graph's id derives from its label, so importing under the same `Domain` lands
 the copy on the **same id** in the other file; and `SourceRef` is a plain string on both sides
 (empty means "no positional reference", which is exactly what the encoded answer leaves out), so
