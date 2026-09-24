@@ -232,7 +232,10 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    记录）。`SceneID` 非空且不存在 → `ErrNotFound`；自持的那条不再重复审存在性——紧接着
    `repo.OpenSceneTurn` 读的就是同一条记录，它同时把场景的 `TurnSeq` 推到下一轮，`NewTopicID = hash("turn:" +
    场景:TurnSeq)` 就是本轮的话题，根把它与场景一起装进 `ac.Scene`/`ac.Turn`。
-   铸出的键撞上保留的 0 时报 `ErrCorruption` 而不是收下（见第 6 条）。
+   开轮对场景记录是**读-改-写**：只动 `TurnSeq` 与 `LastUsedAt` 两格，宿主写在同一行上的标题与锚
+   （`SceneName` / `L3ID`）随读回的原值一起写回去——一次开轮不该让宿主失去它给这段会话起的名字，
+   也不该让它从所锚的项目里消失。
+铸出的键撞上保留的 0 时报 `ErrCorruption` 而不是收下（见第 6 条）。
    画像读取失败同样使本次读取失败（仅"画像尚未建立"按空
    画像继续），不再静默返回缺 L0 的上下文。
 2. **`Search` 零 LLM、零话题写入**：唯一写是那一行场景记录（轮次计数，
