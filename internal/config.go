@@ -102,6 +102,9 @@ func OpenDB(path string, llmCfg LlmConfig, defaults MemHopDefaults, primary *cor
 	if err := llmCfg.Validate(); err != nil {
 		return nil, err
 	}
+	if err := defaults.Validate(); err != nil {
+		return nil, err
+	}
 	if primary != nil && strings.TrimSpace(primary.Name) == "" {
 		return nil, common.NewError(common.ErrInvalidQuery, "primary profile Name is required")
 	}

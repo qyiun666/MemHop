@@ -8,6 +8,8 @@
 package internal
 
 import (
+	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -187,6 +189,18 @@ func TestOpenDBRefusesIncompleteArguments(t *testing.T) {
 	}
 	if _, err := OpenDB(filepath.Join(dir, "b.meh"), testLLMConfig(), DefaultMemHopDefaults, primaryProfile("   ")); common.CodeOf(err) != common.ErrInvalidQuery {
 		t.Fatalf("a blank profile name: want ErrInvalidQuery, got %v", err)
+	}
+	// A retention window the sweep cannot represent is refused here rather than
+	// redrawn: negative asks for a sweep that never runs, and a window past the
+	// ceiling wraps the duration around into a cutoff in the future, which sweeps
+	// everything the domain holds.
+	for _, ms := range []int64{-1, 1 << 62, math.MaxInt64} {
+		d := DefaultMemHopDefaults
+		d.ContentRetentionMs = ms
+		name := filepath.Join(dir, fmt.Sprintf("retention-%d.meh", ms))
+		if _, err := OpenDB(name, testLLMConfig(), d, primaryProfile("x")); common.CodeOf(err) != common.ErrConfig {
+			t.Fatalf("content_retention_ms %d: want ErrConfig, got %v", ms, err)
+		}
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {

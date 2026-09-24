@@ -126,7 +126,10 @@ internal/{domain,scene,turn,dream,graph,plan,content}
   **唯一入口是 `OpenDB(path, llm, defaults, primary)`**：先用 `openEngine` 做三态
   判定（只在自己带了主域画像时才允许建文件），再 `assemble` 装配，最后按主域画像
   在不在落定 a/b/e 三条规则。**先校验后建文件**——被拒的打开不在宿主的路径上留
-  任何东西。**建文件是带截断的**，所以 `openEngine` 只在
+  任何东西：排在 `openEngine` 之前的三判各管各的入参（路径非空、`LlmConfig.Validate`、
+  `MemHopDefaults.Validate`）。第三判管保留窗：写负数或超出可表示上限的宿主表达的是
+  「别扫我的记录」，折回默认再让清扫照那个窗口删，等于把一次配置笔误变成一次数据损失。
+  **建文件是带截断的**，所以 `openEngine` 只在
   `errors.Is(err, os.ErrNotExist)` 时才走创建分支，其它 stat 失败一律上报；路径是
   目录时显式拒绝，否则 `core.Open` 会回一句误导的「文件太小放不下双头」。
 - **域身份三个入口**：`Primary()` 返回零号域（一个文件恰好一个主域，无需扫描），

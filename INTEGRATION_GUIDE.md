@@ -96,15 +96,16 @@ similarity floor sit beside the Dream stages, the prompt output budgets beside t
 LLM calls in `internal/cap/llmops`, the distillation sample limits in
 `internal/cap/profile`. Hosts should not need to tune them; if you think you do,
 open an issue. One vocabulary across the four: **0 means "not filled"** and the library
-default answers; a negative is the explicit "switch this off" (the retention window has no
-off spelling, only a larger window).
+default answers; a negative is the explicit "switch this off" — except the retention
+window, which has no off spelling at all: `Open` refuses a negative rather than folding it onto
+the default, and refuses a window past the one the sweep can represent.
 
 | Field | Default | Meaning |
 |---|---|---|
 | SceneDreamTopicThreshold | 24 | Once a scene's depth-1 topic count passes this, `Update` schedules that scene's Dream in the background. A negative disables the trigger. A refused pass changes nothing, so the count still passes next time and the scene is asked again — checked at every round close, and one consolidation call per scene per pass is its ceiling — a Dream already in flight for that scene absorbs the intervening closes (`TestDeclinedConsolidationAsksOncePerScenePerPass`). `DreamCompressMinTopics` is checked *before* the model is asked, so a scene under it spends nothing — but by default that floor (20) sits below this trigger (24), and every settled round adds a depth-1 row while the model keeps refusing, so raising the floor delays these asks rather than bounding them (it is also the number the consolidation prompt tells the model to converge toward). The one lever that bounds the spend is this field negative, then driving `Dream` on a cadence you choose. |
 | DreamCompressMinTopics | 20 | Topics per scene before Dream will compress. It is also the number the model is told to converge toward, so a negative — no floor, merge as far as the model's own rules allow — is the aggressive spelling, not the conservative one. |
 | AgentIdleTTLMs | 3600000 | An agent domain whose context has been idle this long is freed from memory (it rebuilds from its records on next use). A negative disables the sweep. The default domain and the shared L3 pool are never reclaimed. One fact is not rebuildable: the turn that was open. A domain reclaimed mid-round refuses that round's remaining writes and its close until the host opens a new turn — nothing lands silently on the fresh turn — and what the round had already appended stays stored under a topic no read names, since it never settled. Keep this longer than your longest round, or set a negative. |
-| ContentRetentionMs | 604800000 (7 days) | How long a turn's records (L4 content and L5 plan nodes) outlive it before a Dream sweeps them. 0 or less means the library default. There is no "keep everything" spelling: raise the window rather than turning the sweep off. The window is wall-clock, not round-count: records stamped older than it (a backfill, a test seed) are swept by the first Dream that runs, before any read gets a chance at them. A round that is still open is no exemption - the sweep reads the stamp, not the round's state; what a Dream never does is drop the open turn, so the pending close still settles it (its own pair is fresh, so it survives) |
+| ContentRetentionMs | 604800000 (7 days) | How long a turn's records (L4 content and L5 plan nodes) outlive it before a Dream sweeps them. 0 means the library default; a negative is refused with `ErrConfig` instead of being folded onto it, because a host writing one is asking for a sweep that never runs. There is no "keep everything" spelling either: the longest window the sweep can measure is 9223372036854 ms (about 292 years), and past that the millisecond count overflows a `time.Duration` — the cutoff lands in the future and every record in the domain reads as expired — so `Open` refuses it too. The window is wall-clock, not round-count: records stamped older than it (a backfill, a test seed) are swept by the first Dream that runs, before any read gets a chance at them. A round that is still open is no exemption - the sweep reads the stamp, not the round's state; what a Dream never does is drop the open turn, so the pending close still settles it (its own pair is fresh, so it survives) |
 
 ---
 
@@ -1091,7 +1092,8 @@ func main() {
 9. **A knob left at 0 is a knob you did not fill**: `MemHopDefaults` is read that way
     everywhere, exactly as `LlmConfig`'s two budgets already were, so a partial literal
     cannot silently switch automatic consolidation off any more. Turning a knob off takes
-    the explicit negative spelling — and for `DreamCompressMinTopics` a negative is the
+    the explicit negative spelling — the retention window being the one exception, where a negative is refused at
+    `Open` rather than read as "off" — and for `DreamCompressMinTopics` a negative is the
     *lossy* direction, since that number is what the consolidation prompt asks the scene
     to converge toward. Context size is held in check only by Dream converging each scene
     towards `DreamCompressMinTopics` (default 20) — a target, not a ceiling a scene is kept
