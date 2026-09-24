@@ -7,6 +7,7 @@ package repo
 import (
 	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/repo/core"
+	"time"
 )
 
 // MaxDepth: topic depth threshold that triggers deletion on sinking.
@@ -148,6 +149,7 @@ func OpenSceneTurn(engine *core.StorageEngine, agentID uint64, sceneID uint64) (
 		return nil, err
 	}
 	slot.TurnSeq++
+	slot.LastUsedAt = time.Now().UnixMilli()
 	if err := core.WriteSceneSlot(engine, agentID, sceneID, slot); err != nil {
 		return nil, err
 	}

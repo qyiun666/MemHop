@@ -205,7 +205,8 @@ The host drives per turn: **turn start `Search` (read this session's memory and 
 ```go
 res, err := db.Search(api.SearchQuery{
     SceneID:  sceneIDHex,  // empty = continue this domain's current scene (after a reopen it
-                           // restores the one whose turn counter ran furthest); name a scene to
+                           // restores the one a turn was opened in most recently; the counter only breaks
+                           // ties among records written before that stamp); name a scene to
                            // scope this read to it instead
     NewScene: false,       // true = open a fresh scene — the only way to start a second
                            // conversation over the same domain

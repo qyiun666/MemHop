@@ -19,12 +19,15 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
-// CurrentScene names the scene a domain resumes its conversation on: the scene whose
-// turn counter ran furthest, since nothing on a scene record says when it was last
-// used. Ties break on the smaller id, so the same records always restore the same
-// scene. A domain holding no scenes answers 0, which is the read's cue to open the
-// first one. The scan is strict: resuming the wrong stream is worse than reporting
-// the damage.
+// CurrentScene names the scene a domain resumes its conversation on: the one a turn was
+// opened in most recently. Until that stamp existed the only hint was the turn counter,
+// and the counter cannot tell two equally long conversations apart — a restart then
+// restored whichever id happened to be smaller, dropping the host into a conversation it
+// had not been in. The counter still decides where nothing is stamped (records written
+// before the field existed), and the smaller id breaks the last tie, so the same records
+// always restore the same scene. A domain holding no scenes answers 0, which is the read's
+// cue to open the first one. The scan is strict: resuming the wrong stream is worse than
+// reporting the damage.
 func CurrentScene(engine *core.StorageEngine, agentID uint64) (uint64, error) {
 	scenes, err := repo.CollectAllScenesL2(engine, agentID)
 	if err != nil {
@@ -34,6 +37,9 @@ func CurrentScene(engine *core.StorageEngine, agentID uint64) (uint64, error) {
 		return 0, nil
 	}
 	resumed := slices.MaxFunc(scenes, func(a, b core.SceneSlot) int {
+		if c := cmp.Compare(a.LastUsedAt, b.LastUsedAt); c != 0 {
+			return c
+		}
 		if c := cmp.Compare(a.TurnSeq, b.TurnSeq); c != 0 {
 			return c
 		}

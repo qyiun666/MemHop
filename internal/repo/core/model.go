@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/qyiun666/MemHop/internal/common"
 )
@@ -85,14 +86,21 @@ type SceneSlot struct {
 	// turn's topic id, so turn ids never depend on message timestamps.
 	// Absent = 0.
 	TurnSeq uint64 `json:"turn_seq,omitempty"`
-	L3ID    uint64 `json:"l3_id"` // project-domain L3 graph this scene is anchored to (N:1)
+	// LastUsedAt is the moment a turn was last opened here (ms). It is what makes
+	// "the conversation this domain is in" restorable: the counter alone cannot say
+	// it, because two scenes can hold the same number of turns and only one of them
+	// was the one in use. 0 means never stamped — a record written before the field
+	// existed — so such a record falls back to the counter, exactly as it used to.
+	LastUsedAt int64  `json:"last_used_at,omitempty"`
+	L3ID       uint64 `json:"l3_id"` // project-domain L3 graph this scene is anchored to (N:1)
 }
 
 // NewSceneSlot builds a scene record for a caller-supplied scene id and name.
 func NewSceneSlot(sceneID uint64, name string) SceneSlot {
 	return SceneSlot{
-		SceneID:   sceneID,
-		SceneName: name,
+		SceneID:    sceneID,
+		SceneName:  name,
+		LastUsedAt: time.Now().UnixMilli(),
 	}
 }
 

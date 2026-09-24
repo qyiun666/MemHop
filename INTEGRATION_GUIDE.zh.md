@@ -169,7 +169,7 @@ worker, err := lib.SubAgent(workerLLM, api.ProfileInput{Name: "worker"}) // 按�
 
 ```go
 res, err := db.Search(api.SearchQuery{
-    SceneID:   sceneIDHex,  // 空 = 续用该域当前场景（重开文件后恢复轮次计数跑得最远的那个）；
+    SceneID:   sceneIDHex,  // 空 = 续用该域当前场景（重开文件后恢复「最近开过一轮」的那条；只有都没盖过戳的旧记录才按计数器）；
                           // 非空 = 定到那个场景，必须已存在
     NewScene:  false,       // true = 另开一个新场景——同一域上另起一条会话的唯一写法
     L3ID:      graphIDHex,  // 给场景挂 L3 项目域，只被「这一读会新建场景」的两条路径采纳

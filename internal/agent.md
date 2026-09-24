@@ -90,7 +90,7 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    却在取锁前被调度出去，超过 TTL 后回收就会插进这两步之间——没有这个标记，那次操作
    会写在一份已作废的缓存上，而 `lockAgent` 复检到标记就重取域。回收时不快照任何东西：
    L2Meta 在下次访问时从记录重建，数据始终在文件里。两个自持字段里只有 `ac.Scene` 可重建
-   （`scene.CurrentScene` 取轮次计数器跑得最远的那条）；**`ac.Turn` 不可重建**——开着的那一轮
+   （`scene.CurrentScene` 取最近开过一轮的那条，只有全都没盖过戳的旧记录才退回计数器）；**`ac.Turn` 不可重建**——开着的那一轮
    在盘上没有任何痕迹。于是回收跨过一轮的中途时，那一轮剩下的写入与收束一律被拒到宿主
    重开一轮为止（`TestIdleReclaimRefusesTheDroppedRound`）：不会静默写到新轮上，代价是那之前
    已写的记录留在一个从未沉淀的话题下，读面不再点名它。
@@ -217,7 +217,7 @@ internal/{domain,scene,turn,dream,graph,plan,content}
 
 1. **一次 `Search` = 定场景 + 开一轮**：`SceneID` 为空 → 续用该域自持的 `ac.Scene`；
    自持为空（首次访问、或空闲回收后重建、或当前场景被删）时经 `scene.CurrentScene`
-   从记录里恢复「`TurnSeq` 跑得最远」的那个，平手取 id 小的，所以同一份记录两次恢复
+   从记录里恢复「最近开过一轮」的那条（`LastUsedAt`），都没盖过戳的旧记录才退回「`TurnSeq` 跑得最远」、再平手取 id 小的，所以同一份记录两次恢复
    得到同一个场景（这一步与下面的纯读共用 `ensureScene`，两条读不会各自演化「当前场景」
    的判法）；一个场景都没有才新建——`scene` 在自己内部铸一个未被占用的 ID
    （`0` 跳过；只有 `ErrNotFound` 才算可用，其他读错误原样上抛）并落一条场景记录

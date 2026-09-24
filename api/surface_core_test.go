@@ -61,8 +61,10 @@ func TestSearchContinuesTheDomainScene(t *testing.T) {
 	}
 
 	// The current scene is the records' fact, not the live handle's: reopening the file
-	// resumes the scene whose counter ran furthest (here, the first one's two turns) and
-	// the turn writes work from that read alone, with nothing carried over.
+	// resumes the scene a turn was opened in most recently — here the second conversation,
+	// which holds fewer turns than the first. The counter only decides among records written
+	// before the stamp existed; "which stream was I in" is not something it can answer.
+	// The turn writes work from that read alone, with nothing carried over.
 	if err := m.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
@@ -79,15 +81,15 @@ func TestSearchContinuesTheDomainScene(t *testing.T) {
 	if err != nil {
 		t.Fatalf("search after reopen: %v", err)
 	}
-	if resumed.Scene.SceneID != first.Scene.SceneID {
-		t.Fatalf("a reopened domain resumed %s, want the scene whose turn counter ran furthest (%s)",
-			resumed.Scene.SceneID, first.Scene.SceneID)
+	if resumed.Scene.SceneID != fresh.Scene.SceneID {
+		t.Fatalf("a reopened domain resumed %s, want the scene a turn was last opened in (%s)",
+			resumed.Scene.SceneID, fresh.Scene.SceneID)
 	}
 	topic, err := sess2.Update(TurnEnd{Input: "still the same conversation", Output: "yes", CreatedAt: turnStamp})
 	if err != nil {
 		t.Fatalf("update on the resumed scene: %v", err)
 	}
-	if topic.SceneID != first.Scene.SceneID || topic.ID != resumed.NewTopicID {
+	if topic.SceneID != fresh.Scene.SceneID || topic.ID != resumed.NewTopicID {
 		t.Fatalf("the close after a restart landed on %+v, want %s's turn %s",
 			topic, first.Scene.SceneID, resumed.NewTopicID)
 	}

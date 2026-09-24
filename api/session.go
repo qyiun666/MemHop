@@ -31,8 +31,9 @@ type Session struct {
 // host is about to run. It is the loop's one write-shaped read: opening a turn
 // advances the scene's turn counter, so call it once per turn and not as a poll — the
 // pure read is SceneContext. An empty SceneID continues the domain's current scene,
-// and after the file is reopened that scene restores from the records (the one whose
-// turn counter ran furthest); NewScene starts a fresh conversation instead. L3ID
+// and after the file is reopened that scene restores from the records (the one a turn
+// was opened in most recently; the turn counter only breaks ties among records written
+// before that stamp existed); NewScene starts a fresh conversation instead. L3ID
 // anchors a scene to an L3 project domain and is taken only by a read that creates
 // one — NewScene, or the domain's first scene. Handed in along with a scene this read
 // continues, named or not, it is refused (ErrInvalidQuery) rather than dropped: an
