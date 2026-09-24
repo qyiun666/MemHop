@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
+	"time"
 
 	memhop "github.com/qyiun666/MemHop/api"
 	internal "github.com/qyiun666/MemHop/internal"
@@ -295,5 +296,61 @@ func TestInterfaceDreamReportsCancellation(t *testing.T) {
 	if _, err := db.Dream(ctx, ""); memhop.CodeOf(err) != memhop.ErrCancelled {
 		t.Fatalf("a cancelled Dream = %v (code %d), want the cancellation code %d",
 			err, memhop.CodeOf(err), memhop.ErrCancelled)
+	}
+}
+
+// The retention sweep is the one part of a pass a host cannot reconstruct afterwards: the
+// records it deleted are gone, and the same pass writes others, so a before/after diff of
+// Stats separates nothing. The two prune counters are therefore reported by the pass itself.
+func TestInterfaceDreamReportsWhatItSwept(t *testing.T) {
+	llm := newMockLLM(t)
+	db := newTestDB(t, openMockDB(t, filepath.Join(t.TempDir(), "sweep.meh"), llm.srv.URL,
+		func(d *memhop.MemHopDefaults) { d.ContentRetentionMs = 1000 }))
+	sceneID := openSession(t, db)
+
+	old := time.Now().Add(-24 * time.Hour).UnixMilli()
+	openTurn(t, db, sceneID)
+	if _, err := db.Update(memhop.TurnEnd{Input: "昨天的那一轮说了什么", Output: "昨天的回答", CreatedAt: old}); err != nil {
+		t.Fatalf("close the old turn: %v", err)
+	}
+	// The close carries the turn's own second rather than the library's clock, and that is
+	// what puts the pair past the window at all: a backfilled round is a real host act.
+	openTurn(t, db, sceneID)
+	if _, err := db.Update(memhop.TurnEnd{Input: "今天的一轮", Output: "今天的回答", CreatedAt: time.Now().UnixMilli()}); err != nil {
+		t.Fatalf("close the fresh turn: %v", err)
+	}
+
+	rep, err := db.Dream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Dream: %v", err)
+	}
+	if rep.L4RecordsPruned != 2 {
+		t.Fatalf("the sweep reported %d L4 records, want the old turn's two dialogue lines", rep.L4RecordsPruned)
+	}
+	if rep.L5NodesPruned != 0 {
+		t.Fatalf("the sweep reported %d plan nodes with nothing aged out, want 0", rep.L5NodesPruned)
+	}
+	// The fresh turn is untouched: what the sweep took is exactly what was past the window.
+	ctx, err := db.SceneContext(sceneID)
+	if err != nil {
+		t.Fatalf("SceneContext: %v", err)
+	}
+	var withLines int
+	for _, topic := range ctx.Topics {
+		if len(topic.Messages) > 0 {
+			withLines++
+		}
+	}
+	if withLines != 1 {
+		t.Fatalf("%d of the scene's rows still carry their originals, want the one fresh turn", withLines)
+	}
+
+	// A pass with nothing left to sweep says so, rather than repeating the last number.
+	again, err := db.Dream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("second Dream: %v", err)
+	}
+	if again.L4RecordsPruned != 0 || again.L5NodesPruned != 0 {
+		t.Fatalf("the second pass reported %+v, want both prune counters back to zero", again)
 	}
 }

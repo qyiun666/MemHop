@@ -286,7 +286,8 @@ rep, err := db.Dream(ctx, "")       // sceneID 传 "" = 遍历域内全部场景
 通常**不需要宿主调用**：某场景 depth-1 话题数超过 `Defaults.SceneDreamTopicThreshold`（默认 24）时，`Update` 会在后台调度该场景的巩固（同场景在途不重复调度）。
 
 执行 L2→L1→L0 压缩 / 衰减 / 画像蒸馏（多次 LLM 调用，耗时较长）——放后台 goroutine 或对话间隔执行。
-返回结构化 `*DreamReport` 供宿主观测：`ConsolidatedScenes / L2TopicsCompressed / L1NodesAdded|Removed / L1EdgesAdded|Removed / L0Updated`，外加 `Stages []DreamStage{Name, Status, DurationMs}`（状态取值 `ok | skipped | cancelled | error`）。其中三个数容易被读错：`L2TopicsCompressed` 数的是**沉进融合组的话题**，不是组数；`L1NodesAdded` 数的是同步这一步**写过**的场景节点，含只因话题集变了而被回戳的既有节点，不只是新建的那些；`L1EdgesAdded` 数的是本轮新建**或抬权**的共现边。两个移除计数横跨「陈旧重建」与「衰减」两个阶段，并各自把它带走的边一并算进去。空报告表示无内容可巩固，不算错误；管线中途失败时部分填充的报告随错误一起返回。场景读回上下文的规模不是一条硬上限：depth-1 话题数越过 `SceneDreamTopicThreshold` 就调度该场景 Dream，Dream 只把 LLM 判定成一组的话题合并上去，没被选中的仍留在 depth-1。
+返回结构化 `*DreamReport` 供宿主观测：`L4RecordsPruned / L5NodesPruned / ConsolidatedScenes / L2TopicsCompressed / L1NodesAdded|Removed / L1EdgesAdded|Removed / L0Updated`，外加 `Stages []DreamStage{Name, Status, DurationMs}`（状态取值 `ok | skipped | cancelled | error`）。其中三个数容易被读错：`L2TopicsCompressed` 数的是**沉进融合组的话题**，不是组数；`L1NodesAdded` 数的是同步这一步**写过**的场景节点，含只因话题集变了而被回戳的既有节点，不只是新建的那些；`L1EdgesAdded` 数的是本轮新建**或抬权**的共现边。两个移除计数横跨「陈旧重建」与「衰减」两个阶段，并各自把它带走的边一并算进去。空报告表示无内容可巩固，不算错误；管线中途失败时部分填充的报告随错误一起返回。场景读回上下文的规模不是一条硬上限：depth-1 话题数越过 `SceneDreamTopicThreshold` 就调度该场景 Dream，Dream 只把 LLM 判定成一组的话题合并上去，没被选中的仍留在 depth-1。
+头两个就是保留窗清扫（清单里第 5、6 条那句「删除 7 天以上的」）：宿主事后补不出来——被删的记录已经不在了，而同一次巩固又写了别的记录，所以拿 `Stats` 前后相减分不出是谁干的。
 
 `Stages` 按这一趟实际跑的顺序交回，名字是一套封闭集（`dream-stage-order`）：
 

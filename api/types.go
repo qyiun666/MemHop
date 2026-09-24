@@ -134,6 +134,12 @@ type (
 	// to hang a scene on.
 	L3ImportResult = internal.L3ImportResult
 	// DreamReport is one consolidation pass: what it actually did, stage by stage.
+	//
+	// Two counters name the retention sweep, since that is the part of a pass a host cannot
+	// recompute afterwards: the records it deleted are gone, and the pass writes other records
+	// in the same breath, so no before/after diff separates them. L4RecordsPruned counts L4
+	// records past the window (utterances and events alike), L5NodesPruned the plan nodes taken
+	// with their turn's silence.
 	// A pass that stopped partway returns the report filled so far beside the
 	// error, so a non-nil report is not a success. ConsolidatedScenes counts scenes
 	// where at least one merge group landed. Three counters do not count what their

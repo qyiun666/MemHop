@@ -30,7 +30,8 @@ func retentionWindow(ac *domain.Context) time.Duration {
 }
 
 // PruneContentStage drops the L4 records past the retention window, utterances
-// and events alike, and reports how many went away. Best-effort: a failure is
+// and events alike, and counts what went away into the report — the log line is not
+// something a host can read back. Best-effort: a failure is
 // logged and recorded in the report but never aborts Dream. Callers hold ac.Mu.
 func PruneContentStage(ac *domain.Context, agentID uint64, rep *core.DreamReport) {
 	start := time.Now()
@@ -39,6 +40,7 @@ func PruneContentStage(ac *domain.Context, agentID uint64, rep *core.DreamReport
 	if err != nil {
 		slog.Warn("dream: content prune failed", "agent", common.FormatHash(agentID), "err", err)
 	} else if dropped > 0 {
+		rep.L4RecordsPruned = dropped
 		slog.Info("dream: content pruned", "agent", common.FormatHash(agentID), "records", dropped)
 	}
 	AppendStage(rep, "l4_prune", start, err)
@@ -91,6 +93,7 @@ func PrunePlanStage(ac *domain.Context, agentID uint64, rep *core.DreamReport) {
 		if err = repo.DeletePlanNodesByIDs(ac.Engine, agentID, doomed); err != nil {
 			slog.Warn("dream: plan-node prune failed", "agent", common.FormatHash(agentID), "err", err)
 		} else {
+			rep.L5NodesPruned = len(doomed)
 			for _, s := range sweeps {
 				ac.Plans.RemoveNodes(s.topicID, s.ids)
 			}

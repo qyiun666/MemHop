@@ -190,6 +190,8 @@ type DreamStage struct {
 // what this pass actually did. On mid-pipeline failures the partially filled
 // report is returned together with the error.
 type DreamReport struct {
+	L4RecordsPruned    int          `json:"l4_records_pruned"`    // L4 records past the retention window
+	L5NodesPruned      int          `json:"l5_nodes_pruned"`      // plan nodes the sweep took with them
 	ConsolidatedScenes int          `json:"consolidated_scenes"`  // scenes with >=1 applied merge group
 	L2TopicsCompressed int          `json:"l2_topics_compressed"` // topics sunk into groups, not group count
 	L1NodesAdded       int          `json:"l1_nodes_added"`       // scene nodes created or updated by the sync
