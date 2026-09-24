@@ -432,7 +432,7 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    存在（不认识的 id 正是 `CheckSession` 拒的那类 id）——没有一处把「记录不在」
    当成成功返回。这三条路径还各自带走域自持的那一半：`DeleteScene` 清 `ac.Scene`/`ac.Turn`
    （`ForgetScene`），`DeleteTopic` 沿**整条话题闭包** `ForgetTurn`（被删的是融合父时，它吞掉
-   的那一轮也在闭包里），`MergeScenes` 经 `MoveScene` 把自持场景改挂到主场景上、轮次清空
+   的那一轮也在闭包里），`MergeScenes` 经 `MoveScene` 把自持场景改挂到主场景上、轮次清空（L3 锚按 `mergedAnchor` 定：主场景已锚则以它为准，未锚就接手次场景那个，次场景的锚彼此不一致即整次拒且在任何删除之前——锚是一段对话出现在项目列举里的唯一凭据，丢掉它等于悄悄把这段对话搬出项目视图）
    （轮次 id 由场景派生，跨合并活不下来）。漏一处的后果与漏验 id 不是一个量级：下一次
    `Update` 会把收束写进一条已毁的轮，那批记录在读路径上谁也看不见，只能等保留窗收走。
    **一个场景结束它的两种写法都要带走它的 L1 节点**：`DeleteScene` 删完记录就

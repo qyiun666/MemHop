@@ -575,3 +575,78 @@ func TestInterfaceMergeKeepsEachTurnsKeywordTrack(t *testing.T) {
 		}
 	}
 }
+
+// An anchor says which project a conversation belongs to, so a merge that folds anchored
+// scenes into an unanchored one has to keep the membership rather than the survivor's blank:
+// dropping it would take the merged history out of the project listing without saying so.
+// A survivor that already names a domain keeps that claim, and a merge that cannot tell
+// which of two domains won is refused before anything is destroyed.
+func TestInterfaceMergeCarriesTheProjectAnchor(t *testing.T) {
+	db, _ := openTestDB(t)
+	graphs := make([]string, 3)
+	for i := range graphs {
+		res, err := db.ImportL3([]memhop.L3ImportItem{{
+			Title: "项目 " + string(rune('A'+i)), Domain: "proj" + string(rune('0'+i)),
+			NodeType: "concept", Content: "x",
+		}}, memhop.L3ImportSkip)
+		if err != nil || len(res.GraphIDs) != 1 {
+			t.Fatalf("ImportL3 %d: %+v err %v", i, res, err)
+		}
+		graphs[i] = res.GraphIDs[0]
+	}
+	newScene := func(anchored string) string {
+		res, err := db.Search(memhop.SearchQuery{NewScene: true})
+		if err != nil {
+			t.Fatalf("Search: %v", err)
+		}
+		openTurn(t, db, res.Scene.SceneID)
+		if _, err := turn(db.Session, "一段对话的一轮", "答"); err != nil {
+			t.Fatalf("turn: %v", err)
+		}
+		if anchored != "" {
+			if _, err := db.UpdateScene(res.Scene.SceneID, memhop.ScenePatch{L3ID: &anchored}); err != nil {
+				t.Fatalf("anchor: %v", err)
+			}
+		}
+		return res.Scene.SceneID
+	}
+
+	// 1. The survivor has no anchor and the swallowed one does: the membership moves over.
+	survivor, anchored := newScene(""), newScene(graphs[0])
+	if err := db.MergeScenes(survivor, []string{anchored}); err != nil {
+		t.Fatalf("merge into an unanchored survivor: %v", err)
+	}
+	listed, err := db.ListScenes(graphs[0])
+	if err != nil || len(listed) != 1 || listed[0].SceneID != survivor {
+		t.Fatalf("the merged conversation vanished from its project: %+v err %v", listed, err)
+	}
+
+	// 2. The survivor's own claim stands even when a swallowed scene names another domain.
+	claimed, other := newScene(graphs[1]), newScene(graphs[2])
+	if err := db.MergeScenes(claimed, []string{other}); err != nil {
+		t.Fatalf("merge into an anchored survivor: %v", err)
+	}
+	if listed, err := db.ListScenes(graphs[1]); err != nil || len(listed) != 1 || listed[0].SceneID != claimed {
+		t.Fatalf("the survivor lost the domain it named itself: %+v err %v", listed, err)
+	}
+	if listed, err := db.ListScenes(graphs[2]); err != nil || len(listed) != 0 {
+		t.Fatalf("the swallowed scene's domain still claims the merged conversation: %+v err %v", listed, err)
+	}
+
+	// 3. Two swallowed scenes in two different domains: nothing to choose between, so the
+	//    call refuses and destroys nothing at all.
+	a, b, c := newScene(graphs[0]), newScene(graphs[1]), newScene("")
+	err = db.MergeScenes(c, []string{a, b})
+	if memhop.CodeOf(err) != memhop.ErrInvalidQuery {
+		t.Fatalf("merging across two project domains: want ErrInvalidQuery, got %v", err)
+	}
+	// Five scenes: two from the merges above plus the three this call was asked about.
+	if listed, err := db.ListScenes(""); err != nil || len(listed) != 5 {
+		t.Fatalf("the refused merge already destroyed scenes: %+v err %v", listed, err)
+	}
+	for _, g := range graphs[:2] {
+		if listed, err := db.ListScenes(g); err != nil || len(listed) == 0 {
+			t.Fatalf("a refused merge emptied the project listing for %s: %+v err %v", g, listed, err)
+		}
+	}
+}

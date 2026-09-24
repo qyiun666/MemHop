@@ -174,6 +174,16 @@ func (db *DB) MergeScenes(agentID uint64, primaryID string, secondaryIDs []strin
 	if err := db.requireScenes(agentID, append([]uint64{primaryHash}, hashes...)...); err != nil {
 		return err
 	}
+	// An anchor is a membership rather than a label: the merged conversation still belongs
+	// to whichever project domain one of these scenes was anchored to. Decided before any
+	// record is destroyed, because a merge that drops an anchor silently removes a
+	// conversation from the project listing the host reads it out of — and an absent claim
+	// on the survivor is not a competing one. Where the survivor already names a domain,
+	// that claim stands: choosing the survivor was the host's decision.
+	anchor, err := mergedAnchor(db.engine, agentID, primaryHash, hashes)
+	if err != nil {
+		return err
+	}
 	// A merged scene's L1 node goes with it: the merge retargets its topics to the
 	// primary, and nothing names the secondary's node again — the rebuild calls a
 	// node stale by its own topics, which still read back here. It goes first so a
@@ -186,6 +196,16 @@ func (db *DB) MergeScenes(agentID uint64, primaryID string, secondaryIDs []strin
 	if err := repo.MergeScenesL2(db.engine, agentID, primaryHash, hashes); err != nil {
 		return err
 	}
+	if anchor != 0 {
+		slot, err := core.ReadSceneSlot(db.engine, agentID, primaryHash)
+		if err != nil {
+			return err
+		}
+		slot.L3ID = anchor
+		if err := core.WriteSceneSlot(db.engine, agentID, primaryHash, slot); err != nil {
+			return err
+		}
+	}
 	// Mirror the scene retarget in the L2MetaIndex so cached topics match the
 	// merged records (storage write already done), and move the domain's own memory
 	// of which scene it is on: a host that never names a scene would otherwise be
@@ -195,6 +215,47 @@ func (db *DB) MergeScenes(agentID uint64, primaryID string, secondaryIDs []strin
 		ac.MoveScene(secondary, primaryHash)
 	}
 	return nil
+}
+
+// mergedAnchor decides which L3 domain the surviving scene belongs to once the others are
+// folded into it: 0 means "leave the survivor's claim alone", a non-zero id means "write this
+// one", and an error means the call cannot be answered without the host saying more.
+func mergedAnchor(engine *core.StorageEngine, agentID, primary uint64, secondaries []uint64) (uint64, error) {
+	survivor, err := core.ReadSceneSlot(engine, agentID, primary)
+	if err != nil {
+		return 0, err
+	}
+	if survivor.L3ID != 0 {
+		return 0, nil
+	}
+	var distinct []uint64
+	for _, id := range secondaries {
+		secondary, err := core.ReadSceneSlot(engine, agentID, id)
+		if err != nil {
+			return 0, err
+		}
+		if secondary.L3ID == 0 {
+			continue
+		}
+		seen := false
+		for _, g := range distinct {
+			if g == secondary.L3ID {
+				seen = true
+			}
+		}
+		if !seen {
+			distinct = append(distinct, secondary.L3ID)
+		}
+	}
+	switch len(distinct) {
+	case 0:
+		return 0, nil
+	case 1:
+		return distinct[0], nil
+	default:
+		return 0, common.NewError(common.ErrInvalidQuery,
+			fmt.Sprintf("the scenes being merged are anchored to %d different L3 domains; anchor the survivor first, or merge one domain at a time", len(distinct)))
+	}
 }
 
 // requireScenes resolves every named id against the scene records and reports

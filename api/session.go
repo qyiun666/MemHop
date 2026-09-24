@@ -432,8 +432,15 @@ func (s *Session) SceneContext(sceneID string) (*SceneContext, error) {
 
 // MergeScenes folds scenes together: every topic of each secondary scene is retargeted
 // to the primary scene, then the secondary scene records are deleted. Use it when a
-// host resumed one conversation under a new session id. The primary's name and anchor
-// win, and nothing comes back — re-read the primary to see the merged history.
+// host resumed one conversation under a new session id. The survivor keeps its own title,
+// and nothing comes back — re-read the primary to see the merged history.
+//
+// An L3 anchor is a membership rather than a label, so it is carried instead of lost: a survivor
+// that names no project domain takes over the anchor the swallowed scenes had (the merged
+// conversation stays listed under that domain), a survivor that already names one keeps its own
+// claim, and when the swallowed scenes disagree about which domain that was the call is refused
+// (ErrInvalidQuery) with nothing destroyed — which project a conversation belongs to is the
+// host's decision, never a pick-one guess.
 //
 // Update before merging. A turn Search opened on a secondary scene and never closed
 // has no topic record yet — closing is what writes one — so it is not among the

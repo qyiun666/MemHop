@@ -11,6 +11,7 @@
 package test
 
 import (
+	"context"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -189,5 +190,65 @@ func TestInterfaceSearchL4RefusesASceneIDWhereATurnIDBelongs(t *testing.T) {
 	key := closed.ID
 	if rows, err := db.SearchL4(memhop.L4Query{TopicID: &key}); err != nil || len(rows) != 3 {
 		t.Fatalf("after the close the turn holds %+v err %v, want two dialogue lines plus the event", rows, err)
+	}
+}
+
+// Consolidation and a live round overlap in every host loop, and the difference between them
+// is a record: an open turn owns content but no topic yet. So a pass must fuse what has
+// settled and leave the open round's records exactly where that round put them — readable by
+// the key the round's own read minted, and closable afterwards.
+func TestInterfaceDreamLeavesTheOpenTurnAlone(t *testing.T) {
+	llm := newMockLLM(t)
+	db := newTestDB(t, openMockDB(t, filepath.Join(t.TempDir(), "open_turn.meh"), llm.srv.URL,
+		func(d *memhop.MemHopDefaults) { d.DreamCompressMinTopics = 2 }))
+	sceneID := openSession(t, db)
+	for i := 0; i < 4; i++ {
+		openTurn(t, db, sceneID)
+		if _, err := turn(db.Session, "可被巩固的一轮", "答"); err != nil {
+			t.Fatalf("close turn %d: %v", i, err)
+		}
+	}
+	open := openTurn(t, db, sceneID)
+	if _, err := db.AppendArchive(memhop.ArchiveInput{
+		Kind: memhop.KindEvent, EventType: "tool_call", Content: "这一轮正在做的事", CreatedAt: time.Now().UnixMilli(),
+	}); err != nil {
+		t.Fatalf("append while the turn is open: %v", err)
+	}
+
+	rep, err := db.Dream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Dream: %v", err)
+	}
+	if rep.L2TopicsCompressed == 0 {
+		t.Fatalf("nothing consolidated, so this case proves nothing about the open round: %+v", rep)
+	}
+	kind := memhop.KindEvent
+	events, err := db.SearchL4(memhop.L4Query{TopicID: &open, Kind: &kind})
+	if err != nil || len(events) != 1 || events[0].Content != "这一轮正在做的事" {
+		t.Fatalf("the consolidation pass disturbed the open round: %+v err %v", events, err)
+	}
+	ctx, err := db.SceneContext(sceneID)
+	if err != nil {
+		t.Fatalf("SceneContext: %v", err)
+	}
+	for _, row := range ctx.Topics {
+		if row.TopicID == open {
+			t.Fatalf("an unsettled round appeared as a topic: %+v", row)
+		}
+	}
+	topic, err := db.Update(memhop.TurnEnd{Input: "把开着的那轮收掉", Output: "答", CreatedAt: time.Now().UnixMilli()})
+	if err != nil {
+		t.Fatalf("closing the round after the pass: %v", err)
+	}
+	if topic.ID != open || topic.Depth != 1 {
+		t.Fatalf("the round closed into a different topic: %+v", topic)
+	}
+	utter := memhop.KindUtterance
+	lines, err := db.SearchL4(memhop.L4Query{TopicID: &open, Kind: &utter})
+	if err != nil || len(lines) != 2 {
+		t.Fatalf("the closed round's dialogue = %+v err %v, want the two sides it ended with", lines, err)
+	}
+	if events, err := db.SearchL4(memhop.L4Query{TopicID: &open, Kind: &kind}); err != nil || len(events) != 1 {
+		t.Fatalf("the event written while the round was open no longer reads back: %+v err %v", events, err)
 	}
 }
