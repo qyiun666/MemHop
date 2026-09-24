@@ -311,3 +311,76 @@ func TestInterfaceCompactTo(t *testing.T) {
 		t.Fatal("the deleted scene came back in the compacted copy")
 	}
 }
+
+// Isolation is stated as 「scenes, originals, profiles and trajectories are fully separated by
+// domain; the L3 knowledge graph is a file-wide shared pool」. The scan paths are checked by
+// the case above; the addressed-by-id ones are where a forgotten domain argument would leak,
+// and the shared half is where over-isolation would break the tool that reads project knowledge
+// from a sub-agent. Both directions are pinned here.
+func TestInterfaceIsolationHoldsOnTheIdAddressedPaths(t *testing.T) {
+	llm := newMockLLM(t)
+	m := openMockDB(t, filepath.Join(t.TempDir(), "ids.meh"), llm.srv.URL)
+	defer m.Close()
+	alpha := mustSub(t, m, llm.srv.URL, "alpha")
+	beta := mustSub(t, m, llm.srv.URL, "beta")
+
+	round := func(sess *memhop.Session, text string) string {
+		res, err := sess.Search(memhop.SearchQuery{NewScene: true})
+		if err != nil {
+			t.Fatalf("Search: %v", err)
+		}
+		if _, err := turn(sess, text, "答"); err != nil {
+			t.Fatalf("turn: %v", err)
+		}
+		return res.NewTopicID
+	}
+	alphaTurn := round(alpha, "alpha 的私密原文")
+	round(beta, "beta 的私密原文")
+
+	kind := memhop.KindUtterance
+	held, err := alpha.SearchL4(memhop.L4Query{TopicID: &alphaTurn, Kind: &kind})
+	if err != nil || len(held) != 2 {
+		t.Fatalf("alpha's own round = %+v err %v", held, err)
+	}
+	ids := []string{held[0].ID, held[1].ID}
+
+	// The addressed read finds nothing across the boundary, while the same query shape
+	// returns rows inside the domain — so this is scoping, not a filter that never matches.
+	if rows, err := beta.SearchL4(memhop.L4Query{IDs: ids}); err != nil || len(rows) != 0 {
+		t.Fatalf("beta addressed alpha's archive ids and got %+v err %v", rows, err)
+	}
+	own, err := beta.SearchL4(memhop.L4Query{IDs: []string{}})
+	if err != nil || len(own) == 0 {
+		t.Fatalf("beta's unfiltered read came back empty, so the ids case proves nothing: %+v err %v", own, err)
+	}
+	// Writes keyed by another domain's turn key are refused rather than no-ops: a host that
+	// believes it corrected a memory must not be told it did nothing to a key it does not own.
+	if err := beta.DeleteTopic(alphaTurn); memhop.CodeOf(err) != memhop.ErrNotFound {
+		t.Fatalf("beta deleted a topic belonging to alpha: want ErrNotFound, got %v", err)
+	}
+	if _, err := beta.RenameTopic(alphaTurn, "beta 想改名"); memhop.CodeOf(err) != memhop.ErrNotFound {
+		t.Fatalf("beta renamed a topic belonging to alpha: want ErrNotFound, got %v", err)
+	}
+	if still, err := alpha.SearchL4(memhop.L4Query{TopicID: &alphaTurn, Kind: &kind}); err != nil || len(still) != 2 {
+		t.Fatalf("alpha's round was disturbed by the refused writes: %+v err %v", still, err)
+	}
+	// L3 is the deliberate exception: one domain's graph is the other's to query, because a
+	// family of agents shares one project knowledge pool.
+	imported, err := alpha.ImportL3([]memhop.L3ImportItem{{Title: "记忆引擎", Domain: "proj", NodeType: "concept", Content: "单文件 append-only"}}, memhop.L3ImportSkip)
+	if err != nil || len(imported.GraphIDs) != 1 {
+		t.Fatalf("alpha's import: %+v err %v", imported, err)
+	}
+	graph := imported.GraphIDs[0]
+	seen, err := beta.GetL3(graph)
+	if err != nil || len(seen.Nodes) != 1 || seen.Slot.ID != graph {
+		t.Fatalf("beta cannot reach the shared graph alpha imported: %+v err %v", seen, err)
+	}
+	nodes, err := beta.QueryL3Nodes(memhop.L3NodeQuery{GraphID: graph})
+	if err != nil || len(nodes) != 1 {
+		t.Fatalf("beta's node query over the shared pool = %+v err %v", nodes, err)
+	}
+	// The pool is shared, but a domain's own scene listing is not.
+	if scenes, err := beta.ListScenes(""); err != nil || len(scenes) != 1 {
+		t.Fatalf("beta sees another domain's scenes: %+v err %v", scenes, err)
+	}
+}
