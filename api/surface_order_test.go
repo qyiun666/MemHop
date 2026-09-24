@@ -4,8 +4,10 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
+	"time"
 )
 
 // A host compares two recalls, indexes a listing by position, or diffs what the library
@@ -15,6 +17,50 @@ import (
 // map iteration is randomized per process, so a list assembled by ranging a map fails this
 // the way it fails a host.
 func TestSurfaceReadOrderIsDeterministic(t *testing.T) {
+	_, _, taken := surfaceReadFixture(t)
+
+	// Eight rounds, because a map with two or three keys can walk in the same order twice
+	// by luck.
+	for name, read := range taken {
+		var first string
+		for round := 0; round < 8; round++ {
+			got := encode(t, name, read())
+			if round == 0 {
+				first = got
+				continue
+			}
+			if got != first {
+				t.Fatalf("%s answered differently on repeat %d:\n%s\n---\n%s", name, round, first, got)
+			}
+		}
+	}
+}
+
+func mustRead[T any](v T, err error) T {
+	if err != nil {
+		panic(err)
+	}
+	return v
+}
+
+func encode(tb testing.TB, label string, v any) string {
+	tb.Helper()
+	raw, err := json.Marshal(v)
+	if err != nil {
+		tb.Fatalf("marshal %s: %v", label, err)
+	}
+	return string(raw)
+}
+
+// surfaceReadFixture opens one populated file and hands back every read a host takes
+// without naming a scene it wrote this instant — the same set the ordering gate walks,
+// so a second gate cannot be measuring a different library.
+func surfaceReadFixture(t *testing.T) (*DB, *Session, map[string]func() any) {
+	// This file's fixture writes its records at the current time on purpose: the fixture runs a
+	// consolidation pass so the association layer has nodes, and that same pass sweeps what the
+	// retention window calls expired. A fixture that emptied two of its own reads would leave the
+	// gates below walking nothing.
+	fixtureStamp := time.Now().UnixMilli()
 	m, sess, stubURL := openSurfaceLibrary(t)
 
 	// Two sub-domains, so the file's own domain listing has something to order beyond
@@ -59,10 +105,10 @@ func TestSurfaceReadOrderIsDeterministic(t *testing.T) {
 		}
 		if i == 0 {
 			for _, in := range []ArchiveInput{
-				{Kind: KindUtterance, ContentType: ContentText, Role: 1, CreatedAt: turnStamp, Content: "first line"},
-				{Kind: KindUtterance, ContentType: ContentText, Role: 2, CreatedAt: turnStamp, Content: "answer"},
-				{Kind: KindEvent, ContentType: ContentText, EventType: "tool_call", CreatedAt: turnStamp, Content: "grep auth"},
-				{Kind: KindEvent, ContentType: ContentText, EventType: "tool_call", CreatedAt: turnStamp, Content: "read config"},
+				{Kind: KindUtterance, ContentType: ContentText, Role: 1, CreatedAt: fixtureStamp, Content: "first line"},
+				{Kind: KindUtterance, ContentType: ContentText, Role: 2, CreatedAt: fixtureStamp, Content: "answer"},
+				{Kind: KindEvent, ContentType: ContentText, EventType: "tool_call", CreatedAt: fixtureStamp, Content: "grep auth"},
+				{Kind: KindEvent, ContentType: ContentText, EventType: "tool_call", CreatedAt: fixtureStamp, Content: "read config"},
 			} {
 				if _, err := sess.AppendArchive(in); err != nil {
 					t.Fatalf("AppendArchive: %v", err)
@@ -78,7 +124,7 @@ func TestSurfaceReadOrderIsDeterministic(t *testing.T) {
 			}
 		}
 		if _, err := sess.Update(TurnEnd{Input: "in", Output: "out",
-			Outcome: "answered", CreatedAt: turnStamp + int64(i)}); err != nil {
+			Outcome: "answered", CreatedAt: fixtureStamp + int64(i)}); err != nil {
 			t.Fatalf("Update %d: %v", i, err)
 		}
 	}
@@ -96,11 +142,21 @@ func TestSurfaceReadOrderIsDeterministic(t *testing.T) {
 	}
 	kind := KindEvent
 
+	// One scene anchored to one graph, and one consolidation pass. Without them the two reads
+	// that depend on those layers answer an empty list — and a gate walking a read that answers
+	// [] is measuring nothing at all, which is exactly how the project-scoped listing looked fine.
+	if _, err := sess.UpdateScene(scenes[0].SceneID, ScenePatch{L3ID: &projID}); err != nil {
+		t.Fatalf("anchor a scene to the project: %v", err)
+	}
+	if _, err := sess.Dream(context.Background(), ""); err != nil {
+		t.Fatalf("Dream: %v", err)
+	}
+
 	taken := map[string]func() any{
 		"GetL0":              func() any { return mustRead(sess.GetL0()) },
 		"ListL1":             func() any { return mustRead(sess.ListL1()) },
 		"ListScenes":         func() any { return mustRead(sess.ListScenes("")) },
-		"ListScenes/anchor":  func() any { return mustRead(sess.ListScenes(graphs[0].ID)) },
+		"ListScenes/anchor":  func() any { return mustRead(sess.ListScenes(projID)) },
 		"ListL3":             func() any { return mustRead(sess.ListL3()) },
 		"GetL3":              func() any { return mustRead(sess.GetL3(projID)) },
 		"QueryL3Nodes":       func() any { return mustRead(sess.QueryL3Nodes(L3NodeQuery{GraphID: projID})) },
@@ -110,36 +166,11 @@ func TestSurfaceReadOrderIsDeterministic(t *testing.T) {
 		"SceneContext":       func() any { return mustRead(sess.SceneContext("")) },
 		"SceneContext/other": func() any { return mustRead(sess.SceneContext(scenes[1].SceneID)) },
 		"Agents":             func() any { return mustRead(m.Agents()) },
+		// The plan forest is the one read served out of the domain's own cache, and it is
+		// nested — the case where handing back a shared slice would be both easiest to do
+		// and hardest to notice.
+		"PlanState": func() any { return mustRead(sess.PlanState()) },
 	}
-	// Eight rounds, because a map with two or three keys can walk in the same order twice
-	// by luck.
-	for name, read := range taken {
-		var first string
-		for round := 0; round < 8; round++ {
-			got := encode(t, name, read())
-			if round == 0 {
-				first = got
-				continue
-			}
-			if got != first {
-				t.Fatalf("%s answered differently on repeat %d:\n%s\n---\n%s", name, round, first, got)
-			}
-		}
-	}
-}
 
-func mustRead[T any](v T, err error) T {
-	if err != nil {
-		panic(err)
-	}
-	return v
-}
-
-func encode(tb testing.TB, label string, v any) string {
-	tb.Helper()
-	raw, err := json.Marshal(v)
-	if err != nil {
-		tb.Fatalf("marshal %s: %v", label, err)
-	}
-	return string(raw)
+	return m, sess, taken
 }
