@@ -369,7 +369,7 @@ bookkeeping of its own:
 |---|---|
 | decides to start a round | `Search(SearchQuery{})` — nothing goes in, the scene's next turn comes open |
 | runs its arms (model call, tool call, sandbox answer) | one `AppendArchive` per fact worth keeping, on the turn now open |
-| ends the round with a status word | `Update(TurnEnd{Input, Output, Outcome, CreatedAt})` |
+| ends the round with a status word | `Update(TurnEnd{Input, Output, Outcome, CreatedAt})` — each text field is optional and writes only its own record (a scheduled or resumed round may send `Output` alone), and one that sends none is refused |
 | plans the round step by step | `PlanNodeAdd` / `PlanNodeUpdate` / `PlanState`, all on the open turn |
 | sleeps (a timer may fire mid-round) | `Dream` — it neither drops the turn the domain holds open nor sweeps what that turn has already written |
 
@@ -555,7 +555,7 @@ when an admin-face method wanders in here.
 |---|---|---|---|
 | `memory_search` | `Session.Search` | `scene_id`, `l3_id`, `new_scene` | profile + its brief, the scene, its settled topics, the topic id now open |
 | `memory_record` | `Session.AppendArchive` | `kind`, `seq`, `content_type`, `role`, `event_type`, `node_seq`, `created_at`, `content` | the slot the record took |
-| `memory_close_turn` | `Session.Update` | `input`, `output`, `outcome`, `created_at` | the turn's topic, its keyword track among its fields |
+| `memory_close_turn` | `Session.Update` | `input`, `output`, `outcome`, `created_at` — **at least one of the three text fields**, all-empty is refused | the turn's topic, its keyword track among its fields |
 | `memory_dream` | `Session.Dream` | `scene_id` | the `DreamReport`: stages and counts |
 | `memory_profile_get` | `Session.GetL0` | none | the whole profile |
 | `memory_profile_update` | `Session.UpdateL0` | `name`, `role`, `personality`, `preferences` | nothing; the next read shows it |

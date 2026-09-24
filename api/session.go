@@ -67,6 +67,12 @@ func (s *Session) Search(q SearchQuery) (*SearchResult, error) {
 // topic's keyword track, and the topic comes back as stored, that track among its
 // fields.
 //
+// Each of the three fields is optional and writes only its own record: a round with no
+// user stimulus (a scheduled turn, a resume after a suspension) closes with an Output
+// alone, and one with nothing to say closes with an Input alone. A close that carries
+// none of the three is refused (ErrInvalidQuery) naming the fields it needs — the
+// keyword track distills out of dialogue, and an empty one is not a distilled turn.
+//
 // One LLM call, inside the domain lock; the only other call on this surface that
 // talks to the model is Dream. A failed call leaves the turn open, so the host may
 // close it again. This is the whole of what a turn's ending needs: which scene and

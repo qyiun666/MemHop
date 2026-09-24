@@ -9,6 +9,7 @@ package test
 
 import (
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -137,5 +138,64 @@ func TestInterfaceTurnContentSharesOneKey(t *testing.T) {
 	// adds no parent above it, and nothing implies one any more.
 	if tree.TotalCount != 1 || tree.Roots[0].Seq != step {
 		t.Fatalf("plan tree = %+v, want just the step the event bound to", tree)
+	}
+}
+
+// A turn's two sides are each optional and a close that carries neither is refused: the
+// keyword track distills out of dialogue, so an empty one is not settled into a topic with
+// nothing in it. A close that states only how the round ended (the outcome event) is the
+// same case — the events a round recorded while it ran are real, but they are not a
+// transcript, and the turn stays open for the host to close it with one.
+func TestInterfaceUpdateNeedsAtLeastOneSideOfTheDialogue(t *testing.T) {
+	db, mock := openTestDB(t)
+	sceneID := openSession(t, db)
+
+	openTurn(t, db, sceneID)
+	_, err := db.Update(api.TurnEnd{CreatedAt: time.Now().UnixMilli()})
+	if api.CodeOf(err) != api.ErrInvalidQuery {
+		t.Fatalf("a close with nothing in it: want ErrInvalidQuery, got %v", err)
+	}
+	// The refusal names what the host left out rather than blaming the turn's content:
+	// the two questions have different answers, and a host reads this one to fix its call.
+	if !strings.Contains(err.Error(), "an input, an output or an outcome") {
+		t.Fatalf("a close with nothing in it answered %q, want it to say which fields are missing", err)
+	}
+	before := mock.calls["keywords"]
+	// The refused close left the turn open, so the host can still finish it properly.
+	if _, err := db.Update(api.TurnEnd{Input: "只有刺激", Output: "只有回复", CreatedAt: time.Now().UnixMilli()}); err != nil {
+		t.Fatalf("closing after the refusal: %v", err)
+	}
+	if mock.calls["keywords"] != before+1 {
+		t.Fatalf("the distill calls moved from %d to %d, want exactly one after the refusal", before, mock.calls["keywords"])
+	}
+
+	// One side alone is a turn that happened: what landed is that one line, on the slot
+	// its side owns, and the track still distills.
+	for _, tc := range []struct {
+		name    string
+		in, out string
+		wantSeq uint64
+	}{
+		{"a round with no stimulus", "", "后台任务自己跑完了", 2},
+		{"a round with nothing to say", "用户问了但没有回答", "", 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			key := openTurn(t, db, sceneID)
+			ts := time.Now().UnixMilli()
+			if _, err := db.Update(api.TurnEnd{Input: tc.in, Output: tc.out, CreatedAt: ts}); err != nil {
+				t.Fatalf("close: %v", err)
+			}
+			kind := api.KindUtterance
+			lines, err := db.SearchL4(api.L4Query{TopicID: &key, Kind: &kind})
+			if err != nil || len(lines) != 1 {
+				t.Fatalf("the turn's dialogue = %+v err %v, want one line", lines, err)
+			}
+			if lines[0].Seq != tc.wantSeq || lines[0].Content != tc.in+tc.out {
+				t.Fatalf("the line landed on %+v, want Seq %d holding the side that was sent", lines[0], tc.wantSeq)
+			}
+			if _, err := db.Update(api.TurnEnd{Outcome: "suspended", CreatedAt: ts + 1}); err != nil {
+				t.Fatalf("re-closing the same turn with only an outcome: %v", err)
+			}
+		})
 	}
 }

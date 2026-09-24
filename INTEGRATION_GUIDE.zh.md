@@ -307,7 +307,7 @@ rep, err := db.Dream(ctx, "")       // sceneID 传 "" = 遍历域内全部场景
 |---|---|
 | 决定起一轮 | `Search(SearchQuery{})`——什么都不填进去，回来时该场景的下一轮已开着 |
 | 跑它的各个分支（模型调用、工具调用、沙箱答复） | 值得留下的每一条事实一次 `AppendArchive`，写进开着的那一轮 |
-| 带一个状态词结束这一轮 | `Update(TurnEnd{Input, Output, Outcome, CreatedAt})` |
+| 带一个状态词结束这一轮 | `Update(TurnEnd{Input, Output, Outcome, CreatedAt})`——三个文本字段各自可省、各写自己那条（定时触发的轮只给 `Output` 也行），一个都不给即拒 |
 | 一步一步计划这一轮 | `PlanNodeAdd` / `PlanNodeUpdate` / `PlanState`，全在开着的那一轮上 |
 | 睡觉（定时器也可能撞在轮还开着的时候） | `Dream`——它既不弄丢域自持着的那一轮，也不扫掉那一轮已经写下的记录 |
 
@@ -419,7 +419,7 @@ worker 属于哪一种由宿主定，库不替它猜。
 |---|---|---|---|
 | `memory_search` | `Session.Search` | `scene_id`, `l3_id`, `new_scene` | 画像与其紧凑摘要、场景、已收束的各轮话题、这次开出的话题 id |
 | `memory_record` | `Session.AppendArchive` | `kind`, `seq`, `content_type`, `role`, `event_type`, `node_seq`, `created_at`, `content` | 这条记录占下的槽位序号 |
-| `memory_close_turn` | `Session.Update` | `input`, `output`, `outcome`, `created_at` | 这一轮的话题，其字段里带着刚蒸出的关键词轨 |
+| `memory_close_turn` | `Session.Update` | `input`、`output`、`outcome`、`created_at`——三个文本字段**至少要有一个**，全空即拒 | 这一轮的话题，其字段里带着刚蒸出的关键词轨 |
 | `memory_dream` | `Session.Dream` | `scene_id` | `DreamReport`：各阶段与计数 |
 | `memory_profile_get` | `Session.GetL0` | 无 | 整份画像 |
 | `memory_profile_update` | `Session.UpdateL0` | `name`, `role`, `personality`, `preferences` | 无；下一次读见着 |
