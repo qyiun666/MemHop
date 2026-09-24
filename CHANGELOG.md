@@ -351,6 +351,8 @@ README 的版本表与 git log。
 
 144. **`IDs` 那条按 id 答的快路径，不许把同设的过滤条件一起带走**（新增 `test/api_interface_l4_filter_matrix_test.go`；库行为一字未动）。门面写得很清楚：`IDs` 是**唯一一个「只设它就按 id 取而不走扫描」**的条件——而仓里自己那条老话就是「快路径绕过过滤谓词是最容易静默失灵的地方」。这次不测实现，测门面承诺的三件事：两个 `Kind` 分片并回去等于不筛的读（按不筛那条自己的序比）、`IDs` 单设只答它点名的那些、`IDs` 与 `Kind`/`Keyword`/`NodeSeq` **同设时另一半照样生效**，外加「点一个不存在的 id 是不选中而不是报错，且不许吞掉旁边的活 id」。负例＝让 id 分支在取数前把同设条件清空 → `IDs+Kind answered [4 条], want the events [2 条] — the id path ignored the companion filter`。写这轮的三次红全是我自己的预期错，也都如实留下：夹具是 4 条不是 5（形状守卫改成精确计数，反而更硬）；用 `retry_policy` 当唯一关键词不成立，因为这一轮的回答行里也有它（换成只出现在事件里的 `grep`）；步骤闭包只含绑到它的那条事件，`turn_outcome` 的 `NodeSeq` 是 0；以及「不存在的 id」我一开始写成保留零键，那是入口就该拒的另一条契约（顺手把它也钉了一条）。
 
+145. **`Limit` 与过滤条件的先后被钉成一条不变量**（新增 `test/api_interface_l4_limit_test.go`；库行为一字未动）。门面只说「`Limit` 保留适用顺序的末尾 N 条」，没说它相对其它条件排在哪——而那才是宿主会踩的空：先截断后过滤，「最新两条事件」就变成「最新两条记录里恰好是事件的那几条（可能是零条）」，一次变短的答会被读成「这里没有」。测法不是逐条写死答案，而是同一形状问两遍：**带 `Limit` 的读必须等于同一条不带 `Limit` 的读的后 N 条**，六个臂（跨话题、只某 Kind、另一种 Kind、关键词、单话题内、话题+Kind 同设）各问一次，哪一臂被短路就先红。负例＝把 `newest(out, q.Limit)` 挪到过滤之前 → `across topics: ... want the tail ... that means truncation ran before the filter`。顺带在源码里看到一件事与上一轮互相印证：按 id 取的那条快路径的 `case` 条件写得很死（`len(q.IDs) > 0` 且其余条件全空才走），这正是上一轮那个「id 分支会不会吞掉同设过滤」不会真发生的原因——两轮的断言于是从两侧夹住了同一个边界。
+
 ## v1.6.5 — 2026-09-22 — MCP 面整体退役：对外只剩 Go module
 
 1. **`cmd/memhop-mcp` 整包删除**（14 个文件 3109 行）：25 个工具、多租户 HTTP（SSE 与 streamable-http 双传输）、按 `/mcp/<tenant>` 建/取域的租户注册表、`--tenants` 白名单与锚定 db-dir 的读入口一起消失。仓库不再有 server 形态、不再有后台进程，对外只剩「以 Go module 使用 `api`」一种接入。
