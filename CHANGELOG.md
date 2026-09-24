@@ -167,6 +167,9 @@ README 的版本表与 git log。
 78. **验收清单第 6/11 条的「把 plan 更新到 prompt」第一次在可跑骨架里跑通**（两份指南 §11 各补一段 `PlanState` 读出→折叠成 prompt 文本→打出来；`test/guide_skeleton_test.go` 从「退出码为零」升级成断言它真的印出该印的东西）：`PlanState` 在指南里一直被解释（§5 那句「plan 式上下文读回来的是开着的那一轮」、§7.7 的 `plan_state` 行、§8 那段渲染与预算），可宿主照抄的那份 §11 骨架走到 `PlanNodeUpdate` 就直接收轮了——第 11 条流程里「将 plan 更新到 prompt 继续循环」这一步在最主要的可跑样例里是缺的，第二个宿主得自己发明一遍渲染。现在骨架里有了：`tree.DoneCount/TotalCount` 一行汇总 + 沿 `Children` 缩进把每一步的 `Seq`/`Title`/`Status` 排出来，接在 `res.ProfileBrief` 后面组成这一次调用要送出去的整块，并且把它打印出来。门禁跟着升级：`TestGuideSkeleton` 此前只判「没崩、退出码 0」，现在要求输出里出现 `name:`、`plan: 1/2 steps done`、`- #1 `、`[done]` 四样——正是这份骨架自己承诺交给宿主的东西，其中 `1/2` 就是「汇总数按全树算而不是只数根」那条契约的实跑值。**负例**：把那行打印换回 `_ = promptContext` → 一次跑出两条红（`the skeleton printed no "name:"` 与 `…no "plan: 1/2 steps done"`），恢复即绿（渲染段整体被删时 profile 那行也一起没了，正是该抓的形态）。英文与中文两份骨架同步改，`make check-guides` 编译、`TestGuideSkeleton` 实跑双语版都过。行为与公开面一字未动。
 
 
+79. **过期之后 `Messages` 到底长什么样，指南此前说错了一半**（新用例 `internal/l2_sweep_gap_test.go` / `TestSweepKeepsEverySurvivorAtItsOwnSeq`；两份指南 §12 第 7 条同批改口）：那句话写的是「过了窗的话题 `Messages` 读回来是空的**或 `Seq` 上有洞**」。前半对，后半把事件轨的形状安到了原文轨上——`SceneContext` 渲染的只有 utterance（`internal/l2.go:257` 一句 `content.Read(..., KindUtterance)`），而一轮的两句原文是**同一次 `Update` 盖的同一个钟**，所以它们成对出局：正常路径下 `Messages` 只会「空」，不会「有洞」。有洞的是事件轨（每条事件各带自己的时刻，先写先出局）。这不是文字洁癖：宿主按那句话去 `Messages` 里找洞，会把「中间少了两条」当成引擎丢了自己的写入，而它要找的那条轨道在 `SearchL4{TopicID, Kind: event}`。新用例把两头各钉一遍：同一轮里事件写在 3/5/7（3、5 已过窗，7 在窗内）、宿主自己指定槽位的原文写在 9，一趟 Dream 之后**事件轨只剩 [7]、原文轨只剩 [1 2]**——序号一律不改（改了就等于让重试的 `AppendArchive` 落到别人的行上），且 `SceneContext` 与 `SearchL4` 两条读给出的清单必须一致。写法上取的是「前后各测一次」而不是只测终态：开局断言 `[3 5 7]` 与 `[1 2 9]`，否则「根本没写进去」也能让后半截断言通过。**负例**：把 `endTurn` 的钟退回 fixture 默认的 1000（两句原文一起过期）→ 红在 `the sweep renumbered the dialogue: want [1 2], got []`，即这条断言确实活在那对原文「一个出局、一个留下」的边界上；把事件 7 的钟改成过期 → 红在 `want [7], got []`。行为一字未动，公开面与磁盘格式未动。
+
+
 
 ## v1.6.5 — 2026-09-22 — MCP 面整体退役：对外只剩 Go module
 

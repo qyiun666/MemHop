@@ -1117,8 +1117,12 @@ func main() {
    what keeps L5 bounded; inside a tree that is not exempt, every step is measured
    on its own clock, so a plan one late update touched loses only its stale steps;
    `DeleteTopic` / `DeleteScene` are the explicit corrections. Past the window a
-   topic keeps its keyword track and its `Messages` come back empty or with gaps in
-   `Seq` — a legal end state, not a failed read. A fused group's summary ages from
+   topic keeps its keyword track and its `Messages` come back **empty**: one `Update` stamps a
+   turn's two originals together, so they age as a pair. Gaps in `Seq` are the shape of the
+   *event* track (`SearchL4{TopicID, Kind: event}`), where every record carries its own moment
+   and a survivor keeps the number it was written at — nothing is ever renumbered, on either
+   read (`TestSweepKeepsEverySurvivorAtItsOwnSeq`); a host that addressed an utterance slot of
+   its own can see a gap in `Messages` too. Either outcome is a legal end state, not a failed read. A fused group's summary ages from
    the pass that wrote it, not from the turns it replaced, so it can outlive their
    originals: a parent may still carry Dream's own text after its children's have
    been swept. Everything is keyed by the turn the library holds

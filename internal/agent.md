@@ -433,7 +433,9 @@ internal/{domain,scene,turn,dream,graph,plan,content}
 14. **`SceneContext` 的说话顺序是读出来的语义**：融合父话题的时间戳就是它吞掉
    的第一轮的 `UserTimestamp`，两者必然同值，所以排序在时间戳之后加
    `Depth` 次键（浅的在前）。只按时间戳排时 `slices.SortFunc` 不稳定，一组的
-   摘要会随机落到它所总结的原文中间。
+   摘要会随机落到它所总结的原文中间。同一条读**只渲染 utterance**（`content.Read(..., KindUtterance)`），
+   一轮的两句原文又由同一次 `Update` 盖同一个钟，所以保留窗扫过之后 `Messages` 只会整对消失（读回是空的，
+   不是「有洞」）；会留下洞的是事件轨，而两条读都不重排幸存记录的 `Seq`（`TestSweepKeepsEverySurvivorAtItsOwnSeq`）。
 15. **纯读也能不点名**：`SceneContext` 收到空的 `sceneID` 时读的是该域自持的那条会话
     （`readScene` → `ensureScene`），并且**不新建**——新建场景是开轮那条读的义务，一个承诺
     零写入的调用不能顺手留下一条会话。但「从没说过话」是这条读**答得出来**的一件事，不是一次失败：
