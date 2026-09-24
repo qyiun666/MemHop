@@ -417,6 +417,9 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    创建口不要求宿主先给状态。三态的取值就是那三个小写串，`L3ImportMode` 的三个值同样小写——宿主从模型那里拿到一个词就能直接 `L3ImportMode(word)` 递进来，不必替它改大小写；这套词表走法由 `api/surface_enums_test.go` 与两份指南 §7.6 相互核。校验与父序号判定都排在任何节点读写之前，一次被拒的
    写零留痕。**没有节点删除口，也不需要一个**：树跟着开它的那一轮走，宿主放弃
    一步的手段就是不在此后的轮里再创建它，旧树由 `l5_prune` 的保留窗回收。
+   发号点名到的地址读不回来时（镜像跳过解不开的记录，而地址由 (轮, 序号) 派生，看着仍像空的），
+   创建**拒且持久**：一次不记、二次不绕，第二次仍交回那次读自己的码——自愈式的「删掉再发号」
+   会把一个步骤的工作悄悄接给下一个序号（`TestPlanNodeAddRefusesAnAddressItCannotRead`）。
 13. **破坏性写入先验 id**：`MergeScenes` 会删记录，所以主/次每个 id 都必须
    仍是一个场景（`requireScenes` 逐个回读比对），未知 id 报 `ErrNotFound`；
    底层 `repo.DeleteL2Records` 只照给定的 id 落墓碑、不认 id 是什么，少这一步时一个陈旧

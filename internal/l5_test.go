@@ -104,6 +104,12 @@ func TestPlanNodeAddRefusesAnAddressItCannotRead(t *testing.T) {
 	if _, err := db.PlanNodeAdd(core.DefaultAgentID, 0, "重铸的一步"); common.CodeOf(err) != common.ErrDeserialization {
 		t.Fatalf("creating at an address that does not decode must report its own code, got %v", err)
 	}
+	// The refusal is durable rather than one-shot: nothing remembers having seen the
+	// address, so a host that retries hears the same answer instead of a neighbouring
+	// number — the library will not step around a record it cannot read.
+	if _, err := db.PlanNodeAdd(core.DefaultAgentID, 0, "重铸的一步"); common.CodeOf(err) != common.ErrDeserialization {
+		t.Fatalf("the second create answered %v, want the same read's code again", err)
+	}
 	if _, data, err := db.engine.ReadRecord(core.DefaultAgentID, address); err != nil || string(data) != corrupt {
 		t.Fatalf("the refused create overwrote the record it could not read: %q err=%v", data, err)
 	}

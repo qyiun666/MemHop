@@ -472,3 +472,88 @@ func TestInterfacePlanAndTrajectorySurviveReopen(t *testing.T) {
 		t.Fatalf("the new turn's first step = %d (%v), want ordinal 1", next, err)
 	}
 }
+
+// The number AppendArchive hands back is the record's address: naming it again rewrites
+// that slot in place rather than stacking a second version of one fact, which is what
+// makes a host's at-least-once write loop converge. Every earlier call site discarded the
+// return and re-read the slot, so the replay contract itself was unproven.
+func TestInterfaceAppendReturnsTheAddressAReplayRewrites(t *testing.T) {
+	db, _ := openTestDB(t)
+	sceneID := openSession(t, db)
+	turnID := openTurn(t, db, sceneID)
+	ts := time.Now().UnixMilli()
+
+	first, err := db.AppendArchive(planEvent(ts, "tool_call", "读 config.go"))
+	if err != nil {
+		t.Fatalf("append the call: %v", err)
+	}
+	second, err := db.AppendArchive(planEvent(ts+1, "tool_result", "四个字段"))
+	if err != nil {
+		t.Fatalf("append the result: %v", err)
+	}
+	if second != first+1 {
+		t.Fatalf("auto-allocation handed out %d then %d, want consecutive slots", first, second)
+	}
+
+	again, err := db.AppendArchive(memhop.ArchiveInput{
+		Kind: memhop.KindEvent, Seq: first, EventType: "tool_call",
+		Content: "读 config.rs", CreatedAt: ts + 2,
+	})
+	if err != nil {
+		t.Fatalf("replay the address: %v", err)
+	}
+	if again != first {
+		t.Fatalf("the replay answered %d, want the address it named (%d)", again, first)
+	}
+	events := mustEvents(t, db, turnID)
+	if len(events) != 2 {
+		t.Fatalf("the turn's event track = %+v, want the two slots it took", events)
+	}
+	if events[0].Seq != first || events[0].Content != "读 config.rs" {
+		t.Fatalf("naming the slot did not rewrite it: %+v", events[0])
+	}
+	if events[1].Seq != second || events[1].Content != "四个字段" {
+		t.Fatalf("the slot nobody named moved: %+v", events[1])
+	}
+	// The id follows (topic, Seq), so the key a host already holds still addresses the
+	// rewritten record — a replay does not cost it a fresh id to track.
+	byID, err := db.SearchL4(memhop.L4Query{IDs: []string{events[0].ID}})
+	if err != nil || len(byID) != 1 || byID[0].Content != "读 config.rs" {
+		t.Fatalf("reading the replayed record back by its id = %+v err %v", byID, err)
+	}
+}
+
+// PlanNodeUpdate restates one step, and a field the host leaves out is not a request to
+// erase it: the title and the summary a previous round wrote stay. Only Status has no
+// blank spelling. The title half was pinned; the summary half — the one a host fills in
+// when a step finishes — is what this case adds.
+func TestInterfacePlanUpdateKeepsTheSummaryItWasNotGiven(t *testing.T) {
+	db, _ := openTestDB(t)
+	sceneID := openSession(t, db)
+	openTurn(t, db, sceneID)
+
+	step := mustCreate(t, db, 0, "定方案")
+	mustUpdate(t, db, step, memhop.PlanStatusDone, "结论：读路径走 mmap，零拷贝")
+	if got := findPlanNode(t, mustPlanState(t, db), step); got.Summary != "结论：读路径走 mmap，零拷贝" {
+		t.Fatalf("the first restatement did not land: %+v", got)
+	}
+
+	if err := db.PlanNodeUpdate(memhop.PlanStep{Seq: step, Status: memhop.PlanStatusInProgress}); err != nil {
+		t.Fatalf("restating only the status: %v", err)
+	}
+	got := findPlanNode(t, mustPlanState(t, db), step)
+	if got.Summary != "结论：读路径走 mmap，零拷贝" || got.Title != "定方案" {
+		t.Fatalf("an update that sent neither field erased one of them: %+v", got)
+	}
+	if got.FinishedAt != 0 {
+		t.Fatalf("re-opening a settled step must drop its finish time, got %d", got.FinishedAt)
+	}
+	// A field the host does send still replaces what was there — keeping the blank is not
+	// a refusal to write.
+	if err := db.PlanNodeUpdate(memhop.PlanStep{Seq: step, Status: memhop.PlanStatusDone, Summary: "结论改为写侧批量提交"}); err != nil {
+		t.Fatalf("restating the summary: %v", err)
+	}
+	if again := findPlanNode(t, mustPlanState(t, db), step); again.Summary != "结论改为写侧批量提交" {
+		t.Fatalf("a stated summary did not replace the stored one: %+v", again)
+	}
+}
