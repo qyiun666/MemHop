@@ -157,11 +157,12 @@ type L3Subgraph struct {
 // subtree — an ordinal inside a turn, so it needs TopicID; zero leaves the
 // condition unset, which is safe because step ordinals start at 1.
 type L4Query struct {
-	Keyword string       `json:"keyword,omitempty"`  // case-insensitive substring of Content
-	Start   int64        `json:"start,omitempty"`    // created at or after (ms); 0 leaves the bound unset, a wrong scale is refused
-	End     int64        `json:"end,omitempty"`      // created at or before (ms); same ruler as a write's CreatedAt
-	IDs     []string     `json:"ids,omitempty"`      // only these archive ids (the reserved key is refused)
-	TopicID *string      `json:"topic_id,omitempty"` // only archives of this topic
+	Keyword string   `json:"keyword,omitempty"`  // case-insensitive substring of Content
+	Start   int64    `json:"start,omitempty"`    // created at or after (ms); 0 leaves the bound unset, a wrong scale is refused
+	End     int64    `json:"end,omitempty"`      // created at or before (ms); same ruler as a write's CreatedAt
+	IDs     []string `json:"ids,omitempty"`      // only these archive ids (the reserved key is refused)
+	TopicID *string  `json:"topic_id,omitempty"` // only archives of this turn; a scene id
+	//                                          //   there is refused, an unknown id answered empty
 	Type    *ContentType `json:"type,omitempty"`     // only archives of this content type
 	Kind    *ArchiveKind `json:"kind,omitempty"`     // utterance or event; unset selects both
 	NodeSeq uint32       `json:"node_seq,omitempty"` // this step and every step under it; needs TopicID

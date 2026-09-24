@@ -915,7 +915,10 @@ the turn `Search` opened for the domain, so these calls name no topic id.
 The all-zero key `0000000000000000` is reserved (it is the value a record leaves its key
 unset with) — `Search` never opens a turn on it, and the read entries that do take a
 topic id (`SearchL4{TopicID}`, `RenameTopic`, `DeleteTopic`) reject it, and a `SearchL4{IDs}` list
-that carries it is refused rather than answered one row short.
+that carries it is refused rather than answered one row short. `SearchL4{TopicID}` also refuses a **scene** id:
+the scene key and the turn key come out of the same `Search` result, and reading one where the other belongs
+would answer empty — which a host reads as a round that recorded nothing. An id naming no record at all is still
+an empty answer, because a turn that is still open has content before it has a topic record.
 
 ---
 

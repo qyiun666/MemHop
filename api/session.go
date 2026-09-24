@@ -255,7 +255,10 @@ func (s *Session) QueryL3Subgraph(graphID, startNodeID string, maxDepth int, edg
 // record's CreatedAt, with the record id breaking ties. TopicID is the key Search
 // issued for one turn, parsed as it is everywhere else — the reserved all-zero key is
 // refused, not answered with an empty list. The same key is refused inside an IDs list, where a
-// host reads the row count as the answer.
+// host reads the row count as the answer. A scene id handed in as TopicID is refused too —
+// both keys come out of one Search result, and an empty read on a scene id would look like a
+// round that recorded nothing — while an id naming no record at all stays an empty answer,
+// because a turn still open has content and no topic record yet.
 func (s *Session) SearchL4(q L4Query) ([]ArchiveSlot, error) {
 	archives, err := s.session.SearchL4(q)
 	if err != nil {

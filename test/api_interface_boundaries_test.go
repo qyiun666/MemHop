@@ -12,6 +12,7 @@ package test
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -148,5 +149,45 @@ func TestInterfaceMergeScenesRefusesADuplicatedSecondary(t *testing.T) {
 	}
 	if scenes, err := db.ListScenes(""); err != nil || len(scenes) != 1 || scenes[0].SceneID != primary {
 		t.Fatalf("after the merge the roster = %+v err %v, want the primary alone", scenes, err)
+	}
+}
+
+// A scene id and the turn's own topic id arrive in the same Search result, so mixing them
+// is the likeliest key mistake a host can make — and a scene never owns archives, so the
+// read would answer empty and a round would look like it recorded nothing. An id that
+// names no record at all stays an empty answer, because a turn that is still open holds
+// content before it holds a topic.
+func TestInterfaceSearchL4RefusesASceneIDWhereATurnIDBelongs(t *testing.T) {
+	db, _ := openTestDB(t)
+	sceneID := openSession(t, db)
+	turnID := openTurn(t, db, sceneID)
+	if _, err := db.AppendArchive(planEvent(time.Now().UnixMilli(), "tool_call", "轮中还开着时记一条")); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+
+	open := turnID
+	rows, err := db.SearchL4(memhop.L4Query{TopicID: &open})
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("an open turn's own key = %+v err %v, want the one event it holds", rows, err)
+	}
+	_, err = db.SearchL4(memhop.L4Query{TopicID: &sceneID})
+	if memhop.CodeOf(err) != memhop.ErrInvalidQuery {
+		t.Fatalf("a scene id where the turn key belongs: want ErrInvalidQuery, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "NewTopicID") {
+		t.Fatalf("the refusal does not point at the key the host meant: %v", err)
+	}
+	// An id that names nothing is absence, not a mistake.
+	ghost := "bbbbbbbbbbbbbbbb"
+	if rows, err := db.SearchL4(memhop.L4Query{TopicID: &ghost}); err != nil || len(rows) != 0 {
+		t.Fatalf("an id naming no record = %+v err %v, want an empty answer", rows, err)
+	}
+	closed, err := db.Update(memhop.TurnEnd{Input: "问", Output: "答", CreatedAt: time.Now().UnixMilli()})
+	if err != nil {
+		t.Fatalf("close the turn: %v", err)
+	}
+	key := closed.ID
+	if rows, err := db.SearchL4(memhop.L4Query{TopicID: &key}); err != nil || len(rows) != 3 {
+		t.Fatalf("after the close the turn holds %+v err %v, want two dialogue lines plus the event", rows, err)
 	}
 }

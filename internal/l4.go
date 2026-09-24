@@ -73,6 +73,17 @@ func (db *DB) SearchL4(agentID uint64, q L4Query) ([]core.ArchiveSlot, error) {
 		if err != nil {
 			return nil, err
 		}
+		// A scene id and a turn id come out of the same Search result, and transposing
+		// them is the one key mistake a host can make without noticing: a scene never
+		// owns archives, so the read would answer an empty set and a round would look
+		// like it recorded nothing. The probe only answers 「is this id a scene?」, so any
+		// other answer — including a read that cannot decide — leaves the query running;
+		// an id that names no record at all stays legitimate, because a turn that is
+		// still open holds content and no topic record yet.
+		if slot, err := core.ReadSceneSlot(db.engine, agentID, topicHash); err == nil && slot != nil {
+			return nil, common.NewError(common.ErrInvalidQuery,
+				"topic_id names a scene; the key a turn's own records are addressed by is the NewTopicID Search returned")
+		}
 		rq.TopicID = &topicHash
 		if q.NodeSeq != 0 {
 			// The whole branch is expanded here so the data layer only ever
