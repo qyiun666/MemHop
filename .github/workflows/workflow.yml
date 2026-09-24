@@ -51,8 +51,13 @@ jobs:
         if: runner.os != 'Windows'
         run: make check-guides
 
+      # The race check covers the whole module, not just the packages that hold locks:
+      # the consolidation a round close schedules runs on its own goroutine, and the
+      # host-facing suite is where that pass races a test's own reads. Measured on the
+      # current tree: `go test -race ./...` 29.4s wall against 25.0s without it — the
+      # coverage is nearly free, so there is no reason to scope the step down.
       - name: Unit tests (race)
-        run: go test -race ./internal/...
+        run: go test -race ./...
 
       # Integration tests require real Ollama + LLM credentials; without
       # MEMHOP_TEST_LLM_KEY the suite skips, so this step mainly verifies
