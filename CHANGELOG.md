@@ -140,6 +140,8 @@ README 的版本表与 git log。
 
 66. **「ProfileBrief 有界」从形容词改成算得出的数**（`internal/cap/profile` 加常量 `briefWorstCaseRunes` + 新测试 `TestBriefIsBoundedAndRepeatable`，两份指南的 `ProfileBrief` 行改写）：指南一直说这摘要「有界/紧凑」，却没写多大、也没写偏好几十条时到底取哪几条——宿主拿这句规划 prompt 预算其实什么也没拿到。现在量化：`name`/`role`/`personality` 各截到 160 字（截过以 `…` 结尾）、类型词单占一行、偏好取**排序后最低的 5 条**（键截 160、值截 120），最坏整段实测 2010 字，常量上界写 2100 并由测试守住；且两次调用必须逐字相同——同一份画像每轮注入不能变。语料形状这轮返工过一次：第一版 40 个键共享同一长前缀，截断后五者一模一样，「选哪五条」因此不可见，不排序的负例当场逃过；改成可区分的键（一个以 A 开头的超长键排最前，其余 k00…k39）后同一负例立刻红在 `the same profile digested twice differently`，再补一条把字段上限从 160 抬到 400 的负例，四处报「未标记截断」并撞上 2100 上界。`internal/cap/agent.md` 同批改口。行为一字未动（库本来就排序取前五），这次是把它到底多大、到底选哪五条写清并钉住。
 
+67. **同一个场景的两次读从此不许各说一套**（新增 `test/api_interface_scene_parity_test.go`，两份指南 §6.5 那条判定各补一句）：宿主跑一轮会连着读同一个场景两次——`Search` 开轮时交回表层话题，`SceneContext("")` 在召回时交回摊平到 depth ≤ 2 的转录。两条都从 `ac.L2Meta` 那份缓存出（`scene.SurfaceTopics` 与 `repo.ListTopicsL2` 同一个源），但这件事此前只是碰巧成立：没有任何断言说 `Search.Topics` 必须等于转录里那批 depth-1 行，一旦两条读各排各的序、或其中一条忘了只取表浅行，宿主就会在一轮里看到两份互相矛盾的场景。新用例把「同一批行、同一顺序、逐字段相同」钉住，并且**在巩固之后**测（那时两层真的不一样：4 轮收口 → 一趟巩固折掉两轮 → 表层 3 行、转录 5 行），断言包含行序非降（按宿主自己盖的 `UserTimestamp`）与关键词轨逐行相等，另有一条守卫确认转录确实比表层多出行——少了它整个用例就退化成拿同一条读跟自己比。**两条负例各红在对应断言上**：把 `SurfaceTopics` 的排序反过来 → 报 `row 0 is … from Search and … from SceneContext, so the two reads disagree on order`；把它的 depth==1 过滤放宽 → 报 `Search listed 5 topics while the transcript's depth-1 rows are 3`。行为未动，公开面与磁盘格式一字未改；离线接口面 33 → 34 条。
+
 ## v1.6.5 — 2026-09-22 — MCP 面整体退役：对外只剩 Go module
 
 1. **`cmd/memhop-mcp` 整包删除**（14 个文件 3109 行）：25 个工具、多租户 HTTP（SSE 与 streamable-http 双传输）、按 `/mcp/<tenant>` 建/取域的租户注册表、`--tenants` 白名单与锚定 db-dir 的读入口一起消失。仓库不再有 server 形态、不再有后台进程，对外只剩「以 Go module 使用 `api`」一种接入。
