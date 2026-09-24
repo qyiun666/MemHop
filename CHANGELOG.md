@@ -298,6 +298,8 @@ README 的版本表与 git log。
 - 新用例 `TestInterfaceSubAgentNameCapIsTheExportedNumber` 四处：导出的数＝256、恰好 256 字节收、257 字节拒且消息里写着「256 bytes」、汉字那两例钉住单位
 - 两份指南在 `SubAgent` 那条各补一句（含「名字就是日后重开那个域要递回去的把手」这层理由）
 
+131. **第八道常驻门禁：宿主拿来做计划的每个数字，都有配对了**（新增 `api/guide_numbers_test.go`、`internal/llm/guide_numbers_test.go`；库行为一字未动）。此前只有画像摘要那一行有数字门禁（`internal/cap/profile/guide_numbers_test.go` 把 5 个措辞各自配一个常数），其余散在指南里的数字——四个调参默认值、两条写预算、租户键上界、保留窗上界、超时与输出上限默认——全是裸散文：改一端不会有任何东西红。这次按同一形状扫全：**每条 claim 用自己的那段措辞去匹配**，所以措辞被改写时报「那句话不在了」而不是恰好匹配到别处的数字（前一条门禁的教训，也是本仓对「Contains 当断言」的一贯态度）。配对方式分两种：**有常量的钉常量**（`DefaultMemHopDefaults` 四项、三个导出规模、`defaultTimeoutSecs`/`defaultMaxOutputTokens`）；**没有常量的钉行为**——保留窗那条不是取一个数来比，而是拿文档承诺的那个最大值真去 `Open` 一次（收下）再 +1 毫秒（`ErrConfig` 且不在宿主指定的路径上留下文件），因为「上界」的本意就是那条边界。双语各一套措辞，缺哪一侧都红。**两个负例各打一门**：把 `SceneDreamTopicThreshold` 默认 24 改成 25 → 两份指南各红一行（"the guide says dream trigger = 24, the surface says 25"）；把 `defaultTimeoutSecs` 120 改成 90 → 同样双语各红。写这一条时也当场被自己的正则咬了两次（EN 那句里常量与括号之间隔着一个换行、zh 表格数字后面是全角括号而不是空格）——两次都是门禁如实报「措辞找不到了」，正是要的行为。
+
 ## v1.6.5 — 2026-09-22 — MCP 面整体退役：对外只剩 Go module
 
 1. **`cmd/memhop-mcp` 整包删除**（14 个文件 3109 行）：25 个工具、多租户 HTTP（SSE 与 streamable-http 双传输）、按 `/mcp/<tenant>` 建/取域的租户注册表、`--tenants` 白名单与锚定 db-dir 的读入口一起消失。仓库不再有 server 形态、不再有后台进程，对外只剩「以 Go module 使用 `api`」一种接入。
