@@ -53,6 +53,15 @@ func openMockDB(t testing.TB, path, llmURL string, opts ...func(*memhop.MemHopDe
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
+	// The handle is the opener's to hand back: an open .meh keeps the engine's exclusive
+	// lock, and a locked file cannot be unlinked, so a scenario that forgets to Close fails
+	// in t.TempDir's cleanup on Windows instead of in its own assertions. A scenario that
+	// closes early to reopen the same path answers ErrClosed here, which is not a failure.
+	t.Cleanup(func() {
+		if err := m.Close(); err != nil && memhop.CodeOf(err) != memhop.ErrClosed {
+			t.Errorf("close: %v", err)
+		}
+	})
 	return m
 }
 

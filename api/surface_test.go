@@ -69,17 +69,30 @@ func openSurfaceSession(t *testing.T, llmURL string) (*DB, *Session) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
+	closeOnCleanup(t, m)
 	sess, err := m.SubAgent(surfaceLLM(llmURL), ProfileInput{Name: "surface"})
 	if err != nil {
-		m.Close()
 		t.Fatalf("SubAgent: %v", err)
 	}
 	return m, sess
 }
 
-// openSurfaceDB opens a database and binds a session to a sub-agent domain; the
-// DB is closed via t.Cleanup so the TempDir .meh file is released before removal
-// (Windows unlink fails on open handles).
+// closeOnCleanup hands the file back when the test ends. An open handle keeps the engine's
+// exclusive lock, and a locked file cannot be unlinked, so a test that opens one and does
+// not close it fails in t.TempDir's cleanup on Windows rather than in its own assertions.
+// It belongs to the opener, not to each caller: a scenario that closes early to reopen the
+// same path then answers ErrClosed here, which is not a failure; anything else is the
+// close's own I/O error and is reported as one.
+func closeOnCleanup(tb testing.TB, m *DB) {
+	tb.Helper()
+	tb.Cleanup(func() {
+		if err := m.Close(); err != nil && CodeOf(err) != ErrClosed {
+			tb.Errorf("close: %v", err)
+		}
+	})
+}
+
+// openSurfaceDB opens a database and binds a session to a sub-agent domain.
 func openSurfaceDB(t *testing.T) *Session {
 	_, sess, _ := openSurfaceLibrary(t)
 	return sess
@@ -93,7 +106,6 @@ func openSurfaceLibrary(t *testing.T) (*DB, *Session, string) {
 	llm := stubLLM()
 	t.Cleanup(llm.Close)
 	m, sess := openSurfaceSession(t, llm.URL)
-	t.Cleanup(func() { _ = m.Close() })
 	return m, sess, llm.URL
 }
 

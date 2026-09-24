@@ -21,10 +21,7 @@ import (
 // to resolve a replaced dependency, and the program must be a guest in a temporary module the
 // way a real host's would be.
 func TestGuideSkeletonActuallyRuns(t *testing.T) {
-	repo, err := filepath.Abs("..")
-	if err != nil {
-		t.Fatalf("resolve repo root: %v", err)
-	}
+	repo := repoRoot(t)
 	goBin, err := exec.LookPath("go")
 	if err != nil {
 		t.Skipf("no go toolchain on PATH: %v", err)
@@ -86,8 +83,49 @@ func TestGuideSkeletonActuallyRuns(t *testing.T) {
 	}
 }
 
+// repoRoot is the checkout both guides live in.
+func repoRoot(tb testing.TB) string {
+	tb.Helper()
+	repo, err := filepath.Abs("..")
+	if err != nil {
+		tb.Fatalf("resolve repo root: %v", err)
+	}
+	return repo
+}
+
+// A checkout on Windows carries CRLF, so the extraction that finds the quickstart has to read
+// the document rather than a particular line ending. This is checked on every platform on
+// purpose: the failure it pins showed up as "the guide has no skeleton" on a runner where the
+// guide was intact, and no other test in this file would notice the extractor going blind.
+func TestSkeletonExtractionToleratesCRLF(t *testing.T) {
+	repo := repoRoot(t)
+	for _, name := range []string{"INTEGRATION_GUIDE.md", "INTEGRATION_GUIDE.zh.md"} {
+		path := filepath.Join(repo, name)
+		windows := filepath.Join(t.TempDir(), name)
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		if err := os.WriteFile(windows, []byte(strings.ReplaceAll(string(raw), "\n", "\r\n")), 0o644); err != nil {
+			t.Fatalf("write CRLF copy: %v", err)
+		}
+		if got, want := extractSkeleton(t, windows), extractSkeleton(t, path); got != want {
+			t.Errorf("%s: the CRLF checkout yielded a different skeleton than the LF one\n crlf: %q\n  lf: %q",
+				name, firstLine(got), firstLine(want))
+		}
+	}
+}
+
+// firstLine keeps a mismatch report readable: the skeletons are whole programs.
+func firstLine(src string) string {
+	line, _, _ := strings.Cut(src, "\n")
+	return line
+}
+
 // extractSkeleton returns the first fenced go block that opens with a package clause, the same
 // rule `make check-guides` applies, so the two checks cannot drift apart in what they read.
+// The line ends are dropped rather than compared: a Windows checkout carries CRLF, and a
+// document that only differs by its record separator is the same document.
 func extractSkeleton(tb testing.TB, path string) string {
 	tb.Helper()
 	raw, err := os.ReadFile(path)
@@ -97,6 +135,7 @@ func extractSkeleton(tb testing.TB, path string) string {
 	var buf strings.Builder
 	inBlock := false
 	for _, line := range strings.Split(string(raw), "\n") {
+		line = strings.TrimSuffix(line, "\r")
 		switch {
 		case line == "```go" && !inBlock:
 			inBlock = true

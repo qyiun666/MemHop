@@ -201,7 +201,7 @@ func TestUndoAppendCutsBackToTheBatchStart(t *testing.T) {
 	}
 	start := fileSize(t, p)
 	// What a refused write leaves behind: a frame the file only partly holds.
-	appendBytes(t, p, EncodeRecord(DefaultAgentID, RecL2Topic, 0, 2, []byte("half an attempt"))[:RecordHeaderSize+3])
+	appendThroughEngine(t, eng, EncodeRecord(DefaultAgentID, RecL2Topic, 0, 2, []byte("half an attempt"))[:RecordHeaderSize+3])
 
 	cause := common.NewError(common.ErrIO, "write record", io.ErrShortWrite)
 	if err := eng.undoAppend(start, cause); !errors.Is(err, cause) {
@@ -381,6 +381,20 @@ func appendBytes(t *testing.T, path string, b []byte) {
 		t.Fatal(err)
 	}
 	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// appendThroughEngine puts raw bytes at the tail of a file an instance still holds, through
+// the very handle that instance appends with — where a refused batch would have left them.
+// A second handle cannot serve here: an open engine locks the whole file, so on Windows the
+// write that injects the residue fails first and the test measures the lock, not the undo.
+func appendThroughEngine(t *testing.T, e *StorageEngine, b []byte) {
+	t.Helper()
+	if _, err := e.file.Seek(0, io.SeekEnd); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.file.Write(b); err != nil {
 		t.Fatal(err)
 	}
 }

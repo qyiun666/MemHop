@@ -74,13 +74,19 @@ func TestCompact(t *testing.T) {
 // the only place a host learns which record is damaged: the engine has no read face
 // that shows one. A checksum failure and a frame that does not fit the file are
 // different repairs, so the read's own code is what comes back.
+//
+// The damage arrives between one instance closing and the next opening, because that is
+// where rot actually happens to a stored file — and because an open engine locks the whole
+// file, so no second handle could put it there. The snapshot is what brings the damaged
+// record to Compact's attention: the index it restores names the offset, and the payload
+// goes unread until someone asks for it. A record found by scanning the log would have been
+// dropped for its checksum on the way in, and the compaction would have had nothing to refuse.
 func TestCompactRefusalNamesTheRecordItCannotRead(t *testing.T) {
 	p := tempPath(t, "compact_rot")
 	eng, err := Create(p)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer eng.Close()
 	victim, err := eng.WriteRecord(DefaultAgentID, RecL1SceneNode, 7, []byte("this one rots"))
 	if err != nil {
 		t.Fatal(err)
@@ -88,9 +94,21 @@ func TestCompactRefusalNamesTheRecordItCannotRead(t *testing.T) {
 	if _, err := eng.WriteRecord(DefaultAgentID, RecL2Topic, 8, []byte("fine")); err != nil {
 		t.Fatal(err)
 	}
+	if err := eng.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.closeNoCheckpoint(); err != nil {
+		t.Fatal(err)
+	}
 	flipByteAt(t, p, victim+RecordHeaderSize)
 
-	err = eng.Compact(tempPath(t, "compact_dst"))
+	eng2, err := Open(p)
+	if err != nil {
+		t.Fatalf("a damaged record must not refuse the file: %v", err)
+	}
+	defer eng2.Close()
+
+	err = eng2.Compact(tempPath(t, "compact_dst"))
 	if err == nil {
 		t.Fatal("a compaction over a record it cannot read must refuse")
 	}
