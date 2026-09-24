@@ -450,6 +450,11 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    `TopicIDs`——那些话题条条读得回来，于是留下来的节点永远顶着一批不再属于它的轮次，
    继续参与共现建边与 L0 蒸馏。它的共现边由下一次 Dream 的衰减剪掉：`decayOneEdge`
    按「本域还持有这个节点吗」过滤成员，不再只看本轮刚删掉的那几个。
+   这段延后在宿主面上是有形状的，别按「边没有读口」把它读成看不见：`ListL1` 走
+   `RecL1SceneNode` 的严格扫描、读侧不替谁过滤，所以删除之后、下一次巩固之前，**存活节点的
+   `edge_ids` 里会点着一条已无起点的边**。`TestInterfaceL1AfterDeletingOneOfTwoRelatedScenes`
+   两半各钉一条（节点随删除立刻走／引用延后到巩固），并给「这个窗口真存在」配了前置守卫；
+   两份指南 L1 那行据此写明：`edge_ids` 不是活的连接键。
 14. **`SceneContext` 的说话顺序是读出来的语义**：融合父话题的时间戳就是它吞掉
    的第一轮的 `UserTimestamp`，两者必然同值，所以排序在时间戳之后加
    `Depth` 次键（浅的在前）。只按时间戳排时 `slices.SortFunc` 不稳定，一组的

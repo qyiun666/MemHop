@@ -19,9 +19,11 @@ import (
 //
 // The comparison is against a second file driven the same way with the deleted scene simply
 // never created, so the expectation is arithmetic rather than an enumeration of what the
-// cascade is believed to touch. L1 is deliberately out of the comparison: a deleted scene's
-// hyperedges are dropped by the next Dream's decay pass, which is documented and is not a
-// record any host can read back.
+// cascade is believed to touch. L1 is deliberately out of the comparison, and the reason is
+// narrower than it looks: a deleted scene's own node does leave with the delete (measured at
+// the host surface by TestInterfaceL1AfterDeletingOneOfTwoRelatedScenes), while what the decay
+// pass withdraws later is a surviving node's co-occurrence edge — an edge record has no read of
+// its own, though a survivor's edge_ids list does name one until that pass runs.
 func TestDeleteSceneLeavesNoOrphansInReadableLayers(t *testing.T) {
 	srv := mockLLMServer(t, turnKeywords)
 	dir := t.TempDir()

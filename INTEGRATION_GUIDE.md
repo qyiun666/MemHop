@@ -669,7 +669,7 @@ The table is that shape's key list, field for field (`l1-node-fields`):
 |---|---|
 | `id` / `scene_id` | the node and the scene it stands for; one node per scene |
 | `topic_ids` | which topics the **last Dream sync** found under the scene — a snapshot, not a live listing: a topic deleted since still appears until the next pass rebuilds it |
-| `edge_ids` | the co-occurrence edges this node sits on. There is **no read for an edge itself**: the only thing an id tells you is that two nodes sharing one were judged related by Dream |
+| `edge_ids` | the co-occurrence edges this node sits on. There is **no read for an edge itself**: the only thing an id tells you is that two nodes sharing one were judged related by Dream. **Do not treat it as a live join key**: deleting one of the two scenes drops its own node with the delete, while the survivor keeps naming that edge until the next consolidation — an id in this list can therefore already point at a relationship that has been withdrawn |
 | `importance` | how strong the trace still is, in `(0,1]`, decaying since the last time the memory mattered |
 | `valence` / `arousal` | the emotional reading Dream distilled onto it, each in `[0,1]` — **0 is a reading** ("extremely negative" / "completely calm"), not "unmeasured"; the neutral point is `0.5` and distance from it is the strength. These are two of the three axes a profile carries: the node record has no dominance, so a node's emotion is not a smaller `ProfileSlot.EmotionState` |
 | `emotion_set` | whether any pass ever stamped those two, which is the only way to tell a distilled `(0,0)` from a never-measured node |
