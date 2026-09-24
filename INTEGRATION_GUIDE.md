@@ -488,6 +488,25 @@ summary is the one record whose type and role the library fixes — `text`, role
 
 ---
 
+### 7.6 The vocabularies and how they travel
+
+A tool schema has to promise a value set, and this surface spells two of its vocabularies as
+words and three as numbers. Nothing here is implicit: adding a value changes this table, and
+`api/surface_enums_test.go` fails until the guides say it too.
+
+| vocabulary | on the wire | values (word the host reads ← what JSON carries) |
+|---|---|---|
+| a plan step's `status` | word | `in_progress`, `done`, `failed` |
+| an import's `mode` | word | `skip`, `merge`, `overwrite` |
+| `ArchiveKind` (`kind`) | number | `0` = utterance, `1` = event |
+| `ContentType` (`content_type`, `type`) | number | `0` text, `1` image, `2` video, `3` document, `4` audio, `5` code, `255` other |
+| `GraphEdgeKind` (a relation's `kind`) | number | `0` related, `1` causal, `2` part_of, `3` sequence, `4` dependency, `5` custom |
+
+The three numeric ones print those words through `String()` (and refuse one value past the
+set rather than reading it as "unset"), so the mapping between a model's word and the number
+a call carries is one small table on the host side — and it is the host's, because the engine
+does not branch on any of these names beyond validation.
+
 ## 8. Layer API quick reference
 
 The 26 session methods split by audience:

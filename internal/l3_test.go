@@ -230,6 +230,17 @@ func TestImportL3RejectsUnknownMode(t *testing.T) {
 	if err == nil || common.CodeOf(err) != common.ErrInvalidQuery {
 		t.Fatalf("expected ErrInvalidQuery, got %v", err)
 	}
+	// A host follows the words inside a refusal, so they have to be the words the type
+	// accepts — and the value it was given has to be there too, or three candidates are
+	// a guess instead of an answer.
+	for _, name := range []string{string(L3ImportSkip), string(L3ImportMerge), string(L3ImportOverwrite)} {
+		if !strings.Contains(err.Error(), name) {
+			t.Fatalf("the refusal does not name the mode %q: %v", name, err)
+		}
+	}
+	if !strings.Contains(err.Error(), "bogus") {
+		t.Fatalf("the refusal does not say what it was handed: %v", err)
+	}
 	got, err := core.CollectAllGraphSlots(db.engine, core.SharedPoolAgentID)
 	if err != nil {
 		t.Fatal(err)

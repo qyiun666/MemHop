@@ -43,8 +43,11 @@ type mergeFn func(*core.HypergraphNode, string, string, []string, string, int64)
 // as stored. An undefined mode is refused here, not answered per item.
 func mergePolicy(mode core.L3ImportMode) (mergeFn, error) {
 	if !mode.Valid() {
+		// Spelled from the constants, because a host follows the words in a refusal and
+		// words that get refused are a dead end.
 		return nil, common.NewError(common.ErrInvalidQuery,
-			"mode must be Skip, Merge or Overwrite")
+			"import mode "+string(mode)+" is none of "+
+				string(core.L3ImportSkip)+", "+string(core.L3ImportMerge)+", "+string(core.L3ImportOverwrite))
 	}
 	switch mode {
 	case core.L3ImportMerge:

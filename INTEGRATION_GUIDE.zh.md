@@ -366,6 +366,24 @@ worker 属于哪一种由宿主定，库不替它猜。
 
 ---
 
+### 7.6 几套词表各自怎么走
+
+给模型写工具 schema 必须先定「允许哪些值」，而这面接口里有两套词表走字符串、三套走数字。
+这里没有含糊的地方：加一个值就要改这张表，改漏了 `api/surface_enums_test.go` 会红（它同时
+要求两份指南都把这些词写全）。
+
+| 词表 | 线上形态 | 取值（宿主读到的词 ← JSON 里带的东西） |
+|---|---|---|
+| 计划步骤的 `status` | 字符串 | `in_progress`、`done`、`failed` |
+| 导入的 `mode` | 字符串 | `skip`、`merge`、`overwrite` |
+| `ArchiveKind`（`kind`） | 数字 | `0` = utterance，`1` = event |
+| `ContentType`（`content_type`、`type`） | 数字 | `0` text，`1` image，`2` video，`3` document，`4` audio，`5` code，`255` other |
+| `GraphEdgeKind`（关系里的 `kind`） | 数字 | `0` related，`1` causal，`2` part_of，`3` sequence，`4` dependency，`5` custom |
+
+那三套数字型的词表通过 `String()` 读出上面这些词（并且多出一档的取值会被拒，不会被读成「没设」），
+所以模型给的词与调用带的数字之间就是宿主侧一小张映射表——这份映射归宿主，因为引擎除了校验取值
+以外不按任何词表名分支。
+
 ## 8. 各层 API 速查
 
 26 个会话方法按使用者分两类：

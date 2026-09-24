@@ -199,13 +199,17 @@ type DreamReport struct {
 	Stages             []DreamStage `json:"stages,omitempty"`
 }
 
-// L3ImportMode selects the conflict policy of ImportL3.
+// L3ImportMode selects the conflict policy of ImportL3. The values follow the one
+// spelling every string-typed value on this surface uses — lowercase with an
+// underscore, like a plan status — so a host that took the word out of a model's tool
+// argument can write L3ImportMode(that) and have it mean what it says, instead of
+// capitalising one word out of a whole vocabulary.
 type L3ImportMode string
 
 const (
-	L3ImportSkip      L3ImportMode = "Skip"
-	L3ImportMerge     L3ImportMode = "Merge"
-	L3ImportOverwrite L3ImportMode = "Overwrite"
+	L3ImportSkip      L3ImportMode = "skip"
+	L3ImportMerge     L3ImportMode = "merge"
+	L3ImportOverwrite L3ImportMode = "overwrite"
 )
 
 // Valid reports whether m is one of the three defined modes. The vocabulary lives
