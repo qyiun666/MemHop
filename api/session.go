@@ -30,7 +30,12 @@ type Session struct {
 // its depth-1 topics in turn order, and the topic id this read minted for the turn the
 // host is about to run. It is the loop's one write-shaped read: opening a turn
 // advances the scene's turn counter, so call it once per turn and not as a poll — the
-// pure read is SceneContext. An empty SceneID continues the domain's current scene,
+// pure read is SceneContext. A domain holds exactly one open turn, so a Session is one
+// conversation in progress: run a worker per domain (SubAgent hands each its own session),
+// or serialize Search-to-Update on one. Sharing a handle across goroutines is safe on the
+// file — the domain lock serializes it — but a second Search takes the turn the first was
+// about to close, and the first caller's turn is then left unsettled.
+// An empty SceneID continues the domain's current scene,
 // and after the file is reopened that scene restores from the records (the one a turn
 // was opened in most recently; the turn counter only breaks ties among records written
 // before that stamp existed); NewScene starts a fresh conversation instead. L3ID

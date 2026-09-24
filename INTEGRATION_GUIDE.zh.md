@@ -192,6 +192,8 @@ res, err := db.Search(api.SearchQuery{
 
 未知 `SceneID` 返回 `ErrNotFound`（库不会替你新建一个你指名要读的场景）；`SceneID` 为空则续用该域当前场景，只有它一个场景都没有时才新建。`NewScene: true` 跳过这一切，直接开一个新场景。
 
+**一个 Session 就是一段在进行中的对话。** 开着的这一轮属于域、不属于调用方，所以第二个 goroutine 的 `Search` 会把第一个正准备收口的那一轮接走——它那一轮从此没收口，而它的 `Update` 关的是别人的 id。域锁在两种用法下都保住文件一致（不会写坏、不会交错）；它不做的是把轮复用。所以并行的每个 worker 请跑在**自己的域**上（`SubAgent` 按 profile 名字各给一个 session），或者在同一个句柄上把 `Search → … → Update` 串起来。`TestConcurrentWorkersOnTheirOwnDomains` 与 `TestConcurrentReadsDuringWrites` 两头各钉一遍：六个 worker × 四轮各自一个域，每边只列自己的轮；以及读口在 `Dream` 与新轮次改写场景的同时持续读。
+
 ### 6.2 轮次进行中：`AppendArchive(ArchiveInput)`
 
 这一轮由宿主自己记录，一条记录一次调用，写进 `Search` 开着的这一轮——是哪一轮由库自持，

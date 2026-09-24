@@ -231,6 +231,8 @@ No `ctx` parameter — the read path holds no cancellable LLM or network work �
 
 An unknown `SceneID` returns `ErrNotFound` (the library will not create a scene you asked to read); an empty one continues the domain's current scene, creating one only when it holds none. `NewScene: true` skips all of that and opens a fresh scene.
 
+**One session is one conversation in progress.** The open turn belongs to the domain, not to the caller, so a `Search` from a second goroutine takes the turn the first was about to close — and the first's turn is left unsettled while its `Update` closes the other id. The domain lock keeps the file consistent either way (nothing corrupts, nothing interleaves on disk); what it does not do is multiplex turns. So run each concurrent worker on **its own domain** (`SubAgent` hands out a session per profile name), or serialize `Search → … → Update` on one handle. `TestConcurrentWorkersOnTheirOwnDomains` and `TestConcurrentReadsDuringWrites` cover both halves: six workers × four rounds on six domains, each listing exactly its own turns, and reads that keep running while a `Dream` and a new round rewrite the scene.
+
 ### 6.2 During the turn: `AppendArchive(ArchiveInput)`
 
 The host records what happens while the turn runs, one call per record, into the turn
