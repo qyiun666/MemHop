@@ -383,4 +383,40 @@ func TestInterfaceIsolationHoldsOnTheIdAddressedPaths(t *testing.T) {
 	if scenes, err := beta.ListScenes(""); err != nil || len(scenes) != 1 {
 		t.Fatalf("beta sees another domain's scenes: %+v err %v", scenes, err)
 	}
+
+	// Merging is the one write that moves rows in bulk, so it is the worst place for a key from
+	// another domain to be accepted quietly: every record the survivor owns would be re-pointed
+	// and the swallowed scene tombstoned, all on ids the caller cannot even read back. The
+	// refusal has to be a refusal — a merge that finds nothing to move and answers "ok" would
+	// tell the host it corrected a memory it never touched.
+	alphaScene, err := alpha.ListScenes("")
+	if err != nil || len(alphaScene) != 1 {
+		t.Fatalf("alpha's own scene listing: %+v err %v", alphaScene, err)
+	}
+	betaScene, err := beta.ListScenes("")
+	if err != nil || len(betaScene) != 1 {
+		t.Fatalf("beta's own scene listing: %+v err %v", betaScene, err)
+	}
+	if err := beta.MergeScenes(betaScene[0].SceneID, []string{alphaScene[0].SceneID}); memhop.CodeOf(err) != memhop.ErrNotFound {
+		t.Fatalf("beta merged alpha's scene into its own: want ErrNotFound, got %v", err)
+	}
+	// The same call with the survivor already anchored to a project: the anchor decision returns
+	// early there without ever reading the secondary's record, so this is the shape where only
+	// the upfront "every named id is still a scene of this domain" gate stands between a merge
+	// that answers "ok" and one that did anything at all.
+	if _, err := beta.UpdateScene(betaScene[0].SceneID, memhop.ScenePatch{L3ID: &graph}); err != nil {
+		t.Fatalf("anchor beta's scene to the shared graph: %v", err)
+	}
+	if err := beta.MergeScenes(betaScene[0].SceneID, []string{alphaScene[0].SceneID}); memhop.CodeOf(err) != memhop.ErrNotFound {
+		t.Fatalf("an anchored survivor let a foreign scene id through the merge: want ErrNotFound, got %v", err)
+	}
+	if scenes, err := alpha.ListScenes(""); err != nil || len(scenes) != 1 {
+		t.Fatalf("the refused merge disturbed the domain that was only named: %+v err %v", scenes, err)
+	}
+	if scenes, err := beta.ListScenes(""); err != nil || len(scenes) != 1 {
+		t.Fatalf("the refused merge left the caller's domain with %d scenes: %+v err %v", len(scenes), scenes, err)
+	}
+	if still, err := alpha.SearchL4(memhop.L4Query{TopicID: &alphaTurn, Kind: &kind}); err != nil || len(still) != 2 {
+		t.Fatalf("the refused merge took the other domain's originals with it: %+v err %v", still, err)
+	}
 }
