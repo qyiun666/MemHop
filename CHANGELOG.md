@@ -183,6 +183,9 @@ README 的版本表与 git log。
 84. **验收清单第 2 条（L1「宿主可查、Dream 负责更新」）第一次在宿主面上被走通**（新用例 `test/api_interface_l1_test.go` / `TestInterfaceDreamBuildsTheAssociationLayer`；两份指南 L1 一节各补一句「这一整段在宿主层也被核过」并点名该用例；`AGENTS.md` 的离线面条数 37 → 38）：L1 此前的证据全在包内（`internal/l1_test.go` 那五条 + 衰减复合那条），宿主级的 `ListL1` 只出现在压实与重启两条用例里，等于「第 2 条」在 `go test ./test/` 这一半没有对应物。用例按宿主的读法一次问清：从没巩固过的域答 `[]`（不是 nil、不是错）→ 两条会话各收两轮 → 一趟 `Dream` 之后**一条会话一个节点**、`topic_ids` 正是该场景收口的那两轮、两条反复提到同一组关键词的会话**共享一条边**（这正是这层存在的理由，而一个边 id 能说的只有「这两个节点被判相关」）、`importance` 落在 1 减去本趟那一点点衰减上；再钉指南那句快照承诺：`DeleteTopic` 之后节点**仍列着那个已删话题**，下一次 `Dream` 才把清单重建掉——删完立刻去读会发现少了，是宿主对这份列表的错误预期。搭建中把一条断言按实测改准了一次：先写的是「刚同步的节点 `importance` 恰为 1」，实测 0.9999999611，因为同一趟巩固里 `l1_decay` 已经跑过一次（几毫秒的 dt），于是断言改成「贴着 1 且不超过 1」，这才是文档那句「从 1.0 起只降不升」的可核形式。**负例**：把 `BuildHyperedges` 那道调用摘掉 → 红在 `the first node names no edge: {… EdgeIDs:[] …}`，恢复即绿。行为一字未动。
 
 
+85. **「删一轮会带走它的计划树」此前只在包内断言过，宿主面的删除闭包补上两头**（新用例 `test/api_interface_delete_cascade_test.go`：`TestInterfaceDeleteTopicTakesThePlanTreeToo` 与 `TestInterfaceDeleteTopicTakesAFusedGroupsSubtree`；两份指南 §8 的 `DeleteTopic` 行同批改口）：`scene.DeleteCascade` 的注释与 `internal/l2_test.go` 都写着闭包含 L5 计划节点，而 §8 那行给宿主的说明只列了「子树 + L4 原文 + 索引」——正好漏掉第 6 条最关心的那句：计划树的键就是这一轮，删了轮不删树，留下的是一棵没人再能读到的孤树，而它此后每一趟都会被巩固扫一遍。宿主面此前也只验到「清单少一行」。现在按宿主看得见的两样东西验：一是 `DB.Stats()` 的可达记录数（那一轮交出 4 条内容 + 2 个计划节点，删除后必须至少回收 6 条），二是删除后 `SearchL4{TopicID}` 再也答不出任何一行；融合组那一例走完整路径（把压缩门限降到 2、四轮收口、一趟 `Dream` 出组）后删组，要求 `SceneContext` 里既没有组行也没有任何 depth>1 的成员行，且记录数确实下降。**两条负例各自红在被改的那一头**：摘掉 `DeletePlanNodesByIDs` 那一步 → `DeleteTopic reclaimed 5 records, want the 4 content records plus the 2 plan nodes`；把闭包截成只删点名的那个话题 → `a member of the deleted group is still listed: {TopicID:… Depth:2 …}`。行为一字未动，离线接口面 38 → 40 条。
+
+
 
 
 ## v1.6.5 — 2026-09-22 — MCP 面整体退役：对外只剩 Go module

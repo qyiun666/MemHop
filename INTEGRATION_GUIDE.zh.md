@@ -502,7 +502,7 @@ nodes, err := db.ListL1()   // []api.SceneNodeView —— 只读，没有写入�
 | `db.UpdateScene(sceneID, api.ScenePatch{Name, L3ID, Force}) (SceneSlot, error)` | 一次调用改标题（`Name`）/ 锚定到 L3 项目域（`L3ID`）/ 清除锚定（`L3ID: &""`）；未传的字段保持库里现值，**返回值就是写入后的场景**。什么都没改的 patch——空 patch，或给的就是现值——**什么都不追加**：文件是纯追加的，这条「不列举域就确认一次」的用法否则每看一次就占一次字节，重试同一份 patch 也一样 |
 | `db.RenameTopic(topicID, name) (TopicSlot, error)` | 话题上唯一由宿主写的标签：引擎不往里派生任何东西，所以巩固与合并都是绕着它改写记录。下一次 `Search` / `SceneContext` 立刻看得见，不等下一次巩固。空名拒——话题生来无名，`""` 是「没有名字」而不是一个名字；话题不存在是 `ErrNotFound`，也不会为它建一条；改成它已经带着的名字则什么都不写 |
 | `db.MergeScenes(primaryID, []secondaryIDs) error` | 场景合并 |
-| `db.DeleteTopic(topicID) error` | 删除话题子树 + 其 L4 原文 + 索引；子树即 `parent_id` 指向它的那批话题（记忆纠错） |
+| `db.DeleteTopic(topicID) error` | 删除话题子树 + 其 L4 原文 + 它的 L5 计划树 + 索引；子树即 `parent_id` 指向它的那批话题，所以删一个融合组会带走它所总结的每一轮，删一轮会把挂在那一轮上的整棵树一起带走（`TestInterfaceDeleteTopicTakesThePlanTreeToo`、`TestInterfaceDeleteTopicTakesAFusedGroupsSubtree`）（记忆纠错） |
 | `db.DeleteScene(sceneID) error` | 删除场景 + 全部话题/原文 + L1 节点；不存在返回 `ErrNotFound`（记忆纠错） |
 
 改名与锚定是同一次调用：`UpdateScene` 读一次场景、只覆盖你点名的字段、写回一次，
