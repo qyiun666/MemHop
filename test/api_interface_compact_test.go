@@ -257,3 +257,87 @@ func TestInterfaceCompactedCopyAnswersIdentically(t *testing.T) {
 	t.Logf("second pass on the same live set: %d -> %d bytes, %d records",
 		live.FileBytes, secondStats.FileBytes, secondStats.RecordCount)
 }
+
+// A compaction rewrites the log, so it is where a domain's memory of what it was working on
+// either survives or does not. The fixture is deliberately against the old rule: the first
+// conversation on the sub-agent domain has more turns, the second was touched last, and the
+// only correct answer is the one the domain used most recently — which is also the case a
+// restart already relies on, now proven across a rewrite of the file.
+func TestInterfaceCompactedFileResumesTheDomainLastInUse(t *testing.T) {
+	llm := newMockLLM(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "resume.meh")
+	m := openMockDB(t, path, llm.srv.URL)
+	primary, err := m.Primary()
+	if err != nil {
+		t.Fatalf("Primary: %v", err)
+	}
+	worker := mustSub(t, m, llm.srv.URL, "worker")
+
+	// Conversation A: three turns. Conversation B: one, written last.
+	var sceneA, sceneB string
+	for i := 0; i < 3; i++ {
+		res, err := worker.Search(memhop.SearchQuery{NewScene: i == 0})
+		if err != nil {
+			t.Fatalf("open conversation A: %v", err)
+		}
+		sceneA = res.Scene.SceneID
+		if _, err := worker.Update(memhop.TurnEnd{Input: "A 的第 " + string(rune('0'+i+1)) + " 轮", Output: "答", CreatedAt: time.Now().UnixMilli()}); err != nil {
+			t.Fatalf("close a turn on A: %v", err)
+		}
+	}
+	res, err := worker.Search(memhop.SearchQuery{NewScene: true})
+	if err != nil {
+		t.Fatalf("open conversation B: %v", err)
+	}
+	sceneB = res.Scene.SceneID
+	if _, err := worker.Update(memhop.TurnEnd{Input: "B 的唯一一轮", Output: "答", CreatedAt: time.Now().UnixMilli()}); err != nil {
+		t.Fatalf("close a turn on B: %v", err)
+	}
+
+	// Dead records to compact away, on the primary domain.
+	doomed := settleOneTurn(t, primary, "要被删掉的那段对话", "答")
+	if err := primary.DeleteScene(doomed); err != nil {
+		t.Fatalf("DeleteScene: %v", err)
+	}
+	before, err := m.Agents()
+	if err != nil || len(before) != 2 {
+		t.Fatalf("roster before the compaction = %+v err %v", before, err)
+	}
+
+	copyPath := filepath.Join(dir, "resumed.meh")
+	if err := m.CompactTo(copyPath); err != nil {
+		t.Fatalf("CompactTo: %v", err)
+	}
+	if err := m.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	reopened := openMockDB(t, copyPath, llm.srv.URL)
+	defer reopened.Close()
+
+	after, err := reopened.Agents()
+	if err != nil || len(after) != 2 {
+		t.Fatalf("roster on the compacted copy = %+v err %v", after, err)
+	}
+	for i := range after {
+		if after[i].ID != before[i].ID || after[i].Name != before[i].Name || after[i].Primary != before[i].Primary {
+			t.Fatalf("the compaction changed a domain's identity: %+v vs %+v", after[i], before[i])
+		}
+	}
+	subCopy, err := reopened.Agent(testLLM(llm.srv.URL), before[1].ID)
+	if err != nil {
+		t.Fatalf("Agent(%s) on the copy: %v", before[1].ID, err)
+	}
+	scenes, err := subCopy.ListScenes("")
+	if err != nil || len(scenes) != 2 {
+		t.Fatalf("the copied sub domain lists %+v err %v, want both conversations", scenes, err)
+	}
+	next, err := subCopy.Search(memhop.SearchQuery{})
+	if err != nil {
+		t.Fatalf("Search on the copied sub domain: %v", err)
+	}
+	if next.Scene.SceneID != sceneB {
+		t.Fatalf("the reopened domain resumed %s, want the conversation it touched last (%s, not the one with more turns: %s)",
+			next.Scene.SceneID, sceneB, sceneA)
+	}
+}

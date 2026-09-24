@@ -485,3 +485,93 @@ func mustScenes(t *testing.T, db *testDB) []memhop.SceneSlot {
 // ptr is the fixture for a patch field where "" and "unset" are different
 // things — which is exactly what ScenePatch encodes with a *string.
 func ptr[T any](v T) *T { return &v }
+
+// A merge retargets rows; it does not rewrite what they hold. Each swallowed turn keeps its
+// own distilled track, so the merged transcript reads as the turns it now owns — not as rows
+// whose keywords quietly emptied out and get re-distilled as something else later.
+func TestInterfaceMergeKeepsEachTurnsKeywordTrack(t *testing.T) {
+	llm := newMockLLM(t)
+	llmURL := llm.srv.URL
+	dbPath := filepath.Join(t.TempDir(), "merge_kw.meh")
+	db := newTestDB(t, openMockDB(t, dbPath, llmURL))
+	primary := openSession(t, db)
+	secondary := openSession(t, db)
+	openTurn(t, db, primary)
+	if _, err := turn(db.Session, "主场景的第一轮说了 mmap", "读路径零拷贝"); err != nil {
+		t.Fatalf("turn on the primary: %v", err)
+	}
+	openTurn(t, db, secondary)
+	if _, err := turn(db.Session, "被并场景的第一轮说了 crc", "帧内校验和"); err != nil {
+		t.Fatalf("turn on the secondary: %v", err)
+	}
+	before, err := db.SceneContext(secondary)
+	if err != nil || len(before.Topics) != 1 || len(before.Topics[0].Keywords) == 0 {
+		t.Fatalf("the secondary's turn before the merge = %+v err %v", before, err)
+	}
+	moved := before.Topics[0]
+
+	if err := db.MergeScenes(primary, []string{secondary}); err != nil {
+		t.Fatalf("MergeScenes: %v", err)
+	}
+	merged, err := db.SceneContext(primary)
+	if err != nil {
+		t.Fatalf("SceneContext after the merge: %v", err)
+	}
+	var got *memhop.SceneContextTopic
+	for i := range merged.Topics {
+		if merged.Topics[i].TopicID == moved.TopicID {
+			got = &merged.Topics[i]
+		}
+	}
+	if got == nil {
+		t.Fatalf("the swallowed turn is missing from the merged transcript: %+v", merged.Topics)
+	}
+	if strings.Join(got.Keywords, "|") != strings.Join(moved.Keywords, "|") {
+		t.Fatalf("the merge rewrote that turn's keyword track: %q -> %q", moved.Keywords, got.Keywords)
+	}
+	if got.UserTimestamp != moved.UserTimestamp || got.AgentTimestamp != moved.AgentTimestamp {
+		t.Fatalf("the merge moved the turn's own two bounds: %+v vs %+v", *got, moved)
+	}
+	// The scene that was swallowed is gone as a conversation: naming it on the pure read is
+	// a refusal, not an empty transcript — the difference matters to a host that lists scenes
+	// to decide whether a session still exists.
+	if _, err := db.SceneContext(secondary); memhop.CodeOf(err) != memhop.ErrNotFound {
+		t.Fatalf("reading the swallowed scene: want ErrNotFound, got %v", err)
+	}
+
+	// …and the check has to be repeated on a reopened file. Every read above is served from
+	// the domain's caches, which a merge re-points rather than rewrites: a claim about what
+	// the merge *wrote* is only testable once the records are the only source left.
+	path := dbPath
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	reopened := openMockDB(t, path, llmURL)
+	defer reopened.Close()
+	sub, err := reopened.Primary()
+	if err != nil {
+		t.Fatalf("Primary after reopen: %v", err)
+	}
+	afterReopen, err := sub.SceneContext(primary)
+	if err != nil {
+		t.Fatalf("SceneContext after reopen: %v", err)
+	}
+	if len(afterReopen.Topics) != len(merged.Topics) {
+		t.Fatalf("the reopened transcript has %d rows, the live one %d: %+v", len(afterReopen.Topics), len(merged.Topics), afterReopen.Topics)
+	}
+	for _, row := range afterReopen.Topics {
+		var live *memhop.SceneContextTopic
+		for i := range merged.Topics {
+			if merged.Topics[i].TopicID == row.TopicID {
+				live = &merged.Topics[i]
+			}
+		}
+		if live == nil {
+			t.Fatalf("a row vanished across the reopen: %+v", row)
+		}
+		if strings.Join(row.Keywords, "|") != strings.Join(live.Keywords, "|") || len(row.Keywords) == 0 {
+			t.Fatalf("the merged turn %s kept its keywords only in the cache: live=%q reopened=%q",
+				row.TopicID, live.Keywords, row.Keywords)
+		}
+	}
+}

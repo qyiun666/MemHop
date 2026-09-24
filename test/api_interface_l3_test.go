@@ -185,3 +185,45 @@ func TestInterfaceGraphRenameKeepsItsIdAndBothLabelsRoute(t *testing.T) {
 		t.Fatalf("the graph now holds %+v err %v, want the two original nodes plus the two labelled imports", nodes, err)
 	}
 }
+
+// A model inventing the far side of a relation is the ordinary failure on the tool path,
+// and so is a title that lives in another graph: the batch must say which item it could not
+// link instead of returning a success whose graph simply has no edge.
+func TestInterfaceImportReportsAnUnlinkableRelation(t *testing.T) {
+	db, _ := openTestDB(t)
+	res, err := db.ImportL3([]memhop.L3ImportItem{
+		{Title: "引擎", Domain: "memhop", NodeType: "concept", Content: "记忆库"},
+		{Title: "格式", Domain: "other-domain", NodeType: "concept", Content: "26 字节帧"},
+		{Title: "引擎", Domain: "memhop", NodeType: "concept", Content: "记忆库", Related: []memhop.L3Relation{
+			{Titles: []string{"格式", "根本不存在的标题"}, Kind: memhop.EdgeRelated},
+		}},
+	}, memhop.L3ImportSkip)
+	if err != nil {
+		t.Fatalf("ImportL3: %v", err)
+	}
+	if len(res.Errors) == 0 {
+		t.Fatalf("a batch whose relations named no reachable node reported no errors: %+v", res)
+	}
+	graphs := map[string]memhop.L3Graph{}
+	for _, id := range res.GraphIDs {
+		g, err := db.GetL3(id)
+		if err != nil {
+			t.Fatalf("GetL3(%s): %v", id, err)
+		}
+		graphs[id] = *g
+	}
+	if len(graphs) != 2 {
+		t.Fatalf("two domains imported into %d graphs, want one per domain: %+v", len(graphs), res.GraphIDs)
+	}
+	for id, g := range graphs {
+		for _, e := range g.Edges {
+			t.Fatalf("graph %s carries an edge %s built across domains or from an invented title: %+v", id, e.ID, e.NodeIDs)
+		}
+	}
+	// The nodes themselves landed: a refused link is not a refused batch.
+	for _, g := range graphs {
+		if len(g.Nodes) == 0 {
+			t.Fatalf("the batch that reported a bad link also stored no nodes: %+v", g)
+		}
+	}
+}
