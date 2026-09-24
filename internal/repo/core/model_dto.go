@@ -156,8 +156,8 @@ type L3Subgraph struct {
 // condition unset, which is safe because step ordinals start at 1.
 type L4Query struct {
 	Keyword string       `json:"keyword,omitempty"`  // case-insensitive substring of Content
-	Start   int64        `json:"start,omitempty"`    // created at or after (ms)
-	End     int64        `json:"end,omitempty"`      // created at or before (ms)
+	Start   int64        `json:"start,omitempty"`    // created at or after (ms); 0 leaves the bound unset, a wrong scale is refused
+	End     int64        `json:"end,omitempty"`      // created at or before (ms); same ruler as a write's CreatedAt
 	IDs     []string     `json:"ids,omitempty"`      // only these archive ids, 16-char hex
 	TopicID *string      `json:"topic_id,omitempty"` // only archives of this topic
 	Type    *ContentType `json:"type,omitempty"`     // only archives of this content type

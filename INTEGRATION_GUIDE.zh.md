@@ -443,7 +443,7 @@ L2↔L3 只有一条关系，握在场景手里：`SceneSlot.L3ID` 把一个会�
 ```go
 arcs, err := db.SearchL4(api.L4Query{
     Keyword: "关键词",        // 内容子串，忽略大小写
-    // Start: t0, End: t1,  // 时间范围（ms）
+    // Start: t0, End: t1,  // 时间范围（毫秒）；0 表示这一头不设界
     // IDs: []string{...},  // 按 ID
     // TopicID: &topicHex,  // 只查该主题的存档
     // NodeSeq: 2,              // 只取归因到该步骤或其任一子步的记录（须与 TopicID 同填）
@@ -451,6 +451,10 @@ arcs, err := db.SearchL4(api.L4Query{
     // Limit: 50,           // 保留该次定序末尾的 N 条（<=0 为全部）
 })
 ```
+
+`Start` 与 `End` 收的是毫秒，并且用的是与写入 `CreatedAt` 同一把尺子：秒级或微秒级的界限会被拒
+（`ErrInvalidQuery`），因为那种界从来不是它自己说的那个窗口——当 `Start` 时秒级值比任何戳都低，于是全都放进来；
+当 `End` 时又把所有记录都挡在外面。对宿主来说，一次难看的拒绝远好过一批需要怀疑的行。
 
 `ArchiveInput` 是写入侧的形状：`Kind`、`Seq`、`ContentType`、`Role`、`EventType`、`NodeSeq`、
 `CreatedAt`、`Content`——没有 `ID` 也没有 `TopicID`。一条记录属于哪一轮由库自持（是 `Search` 铸的

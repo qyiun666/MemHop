@@ -66,7 +66,7 @@
    由 `internal` 业务层决定），不调用 LLM。
 3. **原语必须有活调用方**：本层导出函数不得为"将来可能用到"预留；
    模式类参数必须
-   具名或结构化——L4 查询收为 `ArchiveQuery`（填了的字段之间 AND，含
+   具名或结构化——L4 查询收为 `ArchiveQuery`（填了的字段之间 AND，界由调用方验过单位，本层只比较，含
    `Kind`/`Limit`；`Limit` 在排序之后保留末尾 N 条，而顺序随 `TopicID` 给没给而不同（`compareArchives` 的两个比较器）；`Keyword` 两边 lowercase，与 L3
    节点过滤一致），
    L2 话题列举收为 `TopicListQuery`（`Depth` 上界，一个场景是唯一的一读——`ByScene` 那位

@@ -42,6 +42,15 @@ func (db *DB) SearchL4(agentID uint64, q L4Query) ([]core.ArchiveSlot, error) {
 	if q.Type != nil && !q.Type.Valid() {
 		return nil, common.NewError(common.ErrInvalidQuery, "unknown content type")
 	}
+	// The two time bounds compare against a record's own millisecond stamp, so the same
+	// units the write boundary refuses are refused here: a wrong-scale bound is never the
+	// window it names, which makes an answer from it something a host has to second-guess.
+	if err := content.CheckQueryBound("start", q.Start); err != nil {
+		return nil, err
+	}
+	if err := content.CheckQueryBound("end", q.End); err != nil {
+		return nil, err
+	}
 	rq := repo.ArchiveQuery{Keyword: q.Keyword, Start: q.Start, End: q.End, Type: q.Type,
 		Kind: q.Kind, Limit: q.Limit, Index: ac.L4}
 	if len(q.IDs) > 0 {

@@ -126,6 +126,8 @@ README 的版本表与 git log。
 
 59. **「`ErrAgentNotFound` 公开面上没有任何调用能产出它」这句被两批前的改动自己作废了，这轮清掉**（两份指南的错误码段 + `internal/common` 那条注释 + 可跑骨架里的新门）：`Agent(llm, id)` 正是宿主交回 agent id 的那个口子，id 从没注册过时它答的就是 3002——上一轮加门时改了入口段与 §9，却漏了远处这句相反的话。同时把两条新门写进 §11 那段可跑骨架：`lib.Agents()` 列名册、`lib.Agent(llm, db.AgentID())` 按 id 开回来，`llm` 因此从 `api.Open` 的实参提成了变量。这段才是宿主真正抄走的东西，而 `make check-guides` 只保证编得过、`TestGuideSkeleton` 才保证跑得起，两道现在都绿。核对方式：把两份指南、AGENTS、`internal/agent.md` 与门面注释里所有「id 不越门面 / 没有任何调用能产出该码」的句子逐条扫一遍，剩下的只有讲锁序与准入的那句（`contextFor` 校验注册表），它仍然对。本轮只动文档与注释，形状与生产代码一字未改。
 
+60. **读侧的时间界补上与写侧同一把尺子**（`internal/content` 抽出 `wrongScale` 一处判两段、`CheckQueryBound` 只管查询界，`internal/l4.go` 的 `SearchL4` 接上）：`AppendArchive`/`TurnEnd` 的 `CreatedAt` 早就拒秒级（1e9–1e11）与微秒级（>1e14），但 `SearchL4{Start, End}` 不拒——而这两条界是拿记录的毫秒戳去比的。错单位的界**从来不是它自己说的那个窗口**：`Start` 给秒级值比任何戳都低，于是整库都放行（实测那一次答回 4 行）；`End` 给秒级值又把所有记录挡在外面，宿主很容易把一次空读解成「那段时间没有记忆」。同一判据本仓已经用在两处（枚举过滤器一律拒未定义值、写边界拒错单位），这次补上第三条：错界以 `ErrInvalidQuery` 拒，文本里点名看到的是哪一档尺度；`0` 在查询里仍然是「不设界」（与写侧的「必填正数」不同形，所以两个函数分开：`checkTimestamp` 管写入，`CheckQueryBound` 管界，共用同一组常数与 `wrongScale`，判断只做一次）。新用例 `TestInterfaceL4TimeBoundsRefuseTheWrongUnit` 五种界各钉一条（含两端正确界的正向对照、小于秒级下限的相对值仍然放行）。**负例**＝摘掉那两次调用，秒级 `Start` 当场答回 4 行而不是拒绝。L4Query 两条字段的注释、两份指南的 L4 一节、AGENTS 的毫秒那条与三份包文档（`internal/content`、`internal`、`internal/repo` 各自那处判断的归属）同批改口。磁盘格式与公开面一字未动。
+
 ## v1.6.5 — 2026-09-22 — MCP 面整体退役：对外只剩 Go module
 
 1. **`cmd/memhop-mcp` 整包删除**（14 个文件 3109 行）：25 个工具、多租户 HTTP（SSE 与 streamable-http 双传输）、按 `/mcp/<tenant>` 建/取域的租户注册表、`--tenants` 白名单与锚定 db-dir 的读入口一起消失。仓库不再有 server 形态、不再有后台进程，对外只剩「以 Go module 使用 `api`」一种接入。

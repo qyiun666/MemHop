@@ -297,6 +297,9 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    事件侧不接受这两项：`content.Append` 一律写 `Kind=event` + `ContentText` +
    `Role=0`，宿主在事件上给的 `Role`/`ContentType`/`TopicID`/`IDHash`
    一律不被采信（`TestAppendEventCannotForgeContentFields`）。
+   同一写法管到读侧的过滤条件：`SearchL4` 在进数据层之前把 `Kind`/`Type` 的未定义值、`NodeSeq`
+   没带话题键、以及两条时间界的单位各拒一次（界用 `content.CheckQueryBound`，与写入同一个判断），
+   因为一个错单位的界答出来的行集不是宿主能核对的东西。
 6. **`UpdateScene` 是 `SceneName` 的唯一宿主写者**：场景记录只被 `OpenSceneTurn`
    读改写（它回填整条记录、只动计数），Dream 从不写场景记录，故改名不会被
    后续读取覆盖；建新场景时才写默认名 `session:<id>`（`scene` 私有的 `create`）。

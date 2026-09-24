@@ -103,11 +103,42 @@ const (
 	millisScaleCeil   = 100_000_000_000_000 // 1e14: 5138-11-16 read as milliseconds
 )
 
+// wrongScale names the unit a value looks like instead of milliseconds, or "" when the
+// value is inside the millisecond band. One judgement, both directions: what a write
+// refuses is what a query must refuse too: a bound in another unit is never the window it
+// names — as Start, seconds sit below every stamp and select everything, as End they sit
+// below every stamp and select nothing.
+func wrongScale(v int64) string {
+	switch {
+	case v >= secondsScaleFloor && v < secondsScaleCeil:
+		return "seconds"
+	case v > millisScaleCeil:
+		return "microseconds"
+	}
+	return ""
+}
+
+// CheckQueryBound validates one of SearchL4's time bounds. Zero means "unset" and passes;
+// otherwise the two impossible scales are refused with the same bands the write boundary
+// uses, so a wrong-unit bound comes back as an error instead of a result set the host has
+// to second-guess.
+func CheckQueryBound(field string, v int64) error {
+	if v == 0 {
+		return nil
+	}
+	if scale := wrongScale(v); scale != "" {
+		return common.NewError(common.ErrInvalidQuery,
+			fmt.Sprintf("%s %d is %s, not milliseconds since the epoch: these bounds compare against a record's own millisecond stamp, so a wrong-scale bound answers with everything on one end and nothing on the other, never with the window it names",
+				field, v, scale))
+	}
+	return nil
+}
+
 func checkTimestamp(v int64) error {
 	if v <= 0 {
 		return common.NewError(common.ErrInvalidQuery, "a positive timestamp is required")
 	}
-	if (v >= secondsScaleFloor && v < secondsScaleCeil) || v > millisScaleCeil {
+	if wrongScale(v) != "" {
 		return common.NewError(common.ErrInvalidQuery,
 			fmt.Sprintf("created_at %d is not milliseconds since the epoch: a seconds-scale stamp is swept by the retention window as soon as it is written, and a microsecond-scale one never expires", v))
 	}

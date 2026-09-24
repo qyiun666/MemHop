@@ -612,7 +612,7 @@ created (`SearchQuery.L3ID`) or later via `UpdateScene`, and
 ```go
 arcs, err := db.SearchL4(api.L4Query{
     Keyword: "keyword",          // case-insensitive substring of Content
-    // Start: t0, End: t1,       // created within [t0, t1] (ms)
+    // Start: t0, End: t1,       // created within [t0, t1] (ms); 0 leaves that bound unset
     // IDs: []string{...},       // by archive id (one id = one record)
     // TopicID: &topicHex,       // only this topic's archives
     // NodeSeq: 2,               // only records attributed to this step or any step under it
@@ -621,6 +621,12 @@ arcs, err := db.SearchL4(api.L4Query{
     // Limit: 50,                // keep the tail of the read's order (<=0: every match)
 })
 ```
+
+`Start` and `End` are milliseconds, and they are checked with the same ruler as a write's
+`CreatedAt`: a seconds-scale or microsecond-scale bound is refused (`ErrInvalidQuery`),
+because such a bound is never the window it names — as `Start`, seconds sit below every
+stamp and let everything through; as `End`, they exclude everything. A refusal is a worse
+looking answer than a wrong row set and a much better one for a host.
 
 `ArchiveInput` is what a write hands in: `Kind`, `Seq`, `ContentType`, `Role`, `EventType`,
 `NodeSeq`, `CreatedAt`, `Content` — and no `ID` or `TopicID`. Which turn a record belongs to is
