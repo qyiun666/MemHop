@@ -577,9 +577,9 @@ res, err := db.ImportL3([]api.L3ImportItem{{
 删除只有一个粒度：整图。
 `QueryL3Subgraph` 的 `edgeKinds` 只走点名的那几种边，空清单即不加这条约束；六个常量之外的
 边种类以 `ErrInvalidQuery` 拒绝——写侧本就拒收它，而滤出一个空子图会被宿主读成「这张图
-没有这种边」。
+没有这种边」。`TestSurfaceSubgraphKindFilterDecidesWhichHopsExist` 钉的是这条走法：起点上没有点名的那种边时，答案是起点自己一个节点，而不是整张分量。
 
-`QueryL3Subgraph` 的 `max_depth` 数的是从起点走几跳，**非正数即不设界**——走完整张可达分量。这跟本面上所有 `limit` 是同一条读法（`L3NodeQuery` 与 `L4Query` 的 `limit: 0` 都是「不封顶」），所以给模型写 schema 时零只有一条规则，不必一处写「一跳」、另一处写「全部」。环也安全：一个节点只访问一次，走到可达分量即停，不会绕圈（`TestQueryL3SubgraphDepth` 把 0 与「已经覆盖全图的那一档深度」逐字段比相等）。同一份结果在任何一个界上都是**自足**的：一条边只在它的成员全都落在这次走到的邻域里时才报，宿主不会拿到一条「说不清另一端是谁」的关系、被迫再跑一趟（跨过界的超边整条不报）。
+`QueryL3Subgraph` 的 `max_depth` 数的是从起点走几跳，**非正数即不设界**——走完整张可达分量。这跟本面上所有 `limit` 是同一条读法（`L3NodeQuery` 与 `L4Query` 的 `limit: 0` 都是「不封顶」），所以给模型写 schema 时零只有一条规则，不必一处写「一跳」、另一处写「全部」。环也安全：一个节点只访问一次，走到可达分量即停，不会绕圈（`TestQueryL3SubgraphDepth` 把 0 与「已经覆盖全图的那一档深度」逐字段比相等）。同一份结果在任何一个界上都是**自足**的：一条边只在它的成员全都落在这次走到的邻域里时才报，宿主不会拿到一条「说不清另一端是谁」的关系、被迫再跑一趟（跨过界的超边整条不报）。`TestSurfaceSubgraphDepthCountsHopsAndZeroMeansNoBound` 在三跳长的链上逐档问过去（1/2/3 跳各一档，99 与 −1 同为整个分量），闭包那一半的见证是 `TestInterfaceSubgraphEdgesNameOnlyNodesItReturns`。
 
 `QueryL3Nodes` 的条件之间是 **AND**（`IDs` / `Keyword` / `NodeType`），所以只填 `GraphID` 即列出该图全部节点，`Keyword` 忽略大小写——与 L4 的关键词一致。L3 的每一份读都按 id 升序返回（图里的节点、边，`ListL3` 的图槽），`Limit` 取的是这条确定顺序的前 N 个，所以同一个查询每次给出的都是同一份清单。`DeleteL3` 连节点带边整图删掉，再清掉本文件里每个域中指向它的场景锚点；改一个错事实走 `ImportL3` 的 `L3ImportMerge` 模式，不做节点级删除。
 

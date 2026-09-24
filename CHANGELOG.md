@@ -362,6 +362,7 @@ README 的版本表与 git log。
 149. **改名不许把已折叠的轮次送回 surface**（新增 `test/api_interface_rename_folded_test.go`；库行为一字未动）。读形状不报 `ParentID`，父只由 `ChildCount` 认出——所以 `RenameTopic` 这种整条记录重写若把 `depth`/父指向写坏，宿主侧只有两种可见症状：那条又出现在 surface（它的原文与取代它的组摘要并排），或父亲的 `ChildCount` 少一。用例把这两种都钉住，外加关键词轨不变与「关闭重开后名字还在」（只进缓存的改名重启即失效）。既有那两条改名测试各自覆盖了「名字可见」与「空名被拒」，这一格是空的。负例＝在 `topic.Name = name` 之后补一行 `topic.Depth = 1` → 红在自己的深度断言上（`moved a folded turn from depth 2 to 1`）。
 150. **子图的深度是跳数，零是不设界**（新增 `api/surface_l3_depth_test.go`；库行为一字未动）。`max_depth` 是宿主写工具 schema 时要填的那个数，此前只有散文没有断言：在三跳长的链上逐档问过去——1 跳恰好两个节点、2 跳三个、3 跳与 99 跳与 −1 跳都是整个分量（超限不是错误，负数与零同一条读法），从中段起一跳拿到左右两边（邻接不是导入顺序）。另一半钉的是答案可用性：每条交回的边只点名同一答案里也交回的节点，否则宿主会去查一个这次读取拒绝交出的 id。负例两枚：把 `depth < maxDepth` 改成 `<=` → 红在「1 跳走到 [a b c]」；把 `maxDepth <= 0` 改成 `< 0`（零读成一跳）→ 红在夹具前提「不是一条三跳链」，那正是形状守卫该在的位置。
 151. **边类型过滤决定的是能走哪些跳，不是列哪些边**（同一文件新增 `TestSurfaceSubgraphKindFilterDecidesWhichHopsExist`；库行为一字未动）。`edgeKinds` 有两种读法：只把这些边列出来（节点照旧全走到），或只沿这些边走。前者会把「到了却看不见怎么到的」孤儿节点交给宿主——它没法向模型解释那个节点为什么在答案里。链上交替盖 kind（a—b related、b—c dependency、c—d related），于是每种过滤都切在不同位置：从 a 只按 related 走到 {a,b}、只按 dependency 一步也走不出（{a}）、从 c 按 dependency 拿到 {b,c}、两种都放则整个分量。另钉交回的每条边 kind 都在请求内、且只点名同一答案里的节点。负例＝把邻接表那处 kind 判断短路成恒假（走所有边）→ 红在「from a by [related] reached [a b c d], want [a b]」。
+152. **指南给子图那三段承诺接上见证名**（两份 `INTEGRATION_GUIDE`；库与测试一字未动）。「`edgeKinds` 收窄的是走法而不是列出来的边」「非正 `max_depth` 即不设界」「交回的边只点名同一答案里的节点」这三句此前只有散文，宿主无从判断它们是否仍然成立；现在每句后面跟着能跑的用例名，而用例名由 `TestLivingDocsCiteTestsThatExist` 机械核——用例改名或删除即红，不会烂成一句指不到东西的引用。
 
 ## v1.6.5 — 2026-09-22 — MCP 面整体退役：对外只剩 Go module
 

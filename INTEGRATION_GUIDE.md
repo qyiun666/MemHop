@@ -785,7 +785,7 @@ Deletion has one granularity: the whole graph. `QueryL3Subgraph`'s `edgeKinds`
 narrows the walk to the kinds named and leaves the condition out when the list is
 empty; a kind outside the six constants is refused with `ErrInvalidQuery`, because
 the write boundary refuses to store one and an empty subgraph is the answer a host
-reads back as "this graph holds no such edges".
+reads back as "this graph holds no such edges". `TestSurfaceSubgraphKindFilterDecidesWhichHopsExist` pins that reading on a chain whose kinds alternate: a start carrying none of the named kinds answers with itself alone, not with the component.
 
 `QueryL3Subgraph`'s `max_depth` counts hops from the start node, and a non-positive
 value sets no bound — the walk answers with the whole reachable component. That is the
@@ -793,7 +793,7 @@ same reading every `limit` on this surface carries (`L3NodeQuery` and `L4Query` 
 `limit: 0` = no cap), so a tool schema writes one rule for zero, not two. Cyclic edges are
 safe: a node is visited once, so the walk stops at the component rather than spinning. The result is self-describing at every bound: an edge is reported only when
 all of its members are inside the neighbourhood the walk reached, so a host never gets a relation whose
-end it cannot name without a second call (a hyperedge crossing the bound is left out whole).
+end it cannot name without a second call (a hyperedge crossing the bound is left out whole). `TestSurfaceSubgraphDepthCountsHopsAndZeroMeansNoBound` walks a three-hop chain at every bound, and `TestInterfaceSubgraphEdgesNameOnlyNodesItReturns` is the witness for the closure half.
 
 `QueryL3Nodes` filters AND together (`IDs` / `Keyword` / `NodeType`), so naming
 only `GraphID` lists that graph's nodes and `Keyword` is case-insensitive — like
