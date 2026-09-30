@@ -368,6 +368,8 @@ README 的版本表与 git log。
 
 154. **agent.md 的接口面覆盖数对齐现状**（`internal/agent.md` 一处；库与测试一字未动）。「宿主面测试覆盖 25 个会话方法 + 7 个 `DB` 方法」停在 facade 注释门禁还数 32（25+7）的那一轮；公开面如今是 26+9（`api/surface_public_test.go` 逐名钉），逐名实测 `test/api_interface_*_test.go` 真盖住 26 个会话方法与 8 个 `DB` 方法——数法是对钉死的 35 个名字逐个查调用，唯一缺席的是 `IsClosed`（由 `api/surface_closed_test.go` 管），改数时把这半句也写上。
 
+155. **两个直接依赖的小版本跟进**（`go.mod`/`go.sum`：go-openai v1.42.0 → v1.43.0、golang.org/x/sys v0.47.0 → v0.48.0；xxhash v2.3.0 已是最新；库代码一字未动）。patch 级升级，动机是别把两个小版本攒到发版那天变成一次大跳。验证跑满：`go build ./...`、`go vet ./...`、`go test ./api/... ./internal/...` 与零额度的 `go test ./test/`（接口面走真 HTTP 客户端打到假服务器，升级动的正是传输层）全绿。
+
 ## v1.6.5 — 2026-09-22 — MCP 面整体退役：对外只剩 Go module
 
 1. **`cmd/memhop-mcp` 整包删除**（14 个文件 3109 行）：25 个工具、多租户 HTTP（SSE 与 streamable-http 双传输）、按 `/mcp/<tenant>` 建/取域的租户注册表、`--tenants` 白名单与锚定 db-dir 的读入口一起消失。仓库不再有 server 形态、不再有后台进程，对外只剩「以 Go module 使用 `api`」一种接入。
