@@ -119,8 +119,8 @@ func stripCodeBlocks(s string) string {
 	} else {
 		body = ""
 	}
-	if end := strings.LastIndex(body, "```"); end >= 0 {
-		body = body[:end]
+	if before, _, found := strings.CutLast(body, "```"); found {
+		body = before
 	}
 	return strings.TrimSpace(body)
 }

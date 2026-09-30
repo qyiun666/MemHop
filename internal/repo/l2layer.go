@@ -229,6 +229,8 @@ func TopicClosureL2(engine *core.StorageEngine, agentID uint64, root uint64) ([]
 		return nil, nil
 	}
 	closure := []uint64{root}
+	// Indexed loop, not range: closure grows as children append, and for-range
+	// captures the initial length, so the appended levels would never be visited.
 	for i := 0; i < len(closure); i++ {
 		closure = append(closure, children[closure[i]]...)
 	}

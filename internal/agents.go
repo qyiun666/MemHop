@@ -15,7 +15,8 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"fmt"
-	"sort"
+	"maps"
+	"slices"
 	"strings"
 	"time"
 
@@ -227,12 +228,7 @@ func (db *DB) Agents() ([]AgentInfo, error) {
 	}
 	out := make([]AgentInfo, 0, len(names)+1)
 	out = append(out, AgentInfo{AgentID: core.DefaultAgentID, Name: primary.Name, Primary: true})
-	ids := make([]uint64, 0, len(names))
-	for id := range names {
-		ids = append(ids, id)
-	}
-	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
-	for _, id := range ids {
+	for _, id := range slices.Sorted(maps.Keys(names)) {
 		out = append(out, AgentInfo{AgentID: id, Name: names[id]})
 	}
 	return out, nil

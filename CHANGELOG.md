@@ -370,6 +370,8 @@ README 的版本表与 git log。
 
 155. **两个直接依赖的小版本跟进**（`go.mod`/`go.sum`：go-openai v1.42.0 → v1.43.0、golang.org/x/sys v0.47.0 → v0.48.0；xxhash v2.3.0 已是最新；库代码一字未动）。patch 级升级，动机是别把两个小版本攒到发版那天变成一次大跳。验证跑满：`go build ./...`、`go vet ./...`、`go test ./api/... ./internal/...` 与零额度的 `go test ./test/`（接口面走真 HTTP 客户端打到假服务器，升级动的正是传输层）全绿。
 
+156. **Go 1.27 特性面复核：三处替换落地，一个「看似可现代化、实则承重」的循环钉进注释**（`internal/agents.go`、`internal/repo/l2layer.go`、`internal/cap/llmops/ops.go`；公开面与磁盘格式一字未动）。以「不再兼容旧版本」为前提先审遗留路径：快照旧版本在信封检查即 `ErrCorruption`、无解码死重，回退重扫同时是撕尾快照的恢复通道而非纯兼容代码；`FormatVersion` 本就是 `!=` 硬拒——无兼容死重可删，两者保留。特性面逐项判过：`encoding/json/v2` 转正但**不迁**——记录落盘字节保持 v1 形状，而 v1 已由 v2 支撑、性能收益免费拿到，发版前换编码路径是无语义收益的磁盘格式押注；泛型方法、结构体字面量字段选择器 key、函数类型推断扩展在仓内没有适用点（typed readers 的包级泛型已是正确形状）；Timer 通道无缓冲化无影响——唯一的 `time.After` 在重试 select 里每次新建通道，无复用。落地三处：`DB.Agents` 的 `sort.Slice` 换 `slices.Sorted(maps.Keys(names))`（与 `config.go`/`l3query.go`/`profile.go`/`sliceutil.go` 现有 5 处同一写法）；`stripCodeBlocks` 收尾围栏的 `LastIndex`+手工下标换 `strings.CutLast`；`TopicClosureL2` 的 BFS 循环加一行注释钉死它为什么必须是索引循环——**for-range 捕获循环开始时的切片长度，循环内 append 进来的孩子一层都看不到**（本机实验：range 之后 len 停在初值；换成 range 即静默漏掉整个子话题子树，正是「顺手现代化」会引入的无声错）。复核过的非缺陷顺手记一笔：id 升序契约由 `iterSnapshot` 内的 `slices.Sort` 守住（两处 `slices.Collect(maps.Keys(...))` 的排序住在同一个 helper 里）。验证：`gofmt -l` 净、`go build ./...`、`go vet ./...`、`go test ./api/... ./internal/... ./test/` 全绿，受影响的三包（internal/repo/llmops）真跑非缓存。
+
 ## v1.6.5 — 2026-09-22 — MCP 面整体退役：对外只剩 Go module
 
 1. **`cmd/memhop-mcp` 整包删除**（14 个文件 3109 行）：25 个工具、多租户 HTTP（SSE 与 streamable-http 双传输）、按 `/mcp/<tenant>` 建/取域的租户注册表、`--tenants` 白名单与锚定 db-dir 的读入口一起消失。仓库不再有 server 形态、不再有后台进程，对外只剩「以 Go module 使用 `api`」一种接入。
