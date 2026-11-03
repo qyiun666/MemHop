@@ -9,6 +9,7 @@ package internal
 
 import (
 	"net/http"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -398,6 +399,71 @@ func TestUpdateDistillsRenderedTranscript(t *testing.T) {
 	}
 }
 
+func TestUpdateDistillsEveryUtteranceAndPreservesTrackAfterReopen(t *testing.T) {
+	longKeyword := strings.Repeat("长条目", 100)
+	want := []string{"k01", "k02", "k03", "k04", "k05", "k06", "k07", "k08", "k09", "k10", "k11", "k12", longKeyword}
+	reply := `{"keywords":["k01","k02","k03","k04","k05","k06","k07","k08","k09","k10","k11","k12","` + longKeyword + `"]}`
+	srv, seen := recordingLLMServer(t, reply)
+	path := filepath.Join(t.TempDir(), "all-utterances.meh")
+	db, err := OpenDB(path, LlmConfig{APIURL: srv.URL, APIKey: "test", Model: "mock"},
+		DefaultMemHopDefaults, primaryProfile("primary"))
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	_, topicID := openTurn(t, db)
+	step, err := db.PlanNodeAdd(core.DefaultAgentID, 0, "补充原文")
+	if err != nil {
+		t.Fatalf("PlanNodeAdd: %v", err)
+	}
+	for _, slot := range []core.ArchiveSlot{
+		{Kind: core.KindUtterance, Role: core.RoleUser, NodeSeq: step, Content: "绑定步骤的补充追问", CreatedAt: 900},
+		{Kind: core.KindUtterance, Role: core.RoleAgent, Content: "未绑定步骤的补充回答", CreatedAt: 901},
+		{Kind: core.KindEvent, EventType: "tool_call", NodeSeq: step, Content: "事件不应进入关键词提炼", CreatedAt: 902},
+	} {
+		if _, err := db.AppendArchive(core.DefaultAgentID, slot); err != nil {
+			t.Fatalf("AppendArchive(%s): %v", slot.Content, err)
+		}
+	}
+	returned, err := db.Update(core.DefaultAgentID, core.TurnEnd{
+		Input: "轮末输入", Output: "轮末输出", CreatedAt: 1000,
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if !slices.Equal(returned.FusedKeywords, want) {
+		t.Fatalf("returned keywords = %q, want the full track", returned.FusedKeywords)
+	}
+	bodies := seen.snapshot()
+	if len(bodies) != 1 {
+		t.Fatalf("distillation sent %d requests, want 1", len(bodies))
+	}
+	for _, text := range []string{"绑定步骤的补充追问", "未绑定步骤的补充回答", "轮末输入", "轮末输出"} {
+		if !strings.Contains(bodies[0], text) {
+			t.Fatalf("distillation omitted %q: %s", text, bodies[0])
+		}
+	}
+	if strings.Contains(bodies[0], "事件不应进入关键词提炼") {
+		t.Fatalf("an event leaked into utterance distillation: %s", bodies[0])
+	}
+
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	db, err = OpenDB(path, LlmConfig{APIURL: srv.URL, APIKey: "test", Model: "mock"},
+		DefaultMemHopDefaults, primaryProfile("primary"))
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	topic, err := core.ReadTopicLenient(db.engine, core.DefaultAgentID, topicID)
+	if err != nil || topic == nil {
+		t.Fatalf("read topic after reopen: %+v, %v", topic, err)
+	}
+	if !slices.Equal(topic.FusedKeywords, want) {
+		t.Fatalf("keywords changed across reopen:\ngot  %q\nwant %q", topic.FusedKeywords, want)
+	}
+}
+
 // Consolidation is scheduled per scene once its surface passes the threshold,
 // and not below it (the scene is a host session, not an active-set slot).
 func TestConsolidateSceneThreshold(t *testing.T) {
@@ -675,5 +741,45 @@ func TestTwoClosesOfOneTurnKeepBothEndingsAndTheLastDialogue(t *testing.T) {
 	}
 	if len(endings) != 2 || !endings["suspended"] || !endings["done"] {
 		t.Fatalf("the turn's endings = %v, want both arms' outcomes kept apart", endings)
+	}
+}
+
+func TestUpdateSettlementReadsBackEquivalentAfterReopen(t *testing.T) {
+	srv := mockLLMServer(t, turnKeywords)
+	path := filepath.Join(t.TempDir(), "update-batch.meh")
+	db, err := OpenDB(path, LlmConfig{APIURL: srv.URL, APIKey: "test", Model: "mock"},
+		DefaultMemHopDefaults, primaryProfile("primary"))
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	_, topicID := openTurn(t, db)
+	topicHex := common.FormatHash(topicID)
+	for _, end := range []core.TurnEnd{
+		{Input: "first question", Output: "first answer", Outcome: "suspended", CreatedAt: 1000},
+		{Input: "revised question", Output: "revised answer", Outcome: "done", CreatedAt: 2000},
+	} {
+		if _, err := db.Update(core.DefaultAgentID, end); err != nil {
+			t.Fatalf("Update: %v", err)
+		}
+	}
+	before, err := db.SearchL4(core.DefaultAgentID, L4Query{TopicID: &topicHex})
+	if err != nil || len(before) != 4 {
+		t.Fatalf("read before reopen = %+v, %v; want two utterances and two outcomes", before, err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	db, err = OpenDB(path, LlmConfig{APIURL: srv.URL, APIKey: "test", Model: "mock"},
+		DefaultMemHopDefaults, primaryProfile("primary"))
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	after, err := db.SearchL4(core.DefaultAgentID, L4Query{TopicID: &topicHex})
+	if err != nil {
+		t.Fatalf("read after reopen: %v", err)
+	}
+	if !slices.Equal(before, after) {
+		t.Fatalf("settlement changed across reopen:\nbefore: %+v\nafter:  %+v", before, after)
 	}
 }

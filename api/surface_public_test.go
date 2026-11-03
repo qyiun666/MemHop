@@ -67,7 +67,7 @@ func TestSessionPublicSurface(t *testing.T) {
 		"SearchL4",
 		// the plan tree: written one step at a time — one step created or
 		// restated per call (parentSeq 0 opens the tree)
-		"PlanNodeAdd", "PlanNodeUpdate", "PlanState",
+		"PlanNodeAdd", "PlanNodeUpdate", "PlanState", "PlanActive",
 
 		// assembly/admin face — host code at session boundaries and management
 		// channels only, never an LLM tool
@@ -165,6 +165,7 @@ func TestTurnWritesCarryNoId(t *testing.T) {
 		"PlanNodeAdd":    2, // parentSeq and title
 		"PlanNodeUpdate": 1, // one PlanStep
 		"PlanState":      0, // nothing at all: the turn is the library's to know
+		"PlanActive":     0, // the same open turn, settled steps omitted
 	}
 	typ := reflect.TypeOf(&Session{})
 	for name, in := range want {

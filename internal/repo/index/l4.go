@@ -30,10 +30,10 @@ type l4Entry struct {
 	IDHash    uint64
 	Kind      core.ArchiveKind
 	CreatedAt int64
-	// NodeSeq is the plan step an event names, 0 for a record bound to none. The
+	// NodeSeq is the plan step a record names, 0 for a record bound to none. The
 	// plan's ordinal allocator reads it: the address (topic, ordinal) is shared by
-	// the step record and the events that name it, so a step may only be re-issued
-	// at an ordinal no surviving event still points at.
+	// the step record and the content that names it, so a step may only be re-issued
+	// at an ordinal no surviving record still points at.
 	NodeSeq uint32
 }
 

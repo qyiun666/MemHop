@@ -4,6 +4,7 @@
 package repo
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/qyiun666/MemHop/internal/common"
@@ -255,4 +256,70 @@ func TestDomainWideL4ReadOrdersByTimeAndKeepsNewest(t *testing.T) {
 	if len(older) != 3 || older[0].Seq != 1 || older[1].Seq != 2 || older[2].Seq != 3 {
 		t.Fatalf("a turn lost its slot order: %+v", older)
 	}
+}
+
+type recordBatchWriterSpy struct {
+	calls   int
+	entries int
+	err     error
+}
+
+func (s *recordBatchWriterSpy) WriteRecordBatch(records []core.RecordEntry) ([]uint64, error) {
+	s.calls++
+	s.entries = len(records)
+	return make([]uint64, len(records)), s.err
+}
+
+func TestAppendArchiveBatchL4UsesOneBatchAndMirrorsOnlySuccess(t *testing.T) {
+	newRecords := func() []core.ArchiveSlot {
+		return []core.ArchiveSlot{
+			{TopicID: 7, Seq: core.SeqUser, Kind: core.KindUtterance, Content: "a", CreatedAt: 1000},
+			{TopicID: 7, Seq: 3, Kind: core.KindEvent, Content: "b", CreatedAt: 1001},
+		}
+	}
+
+	t.Run("one call carries the whole batch", func(t *testing.T) {
+		writer := &recordBatchWriterSpy{}
+		idx := index.NewL4Index()
+		records := newRecords()
+		if err := AppendArchiveBatchL4(writer, core.DefaultAgentID, idx, records); err != nil {
+			t.Fatalf("AppendArchiveBatchL4: %v", err)
+		}
+		if writer.calls != 1 || writer.entries != 2 {
+			t.Fatalf("bottom writes = %d calls carrying %d entries, want one call with two", writer.calls, writer.entries)
+		}
+		for i, record := range records {
+			if want := core.HashContent(record.TopicID, record.Seq); record.IDHash != want {
+				t.Fatalf("record %d id = %d, want %d", i, record.IDHash, want)
+			}
+		}
+		if got := idx.AllIDs(7); len(got) != 2 {
+			t.Fatalf("successful batch mirrored %d records, want two", len(got))
+		}
+	})
+
+	t.Run("a failed batch leaves the mirror untouched", func(t *testing.T) {
+		writer := &recordBatchWriterSpy{err: errors.New("write failed")}
+		idx := index.NewL4Index()
+		if err := AppendArchiveBatchL4(writer, core.DefaultAgentID, idx, newRecords()); err == nil {
+			t.Fatal("the bottom write failure must be returned")
+		}
+		if writer.calls != 1 {
+			t.Fatalf("bottom writes = %d, want one", writer.calls)
+		}
+		if got := idx.AllIDs(7); len(got) != 0 {
+			t.Fatalf("failed batch changed the mirror: %v", got)
+		}
+	})
+
+	t.Run("single append reuses the batch primitive", func(t *testing.T) {
+		writer := &recordBatchWriterSpy{}
+		record := newRecords()[0]
+		if err := AppendArchiveL4(writer, core.DefaultAgentID, index.NewL4Index(), &record); err != nil {
+			t.Fatalf("AppendArchiveL4: %v", err)
+		}
+		if writer.calls != 1 || writer.entries != 1 {
+			t.Fatalf("single append = %d calls carrying %d entries, want one batch of one", writer.calls, writer.entries)
+		}
+	})
 }

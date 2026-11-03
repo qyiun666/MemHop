@@ -7,7 +7,7 @@
   （要重述的一步：归属话题 + 序号 + 状态 + 标题 + 摘要）。
 - 写步：`CreateNode`（发号并落一条节点记录）、`UpdateNode`（状态 + 节点自身字段）、
   `UpdateNodeSummaryLocked`（只填 Summary，绝不动 Status）。
-- 树构建：`BuildTree`/`Forest`/`ToNodeView`/`CountForest`，以及回填 `RollupTree`。
+- 树构建：`BuildTree`/`BuildActiveTree`/`Forest`/`ToNodeView`/`CountForest`，以及回填 `RollupTree`。
 - 本包只写计划节点记录：一棵树归属一个话题键，键的解析不在这里。
 
 ## 契约
@@ -16,7 +16,7 @@
 - `PlanStatus`/`PlanTree`/`Step`/`PlanNodeView` 的唯一定义处。
 - 一步由 (话题, `Seq`) 说清：`Seq` 是该话题内从 1 起发号的序号，`ParentSeq` 指
   它挂在谁下面、0 即根。发号在 `ac.Plans`，本包与调用方都不自备序号；`CreateNode` 交出
-  该轮幸存事件点名的最高序号作下限，所以序号可以跳号、不会被指着它的记录复用。
+  该轮幸存内容点名的最高序号作下限，所以序号可以跳号、不会被指着它的记录复用。
 - **一个步骤只能由 `CreateNode` 带出来**：父序号不在树上就拒，绝不补链。
 - `CreateNode` 第一件事是查父序号在不在树上，落记录前还要读一次那个地址：发号读的是缓存，
   而缓存只收解得开的记录，解不开的那条仍占着自己的地址，所以除「不存在」以外的任何一次读失败
@@ -47,5 +47,7 @@
   回填都不碰：`UpdateNode` 交来非空 Summary 就是把这个字段接管过去，标记随之清掉。它绝不改
   Status。
 - 节点排序只看 `Seq`，也就是创建顺序；父记录缺失的节点提升为根而不是丢弃。
+- `BuildActiveTree` 只保留 `in_progress`：终态节点省掉时，活跃子孙接到最近的活跃祖先，
+  没有活跃祖先就提升为根；`ParentSeq` 随可见父重写，两个计数只数可见结果。
 - 序号没有前缀形状可匹配，树的形状只由 `ParentSeq` 求闭包得出；除节点自身的
   `ParentSeq` 之外，本包不维护第二份指向某个步骤的引用。

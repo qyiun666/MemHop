@@ -45,7 +45,8 @@ const MaxUtterancePayload = 64 * 1024
 // and the derived id are the library's to assign, and Seq 0 means "allocate".
 //
 // The two kinds own the axes differently: an event names itself and carries no
-// speaker; an utterance has a speaker and a medium and no event name.
+// speaker; an utterance has a speaker and a medium and no event name. Either kind
+// may carry NodeSeq.
 func ValidateAppend(in core.ArchiveSlot) error {
 	if !in.Kind.Valid() {
 		return common.NewError(common.ErrInvalidQuery, "undefined content kind")
@@ -69,9 +70,6 @@ func ValidateAppend(in core.ArchiveSlot) error {
 	}
 	if in.EventType != "" {
 		return common.NewError(common.ErrInvalidQuery, "an utterance carries no EventType")
-	}
-	if in.NodeSeq != 0 {
-		return common.NewError(common.ErrInvalidQuery, "an utterance hangs on no plan node")
 	}
 	switch in.Role {
 	case core.RoleUser, core.RoleAgent, core.RoleSystem:
@@ -150,45 +148,51 @@ func checkTimestamp(v int64) error {
 	return nil
 }
 
-// Append is this package's only write path: it lands one entry on the topic's
-// content track and returns the slot it took. There is no id beyond (topic, Seq) —
-// the address is the position — and a replay of a turn rewrites the same slots.
-//
-// Field ownership: of the record a caller passes, Role, ContentType, EventType,
-// Content and CreatedAt are adopted verbatim; Kind is what the caller validated
-// against and IDHash follows from (topic, Seq). An event leaves Role 0 and
-// ContentType text — a thing that happened has no speaker and no medium.
-//
-// Seq 0 allocates above every slot the topic already holds, including the two
-// reserved for dialogue: events recorded while the turn runs must not push the
-// originals off Seq 1 and 2. A non-zero Seq writes that slot, and taking a slot
-// already held is an overwrite rather than an error — that is what makes a
-// replayed turn converge — and it reaches across Kind: naming a slot an event
-// holds replaces the event.
+// Append writes one entry through AppendBatch and returns the slot it took.
 func Append(ac *domain.Context, agentID, topicID uint64, in core.ArchiveSlot) (uint64, error) {
-	if err := ValidateAppend(in); err != nil {
+	seqs, err := AppendBatch(ac, agentID, topicID, []core.ArchiveSlot{in})
+	if err != nil {
 		return 0, err
 	}
-	seq := in.Seq
-	if seq == 0 {
-		seq = max(ac.L4.MaxSeq(topicID), core.LastUtteranceSeq) + 1
-		// The offered slot comes from a mirror whose rebuild skips records it cannot
-		// decode, so the slot can still be held by one — its ordinal lives on in the
-		// derived id. Read that address before taking it. A named Seq is unchecked on
-		// purpose: overwriting the slot a caller points at is this path's replay
-		// contract.
-		if _, err := core.ReadArchiveSlot(ac.Engine, agentID, core.HashContent(topicID, seq)); err != nil && common.CodeOf(err) != common.ErrNotFound {
-			return 0, common.NewError(common.CodeOf(err), "read the slot the content mirror offered", err)
+	return seqs[0], nil
+}
+
+// AppendBatch validates and prepares a whole content batch before one repo write.
+// The caller retains ownership of Role, ContentType, EventType, Content and
+// CreatedAt; TopicID and IDHash are assigned here, and events carry no speaker
+// or medium. Automatic Seq values are consecutive within the batch. Each offered
+// address is read before the batch writes because a malformed record can occupy
+// an address absent from the mirror. A caller-named Seq remains an overwrite.
+func AppendBatch(ac *domain.Context, agentID, topicID uint64, records []core.ArchiveSlot) ([]uint64, error) {
+	for _, in := range records {
+		if err := ValidateAppend(in); err != nil {
+			return nil, err
 		}
 	}
-	in.TopicID, in.Seq = topicID, seq
-	if in.Kind == core.KindEvent {
-		in.Role, in.ContentType = 0, core.ContentText
+	prepared := make([]core.ArchiveSlot, len(records))
+	seqs := make([]uint64, len(records))
+	next := max(ac.L4.MaxSeq(topicID), core.LastUtteranceSeq) + 1
+	for i, in := range records {
+		seq := in.Seq
+		if seq == 0 {
+			seq = next
+			next++
+			if _, err := core.ReadArchiveSlot(ac.Engine, agentID, core.HashContent(topicID, seq)); err != nil && common.CodeOf(err) != common.ErrNotFound {
+				return nil, common.NewError(common.CodeOf(err), "read the slot the content mirror offered", err)
+			}
+		} else if seq >= next {
+			next = seq + 1
+		}
+		in.TopicID, in.Seq = topicID, seq
+		if in.Kind == core.KindEvent {
+			in.Role, in.ContentType = 0, core.ContentText
+		}
+		prepared[i], seqs[i] = in, seq
 	}
-	if err := repo.AppendArchiveL4(ac.Engine, agentID, ac.L4, &in); err != nil {
-		return 0, err
+	if err := repo.AppendArchiveBatchL4(ac.Engine, agentID, ac.L4, prepared); err != nil {
+		return nil, err
 	}
-	return seq, nil
+	return seqs, nil
 }
 
 // Read loads one topic's content of one kind, Seq ascending, through the domain's

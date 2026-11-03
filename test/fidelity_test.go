@@ -108,6 +108,10 @@ func surfaceKeywords(res *memhop.SearchResult) []string {
 // finished turn faithfully carry that turn's meaning — the keywords ARE the
 // host's context, so this is the quality bar of the whole design.
 func TestKeywordFidelity(t *testing.T) {
+	cfg := &internal.MemHopConfig{}
+	if err := testsupport.LoadLLMConfig(cfg); err != nil {
+		t.Skipf("keyword fidelity LLM not configured: %v", err)
+	}
 	db := testsupport.OpenMemHop(t)
 	defer db.Close()
 	judge := newJudge(t)
@@ -155,8 +159,8 @@ func TestKeywordFidelity(t *testing.T) {
 		t.Logf("case[%d] faithful=%v kws=%v reason=%s", i, v.Faithful, kws, v.Reason)
 	}
 	t.Logf("keyword fidelity: %d/%d faithful", faithful, total)
-	if faithful == 0 {
-		t.Fatalf("keywords failed to capture source meaning for all %d cases", total)
+	if faithful != total {
+		t.Fatalf("keyword fidelity smoke: %d/%d faithful, want all %d", faithful, total, total)
 	}
 }
 

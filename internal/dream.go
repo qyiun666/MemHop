@@ -81,8 +81,8 @@ func (db *DB) RunDream(ctx context.Context, agentID uint64, sceneID uint64) (*Dr
 // caller (the close-time consolidation check) returns immediately instead of
 // blocking on the LLM-heavy pipeline. The goroutine acquires the domain lock
 // itself and exits when RunDream returns or the DB is closed; the per-agent
-// in-flight set prevents stacking multiple Dreams for the same scene. Failures
-// are logged and never fail the caller. RunDream runs under the agent's
+// in-flight set prevents stacking multiple Dreams for the same scene. Completion
+// summaries and failures are logged and never fail the caller. RunDream runs under the agent's
 // opCtx, cancelled at Close so a pending Dream never blocks shutdown on
 // LLM calls. Caller must hold ac.Mu.
 func (db *DB) triggerSceneDream(ac *domain.Context, sceneID uint64) {
@@ -97,7 +97,22 @@ func (db *DB) triggerSceneDream(ac *domain.Context, sceneID uint64) {
 			delete(ac.DreamInFlight, sceneID)
 			ac.Mu.Unlock()
 		}()
-		if _, err := db.RunDream(ac.OpCtx, ac.ID, sceneID); err != nil {
+		start := time.Now()
+		rep, err := db.RunDream(ac.OpCtx, ac.ID, sceneID)
+		if err == nil {
+			slog.Info("dream: trigger completed",
+				"agent", common.FormatHash(ac.ID), "scene", common.FormatHash(sceneID),
+				"duration_ms", time.Since(start).Milliseconds(),
+				"consolidated_scenes", rep.ConsolidatedScenes,
+				"l2_topics_compressed", rep.L2TopicsCompressed,
+				"l4_records_pruned", rep.L4RecordsPruned,
+				"l5_nodes_pruned", rep.L5NodesPruned,
+				"l1_nodes_added", rep.L1NodesAdded,
+				"l1_edges_added", rep.L1EdgesAdded,
+				"l1_nodes_removed", rep.L1NodesRemoved,
+				"l1_edges_removed", rep.L1EdgesRemoved,
+				"l0_updated", rep.L0Updated)
+		} else {
 			// Two answers mean the host stopped asking: the database is closed, or this pass was
 			// cancelled by that close. Neither is a consolidation that went wrong — the memory simply
 			// was not consolidated before the file was handed back, which is what closing means — and

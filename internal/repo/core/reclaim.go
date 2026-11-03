@@ -78,19 +78,16 @@ func (e *StorageEngine) writeNullSnapshotHeader() error {
 // Compact creates a new file at newPath containing only live records,
 // preserving each record's agent domain; the new engine serializes its own
 // record index.
-func (e *StorageEngine) Compact(newPath string) error {
+func (e *StorageEngine) Compact(newPath string) (err error) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	newEng, err := Create(newPath)
 	if err != nil {
 		return err
 	}
-	needsCleanup := true
 	defer func() {
-		if needsCleanup {
-			UnmapFile(newEng.mmap)
-			unlockFile(newEng.file)
-			newEng.file.Close()
+		if cleanupErr := newEng.shutdownHandles(); err == nil {
+			err = cleanupErr
 		}
 	}()
 	// Compact's cost is the flush and the remap each write does, so the copy runs
@@ -135,10 +132,5 @@ func (e *StorageEngine) Compact(newPath string) error {
 		return err
 	}
 	// Checkpoint synced data; release fd, lock and mmap without another snapshot.
-	needsCleanup = false
-	UnmapFile(newEng.mmap)
-	if err := unlockFile(newEng.file); err != nil {
-		return err
-	}
-	return newEng.file.Close()
+	return nil
 }

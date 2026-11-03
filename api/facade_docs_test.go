@@ -51,8 +51,8 @@ func TestEveryFacadeMethodIsDocumented(t *testing.T) {
 			}
 		}
 	}
-	if checked != 35 {
-		t.Fatalf("documented-method walk covered %d methods, want the 35 the facade publishes (26 Session + 9 DB)", checked)
+	if checked != 36 {
+		t.Fatalf("documented-method walk covered %d methods, want the 36 the facade publishes (27 Session + 9 DB)", checked)
 	}
 }
 

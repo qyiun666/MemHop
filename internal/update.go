@@ -57,15 +57,8 @@ func (db *DB) Update(agentID uint64, end core.TurnEnd) (*core.TopicSlot, error) 
 		return nil, common.NewError(common.ErrInvalidQuery,
 			"a turn closes with an input, an output or an outcome")
 	}
-	for _, in := range records {
-		if err := content.ValidateAppend(in); err != nil {
-			return nil, err
-		}
-	}
-	for _, in := range records {
-		if _, err := content.Append(ac, agentID, ac.Turn, in); err != nil {
-			return nil, err
-		}
+	if _, err := content.AppendBatch(ac, agentID, ac.Turn, records); err != nil {
+		return nil, err
 	}
 	return db.settleLocked(ac, agentID, ac.Scene, ac.Turn)
 }

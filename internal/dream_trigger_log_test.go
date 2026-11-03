@@ -6,6 +6,7 @@ package internal
 import (
 	"bytes"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -18,10 +19,44 @@ import (
 // A pass scheduled by a round close can lose the race with the host handing the file back, and the
 // two answers that mean "the host stopped asking" are ErrClosed and ErrCancelled. Warning about
 // those would put a line in every clean exit — and a warning that appears on every exit is a
-// warning nobody reads. A failure the pipeline actually hit still has to reach the log, so this
-// pins both halves: the silent ones and the loud one.
-func TestScheduledPassLogsOnlyRealFailures(t *testing.T) {
+// warning nobody reads. A failure the pipeline actually hit still has to reach the log, while a
+// completed pass leaves one summary, so this pins all three outcomes.
+func TestScheduledDreamPassLogsSuccessAndOnlyRealFailures(t *testing.T) {
 	srv := slowLLMServer(t, 0, `{"keywords":[]}`)
+
+	t.Run("a successful pass writes one completion summary", func(t *testing.T) {
+		db := newSearchTestDB(t, srv.URL)
+		ac, err := db.contextFor(core.DefaultAgentID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := db.Search(core.DefaultAgentID, SearchQuery{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		sceneID := result.Scene.SceneID
+		logged := captureDreamLogs(t)
+		ac.Mu.Lock()
+		db.triggerSceneDream(ac, sceneID)
+		ac.Mu.Unlock()
+		waitForPass(t, ac, sceneID)
+		got := logged()
+		if strings.Count(got, "msg=\"dream: trigger completed\"") != 1 {
+			t.Fatalf("successful pass completion summaries = %q, want exactly one", got)
+		}
+		for _, field := range []string{
+			"level=INFO",
+			"agent=" + common.FormatHash(core.DefaultAgentID),
+			"scene=" + common.FormatHash(sceneID),
+			"duration_ms=", "consolidated_scenes=0", "l2_topics_compressed=0",
+			"l4_records_pruned=0", "l5_nodes_pruned=0", "l1_nodes_added=0",
+			"l1_edges_added=0", "l1_nodes_removed=0", "l1_edges_removed=0", "l0_updated=false",
+		} {
+			if !strings.Contains(got, field) {
+				t.Errorf("completion summary lacks %q: %s", field, got)
+			}
+		}
+	})
 
 	t.Run("a pass that arrives after the close stays quiet", func(t *testing.T) {
 		db := newSearchTestDB(t, srv.URL)
@@ -30,7 +65,7 @@ func TestScheduledPassLogsOnlyRealFailures(t *testing.T) {
 			t.Fatal(err)
 		}
 		sceneID := common.HashID("scene-never-consolidated")
-		logged := captureWarnings(t)
+		logged := captureDreamLogs(t)
 		if err := db.Close(); err != nil {
 			t.Fatal(err)
 		}
@@ -64,26 +99,30 @@ func TestScheduledPassLogsOnlyRealFailures(t *testing.T) {
 			t.Fatalf("a pass over a scene that does not exist answers %v (code %d), want ErrNotFound — "+
 				"the warning arm below is untestable until that holds", err, common.CodeOf(err))
 		}
-		logged := captureWarnings(t)
+		logged := captureDreamLogs(t)
 		ac.Mu.Lock()
 		db.triggerSceneDream(ac, foreign)
 		ac.Mu.Unlock()
 		waitForPass(t, ac, foreign)
-		if got := logged(); got == "" {
-			t.Fatal("the trigger swallowed a refused consolidation: the pipeline failed and nothing was reported")
+		got := logged()
+		if strings.Count(got, "level=WARN") != 1 || strings.Count(got, "msg=\"dream: trigger failed\"") != 1 {
+			t.Fatalf("refused pass warnings = %q, want exactly one trigger failure", got)
+		}
+		if strings.Contains(got, "dream: trigger completed") {
+			t.Fatalf("refused pass also logged a success: %s", got)
 		}
 	})
 }
 
-// captureWarnings points the default logger at a buffer for the duration of the test and returns a
-// reader of what landed there at warn level or above.
-func captureWarnings(t *testing.T) func() string {
+// captureDreamLogs points the default logger at a buffer for the duration of the test and returns
+// a synchronized reader of every info or warning record written by the background pass.
+func captureDreamLogs(t *testing.T) func() string {
 	t.Helper()
 	var mu sync.Mutex
 	var buf bytes.Buffer
 	previous := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&writer{mu: &mu, buf: &buf}, &slog.HandlerOptions{
-		Level: slog.LevelWarn,
+		Level: slog.LevelInfo,
 	})))
 	t.Cleanup(func() { slog.SetDefault(previous) })
 	return func() string {

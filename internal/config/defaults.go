@@ -21,7 +21,9 @@ import (
 // so Validate refuses the values it cannot honour before the file is ever touched.
 type MemHopDefaults struct {
 	// SceneDreamTopicThreshold is how many depth-1 topics one scene may
-	// accumulate before its Dream is scheduled. Negative disables the trigger.
+	// accumulate before its Dream is scheduled. Search also returns at most this
+	// many latest depth-1 topics when it is positive. Negative disables both the
+	// trigger and the Search cap; omitted Search topics remain stored and readable.
 	SceneDreamTopicThreshold int `json:"scene_dream_topic_threshold"`
 	// DreamCompressMinTopics is the smallest depth-1 topic count a Dream pass
 	// compresses; below it a scene keeps raw detail. It is also the target the model

@@ -22,8 +22,8 @@ import (
 // the step, and the refused append consumes no ordinal.
 //
 // The second file checks the same rule from the other end: a step the retention sweep took
-// away is no longer on the tree either, and the event may not reach back to it. The rule is
-// tree membership, not "was ever created".
+// away is no longer on the tree either, and neither kind of content may reach back to it. The
+// rule is tree membership, not "was ever created".
 func TestInterfaceAnEventMayOnlyNameAStepOnTheTree(t *testing.T) {
 	llm := newMockLLM(t)
 	path := filepath.Join(t.TempDir(), "attribution.meh")
@@ -73,7 +73,7 @@ func TestInterfaceAnEventMayOnlyNameAStepOnTheTree(t *testing.T) {
 	}
 }
 
-func TestInterfaceAnEventMayNotNameAStepTheSweepTook(t *testing.T) {
+func TestInterfaceContentMayNotNameAStepTheSweepTook(t *testing.T) {
 	llm := newMockLLM(t)
 	path := filepath.Join(t.TempDir(), "attribution_swept.meh")
 	m := openMockDB(t, path, llm.srv.URL, sweepOnly)
@@ -114,5 +114,113 @@ func TestInterfaceAnEventMayNotNameAStepTheSweepTook(t *testing.T) {
 	} else if memhop.CodeOf(err) != memhop.ErrInvalidQuery {
 		t.Fatalf("the refusal must stay the same one the missing step gets, got code %d (%v)",
 			memhop.CodeOf(err), err)
+	}
+	if _, err := sess.AppendArchive(memhop.ArchiveInput{Kind: memhop.KindUtterance,
+		ContentType: memhop.ContentText, Role: memhop.RoleUser, NodeSeq: step,
+		Content: "想回绑已清理步骤的对话", CreatedAt: time.Now().UnixMilli()}); memhop.CodeOf(err) != memhop.ErrInvalidQuery {
+		t.Fatalf("an utterance naming a swept step answered %v (code %d), want ErrInvalidQuery", err, memhop.CodeOf(err))
+	}
+}
+
+func TestInterfacePlanSubtreeReadsUtterancesAndEvents(t *testing.T) {
+	llm := newMockLLM(t)
+	m := openMockDB(t, filepath.Join(t.TempDir(), "content_attribution.meh"), llm.srv.URL)
+	sess, err := m.Primary()
+	if err != nil {
+		t.Fatalf("Primary: %v", err)
+	}
+	opened, err := sess.Search(memhop.SearchQuery{NewScene: true})
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	root, err := sess.PlanNodeAdd(0, "根步骤")
+	if err != nil {
+		t.Fatalf("PlanNodeAdd root: %v", err)
+	}
+	child, err := sess.PlanNodeAdd(root, "子步骤")
+	if err != nil {
+		t.Fatalf("PlanNodeAdd child: %v", err)
+	}
+	sibling, err := sess.PlanNodeAdd(0, "旁支")
+	if err != nil {
+		t.Fatalf("PlanNodeAdd sibling: %v", err)
+	}
+	stamp := time.Now().UnixMilli()
+	inputs := []memhop.ArchiveInput{
+		{Kind: memhop.KindUtterance, ContentType: memhop.ContentText, Role: memhop.RoleUser,
+			NodeSeq: root, Content: "根步骤里的追问", CreatedAt: stamp},
+		{Kind: memhop.KindUtterance, ContentType: memhop.ContentText, Role: memhop.RoleAgent,
+			NodeSeq: child, Content: "子步骤里的答复", CreatedAt: stamp + 1},
+		{Kind: memhop.KindEvent, ContentType: memhop.ContentText, EventType: "tool_call",
+			NodeSeq: child, Content: "读取配置", CreatedAt: stamp + 2},
+		{Kind: memhop.KindUtterance, ContentType: memhop.ContentText, Role: memhop.RoleUser,
+			NodeSeq: sibling, Content: "旁支对话", CreatedAt: stamp + 3},
+		{Kind: memhop.KindUtterance, ContentType: memhop.ContentText, Role: memhop.RoleUser,
+			Content: "未绑定对话", CreatedAt: stamp + 4},
+	}
+	for _, in := range inputs {
+		if _, err := sess.AppendArchive(in); err != nil {
+			t.Fatalf("AppendArchive %q: %v", in.Content, err)
+		}
+	}
+
+	got, err := sess.SearchL4(memhop.L4Query{TopicID: &opened.NewTopicID, NodeSeq: root})
+	if err != nil {
+		t.Fatalf("SearchL4 root: %v", err)
+	}
+	want := []string{"根步骤里的追问", "子步骤里的答复", "读取配置"}
+	if len(got) != len(want) {
+		t.Fatalf("root subtree returned %d records, want %d: %+v", len(got), len(want), got)
+	}
+	for i, content := range want {
+		if got[i].Content != content {
+			t.Errorf("root subtree record %d = %q, want %q", i, got[i].Content, content)
+		}
+	}
+	if got[0].Kind != memhop.KindUtterance || got[1].Kind != memhop.KindUtterance || got[2].Kind != memhop.KindEvent {
+		t.Errorf("the subtree did not preserve both content kinds: %+v", got)
+	}
+
+	got, err = sess.SearchL4(memhop.L4Query{TopicID: &opened.NewTopicID, NodeSeq: child})
+	if err != nil {
+		t.Fatalf("SearchL4 child: %v", err)
+	}
+	if len(got) != 2 || got[0].Content != "子步骤里的答复" || got[1].Content != "读取配置" {
+		t.Fatalf("child subtree = %+v, want its utterance and event", got)
+	}
+}
+
+func TestInterfaceAnUtteranceMayOnlyNameAStepOnTheTree(t *testing.T) {
+	llm := newMockLLM(t)
+	m := openMockDB(t, filepath.Join(t.TempDir(), "utterance_attribution.meh"), llm.srv.URL)
+	sess, err := m.Primary()
+	if err != nil {
+		t.Fatalf("Primary: %v", err)
+	}
+	if _, err := sess.Search(memhop.SearchQuery{NewScene: true}); err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	step, err := sess.PlanNodeAdd(0, "已有步骤")
+	if err != nil {
+		t.Fatalf("PlanNodeAdd: %v", err)
+	}
+	before, err := sess.AppendArchive(memhop.ArchiveInput{Kind: memhop.KindEvent,
+		ContentType: memhop.ContentText, EventType: "tool_call", Content: "前一条", CreatedAt: time.Now().UnixMilli()})
+	if err != nil {
+		t.Fatalf("AppendArchive control: %v", err)
+	}
+	_, err = sess.AppendArchive(memhop.ArchiveInput{Kind: memhop.KindUtterance,
+		ContentType: memhop.ContentText, Role: memhop.RoleUser, NodeSeq: step + 10,
+		Content: "指向不存在步骤的对话", CreatedAt: time.Now().UnixMilli()})
+	if memhop.CodeOf(err) != memhop.ErrInvalidQuery {
+		t.Fatalf("an utterance naming a missing step answered %v (code %d), want ErrInvalidQuery", err, memhop.CodeOf(err))
+	}
+	after, err := sess.AppendArchive(memhop.ArchiveInput{Kind: memhop.KindEvent,
+		ContentType: memhop.ContentText, EventType: "tool_call", Content: "后一条", CreatedAt: time.Now().UnixMilli()})
+	if err != nil {
+		t.Fatalf("AppendArchive after refusal: %v", err)
+	}
+	if after != before+1 {
+		t.Fatalf("the refused utterance consumed Seq: before=%d after=%d, want %d", before, after, before+1)
 	}
 }

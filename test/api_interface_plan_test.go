@@ -58,6 +58,15 @@ func mustPlanState(t *testing.T, db *testDB) memhop.PlanTree {
 	return *tree
 }
 
+func mustPlanActive(t *testing.T, db *testDB) memhop.PlanTree {
+	t.Helper()
+	tree, err := db.PlanActive()
+	if err != nil {
+		t.Fatalf("PlanActive: %v", err)
+	}
+	return *tree
+}
+
 // findPlanNode looks a library-issued step ordinal up in the forest.
 func findPlanNode(t *testing.T, tree memhop.PlanTree, seq uint32) memhop.PlanNodeView {
 	t.Helper()
@@ -121,6 +130,59 @@ func renderTree(t *testing.T, db *testDB) string {
 	}
 	walk(mustPlanState(t, db).Roots)
 	return b.String()
+}
+
+func TestInterfacePlanActiveTracksTheOpenSteps(t *testing.T) {
+	db, _ := openTestDB(t)
+	sceneID := openSession(t, db)
+	openTurn(t, db, sceneID)
+
+	root := mustCreate(t, db, 0, "已完成根")
+	child := mustCreate(t, db, root, "活跃子")
+	grandchild := mustCreate(t, db, child, "活跃孙")
+	failedRoot := mustCreate(t, db, 0, "失败根")
+	mustUpdate(t, db, root, memhop.PlanStatusDone, "")
+	mustUpdate(t, db, failedRoot, memhop.PlanStatusFailed, "")
+
+	if full := mustPlanState(t, db); full.TotalCount != 4 {
+		t.Fatalf("full plan = %+v, want all four steps", full)
+	}
+	active := mustPlanActive(t, db)
+	if active.TotalCount != 2 || active.DoneCount != 0 || len(active.Roots) != 1 {
+		t.Fatalf("active plan = %+v, want only the active child and grandchild", active)
+	}
+	branch := active.Roots[0]
+	if branch.Seq != child || branch.ParentSeq != 0 || len(branch.Children) != 1 ||
+		branch.Children[0].Seq != grandchild || branch.Children[0].ParentSeq != child {
+		t.Fatalf("active branch = %+v, want the child promoted with its grandchild attached", branch)
+	}
+
+	mustUpdate(t, db, child, memhop.PlanStatusDone, "")
+	active = mustPlanActive(t, db)
+	if active.TotalCount != 1 || len(active.Roots) != 1 ||
+		active.Roots[0].Seq != grandchild || active.Roots[0].ParentSeq != 0 {
+		t.Fatalf("active plan after closing the child = %+v, want the grandchild promoted", active)
+	}
+
+	newLeaf := mustCreate(t, db, grandchild, "动态追加")
+	active = mustPlanActive(t, db)
+	if got := findPlanNode(t, active, newLeaf); got.ParentSeq != grandchild || active.TotalCount != 2 {
+		t.Fatalf("active plan after append = %+v, want the new leaf under the grandchild", active)
+	}
+	mustUpdate(t, db, newLeaf, memhop.PlanStatusFailed, "")
+	active = mustPlanActive(t, db)
+	if active.TotalCount != 1 || len(findPlanNode(t, active, grandchild).Children) != 0 {
+		t.Fatalf("active plan after failing the new leaf = %+v, want only the grandchild", active)
+	}
+
+	mustUpdate(t, db, grandchild, memhop.PlanStatusDone, "")
+	active = mustPlanActive(t, db)
+	if active.Roots == nil || len(active.Roots) != 0 || active.TotalCount != 0 || active.DoneCount != 0 {
+		t.Fatalf("fully settled active plan = %+v, want a non-nil empty forest", active)
+	}
+	if full := mustPlanState(t, db); full.TotalCount != 5 {
+		t.Fatalf("full plan after active filtering = %+v, want all five steps retained", full)
+	}
 }
 
 // One turn is one plan, and the open turn is the only handle a write has: the tree

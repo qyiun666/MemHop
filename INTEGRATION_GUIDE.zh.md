@@ -1,7 +1,7 @@
 # MemHop 宿主集成指南（Go API 方式）
 
 > 面向直接以 **Go module 内嵌**方式集成 MemHop 的宿主程序。
-> 适用版本：**v1.6.6**。模块路径 `github.com/qyiun666/MemHop`，只允许 import `api` 包。
+> 适用版本：**v1.6.7**。模块路径 `github.com/qyiun666/MemHop`，只允许 import `api` 包。
 
 > 本指南描述的就是当前的面：`api.Open` → `api.DB`，域以句柄持有（`Primary` /
 > `SubAgent` / `Agent`，第三条收的是 `Session.AgentID` 交出的 id，宿主只原样回传），
@@ -85,7 +85,7 @@ import "github.com/qyiun666/MemHop/api"
 
 | 字段 | 默认 | 含义 |
 |---|---|---|
-| SceneDreamTopicThreshold | 24 | 某场景 depth-1 话题数超过该值时，`Update` 后台调度该场景 Dream；填负数才是禁用触发。被拒的那趟什么都不改，计数于是仍然超阈，下一趟就会再问一次——每次收轮都检查一遍，而上界是每场景每趟一次巩固调用——同一场景有 Dream 在飞时，中间那几次收轮不叠加询问（`TestDeclinedConsolidationAsksOncePerScenePerPass`）。另一头的闸门量到了，但它收不住这条花费：`DreamCompressMinTopics` 确实判在**问模型之前**，低于它的场景零调用——可默认 20 本来就低于触发的 24，而模型一直不回合并时每收一轮表层还多一行，所以抬那道闸是**延后**这些询问而不是取消它们（它同时是提示词里让模型收敛到的目标数，动它等于改巩固的激进度）。真要收住只有一条路：本项写负数，按你自己的节奏驱动 `Dream`。 |
+| SceneDreamTopicThreshold | 24 | 某场景 depth-1 话题数超过该值时，`Update` 后台调度该场景 Dream。正数同时是 `Search` 的硬上限：只返回最新 N 个 depth-1 话题，并由 `OmittedTopicCount` 报告省略的旧话题数，Dream 正常、缓慢/在途或失败都不影响这道边界。填负数同时禁用自动触发与 Search 上限。省略不是删除：`SceneContext` 仍返回完整 depth≤2 转录，L4 原文也仍在。被拒的那趟什么都不改，计数于是仍然超阈，下一趟就会再问一次——每次收轮都检查一遍，而上界是每场景每趟一次巩固调用——同一场景有 Dream 在飞时，中间那几次收轮不叠加询问（`TestDeclinedConsolidationAsksOncePerScenePerPass`）。另一头的闸门量到了，但它收不住这条花费：`DreamCompressMinTopics` 确实判在**问模型之前**，低于它的场景零调用——可默认 20 本来就低于触发的 24，而模型一直不回合并时每收一轮表层还多一行，所以抬那道闸是**延后**这些询问而不是取消它们（它同时是提示词里让模型收敛到的目标数，动它等于改巩固的激进度）。真要收住 Dream 花费只有一条路：本项写负数，按你自己的节奏驱动 `Dream`。 |
 | DreamCompressMinTopics | 20 | 场景话题数达到该值才执行压缩。这个数同时是提示词里让模型「收敛到几个」的目标，所以负数（不设目标、让模型按自己的规则尽量合）是**更激进**的写法，不是更保守的 |
 | AgentIdleTTLMs | 3600000 | 某 agent 域空闲超过该毫秒数即从内存回收（下次访问按其记录重建）；负数 = 关闭回收。默认域与共享 L3 域永不回收。唯一重建不出来的是**开着的那一轮**：中途被回收的那个轮次，其剩余写入与收束一律被拒，直到宿主重开一轮——不会静默写到新轮上；代价是那一轮之前已写的记录留在一个从未沉淀的话题下，读面不再点名它。取值要长于你最长的一个轮次，或者干脆置负数关掉回收 |
 | ContentRetentionMs | 604800000（7 天） | 一轮的记录（L4 内容与 L5 计划节点）保留多久后被 Dream 清走；0（没填）取库默认，而负数以 `ErrConfig` 拒掉而不是折回默认——写负数的人要的是「永远不扫」，那是引擎不提供的。也没有「永不过期」的写法：清扫能表示的最长窗口是 9223372036854 ms（约 292 年），再长就把毫秒数乘过 `time.Duration` 的上限了，cutoff 会落到未来、域里每一条记录都被读成过期，`Open` 于是也拒掉。这个窗口量的是墙上时钟而不是轮数：钟比窗口还老的记录（一次回填、一份测试种子）会在第一次真跑起来的 Dream 里被扫掉，连被读到的机会都没有。**开着的一轮也不例外**——清扫读的是那条记录的钟，不是轮的状态；Dream 绝不做的是丢掉开着的那一轮，所以挂着的收束照样落得下（它自己写的两句是新钟，因此留下）。**L3 不是一轮的记录，任何窗口都够不到它**：知识图是文件级的公共池、带的是自己那口内容钟，扫空一个域的同一趟，工具调用要读的项目节点连同它的内容原样还在 |
@@ -190,7 +190,8 @@ res, err := db.Search(api.SearchQuery{
 | `Profile` | L0 画像快照（名字/角色/性格/情绪/MBTI/偏好） | 可拼入系统提示词 |
 | `ProfileBrief` | 画像的**有界**摘要：最多 6 行，每个自由文本字段截到 160 字、每条偏好的值截到 120 字（截过就以 `…` 结尾），偏好取**排序后最低的 5 条**（每次都是同样那 5 条），整段上界 2100 字 | 轻量按轮注入；需要时才拉完整 `Profile` |
 | `Scene` | 本轮读到的场景本体（含 `SceneID`/`SceneName`/`L3ID`） | 只供读侧与纠错侧——`SceneContext`、`UpdateScene`、`MergeScenes` 用它；写入路径不需要它，库自持当前场景 |
-| `Topics` | 该场景的 depth-1 话题集（按用户消息时间升序，每个带 `FusedKeywords`） | **拼进本次 LLM prompt 的记忆**；要看原文，用那一轮的话题 id 寻址 L4：`SearchL4(L4Query{TopicID})` |
+| `Topics` | 该场景的 depth-1 话题集（按用户消息时间升序，每个带 `FusedKeywords`）；超过正 `SceneDreamTopicThreshold` 时只保留最新 N 条 | **拼进本次 LLM prompt 的有界记忆**；要看原文，用那一轮的话题 id 寻址 L4：`SearchL4(L4Query{TopicID})` |
+| `OmittedTopicCount` | 正 Search 阈值省略了多少条较旧的 depth-1 话题；未省略或阈值为负时是 0 | 让宿主明确知道这是窗口而非全场景；完整 depth≤2 转录走 `SceneContext`，原文走 L4 |
 | `NewTopicID` | 这次读取为即将进行的这一轮开出的话题 | 这一轮内容的读/纠错键（`SearchL4{TopicID}`、`DeleteTopic`）；写入调用（`AppendArchive`、`Update`、计划族）**不**收它——库自持开着的这一轮 |
 
 未知 `SceneID` 返回 `ErrNotFound`（库不会替你新建一个你指名要读的场景）；`SceneID` 为空则续用该域当前场景，只有它一个场景都没有时才新建。`NewScene: true` 跳过这一切，直接开一个新场景。`SceneID` 与 `NewScene` 不能一起给：一个说接着哪段对话，一个说要另起一段，这一读直接拒（`ErrInvalidQuery`），而不是替宿主丢掉一个它以为自己生效了的开关。
@@ -215,7 +216,7 @@ seq, err := db.AppendArchive(api.ArchiveInput{
     Content:   userRawText,       // 必填
     CreatedAt: userTS,            // Unix 毫秒——秒级与微秒级那两段值一律拒
 })
-// 事件自己命名、不要说话者，并可挂在某个计划步骤上：
+// 事件自己命名、不要说话者；两种内容都可挂在某个计划步骤上：
 seq, err = db.AppendArchive(api.ArchiveInput{
     Kind:      api.KindEvent,
     EventType: "tool_call",       // 仅事件；自由字符串，库不做白名单校验
@@ -239,7 +240,7 @@ seq, err = db.AppendArchive(api.ArchiveInput{
 **之前**拒绝：未定义的 `Kind`、空 `Content`、`CreatedAt <= 0` 或落在秒级 / 微秒级那两段
 （单位是 Unix 毫秒：秒级的记录一落盘就老于保留窗，下一次巩固会把整轮转录扫走；微秒级的
 永不过期）、未定义的 `ContentType`、
-事件没有 `EventType`、原文带了 `EventType` 或 `NodeSeq`、事件的 `NodeSeq` 指向本轮计划
+事件没有 `EventType`、原文带了 `EventType`、任一内容的 `NodeSeq` 指向本轮计划
 从未建出的步骤（`ErrInvalidQuery`，且什么都不落库）、以及值 3 那个角色（融合摘要的标记，
 库自己盖）；超预算同样拒写不截断——事件整条 `MaxEventPayloadBytes`（4 KiB，名字与正文合计）、原文 `MaxUtterancePayloadBytes`（64 KiB），两个数由门面导出，宿主照着常量切自己那条记录，不必抄文档里的数字，被剪短的记录读回来和完整的
 无法区分。
@@ -289,7 +290,7 @@ rep, err := db.Dream(ctx, "")       // sceneID 传 "" = 遍历域内全部场景
 通常**不需要宿主调用**：某场景 depth-1 话题数超过 `Defaults.SceneDreamTopicThreshold`（默认 24）时，`Update` 会在后台调度该场景的巩固（同场景在途不重复调度）。
 
 执行 L2→L1→L0 压缩 / 衰减 / 画像蒸馏（多次 LLM 调用，耗时较长）——放后台 goroutine 或对话间隔执行。
-返回结构化 `*DreamReport` 供宿主观测：`L4RecordsPruned / L5NodesPruned / ConsolidatedScenes / L2TopicsCompressed / L1NodesAdded|Removed / L1EdgesAdded|Removed / L0Updated`，外加 `Stages []DreamStage{Name, Status, DurationMs}`（状态取值 `ok | skipped | cancelled | error`）。其中三个数容易被读错：`L2TopicsCompressed` 数的是**沉进融合组的话题**，不是组数；`L1NodesAdded` 数的是同步这一步**写过**的场景节点，含只因话题集变了而被回戳的既有节点，不只是新建的那些；`L1EdgesAdded` 数的是本轮新建**或抬权**的共现边。两个移除计数横跨「陈旧重建」与「衰减」两个阶段，并各自把它带走的边一并算进去。空报告表示无内容可巩固，不算错误；管线中途失败时部分填充的报告随错误一起返回。场景读回上下文的规模不是一条硬上限：depth-1 话题数越过 `SceneDreamTopicThreshold` 就调度该场景 Dream，Dream 只把 LLM 判定成一组的话题合并上去，没被选中的仍留在 depth-1。
+返回结构化 `*DreamReport` 供宿主观测：`L4RecordsPruned / L5NodesPruned / ConsolidatedScenes / L2TopicsCompressed / L1NodesAdded|Removed / L1EdgesAdded|Removed / L0Updated`，外加 `Stages []DreamStage{Name, Status, DurationMs}`（状态取值 `ok | skipped | cancelled | error`）。其中三个数容易被读错：`L2TopicsCompressed` 数的是**沉进融合组的话题**，不是组数；`L1NodesAdded` 数的是同步这一步**写过**的场景节点，含只因话题集变了而被回戳的既有节点，不只是新建的那些；`L1EdgesAdded` 数的是本轮新建**或抬权**的共现边。两个移除计数横跨「陈旧重建」与「衰减」两个阶段，并各自把它带走的边一并算进去。空报告表示无内容可巩固，不算错误；管线中途失败时部分填充的报告随错误一起返回。Dream 仍只把 LLM 判定成一组的话题合并上去，但 `Search` 的边界不依赖这次收敛：同一正阈值只返回最新 N 个 depth-1 话题并报告 `OmittedTopicCount`，Dream 缓慢或失败后也一样。被省略的记忆仍在盘上，可由 `SceneContext` 与 L4 取回。
 头两个就是保留窗清扫（清单里第 5、6 条那句「删除 7 天以上的」）：宿主事后补不出来——被删的记录已经不在了，而同一次巩固又写了别的记录，所以拿 `Stats` 前后相减分不出是谁干的。
 
 `Stages` 按这一趟实际跑的顺序交回，名字是一套封闭集（`dream-stage-order`）：
@@ -312,7 +313,7 @@ rep, err := db.Dream(ctx, "")       // sceneID 传 "" = 遍历域内全部场景
 | 决定起一轮 | `Search(SearchQuery{})`——什么都不填进去，回来时该场景的下一轮已开着 |
 | 跑它的各个分支（模型调用、工具调用、沙箱答复） | 值得留下的每一条事实一次 `AppendArchive`，写进开着的那一轮 |
 | 带一个状态词结束这一轮 | `Update(TurnEnd{Input, Output, Outcome, CreatedAt})`——三个文本字段各自可省、各写自己那条（定时触发的轮只给 `Output` 也行），一个都不给即拒 |
-| 一步一步计划这一轮 | `PlanNodeAdd` / `PlanNodeUpdate` / `PlanState`，全在开着的那一轮上 |
+| 一步一步计划这一轮 | `PlanNodeAdd` / `PlanNodeUpdate` / `PlanState` / `PlanActive`，全在开着的那一轮上 |
 | 睡觉（定时器也可能撞在轮还开着的时候） | `Dream`——它既不弄丢域自持着的那一轮，也不扫掉那一轮已经写下的记录 |
 
 `Outcome` 收的是内核对「哪条分支结束了这一轮」的自称：引擎原样存下、绝不按它分支——与一条
@@ -333,7 +334,7 @@ worker 属于哪一种由宿主定，库不替它猜。
 退出分支都算）。两者并不对称——内核带着工具调用一圈要召回好几次——所以对应关系是：开轮的
 那次读用 `Search`——挂在内核「每次调用一次」的那个钩子上，不要挂在召回上；中间每一次
 召回用 `SceneContext("")`（纯读，不点名、不吃轮次）；终点那一次收束用 `Update`。适配器手里只剩一个会话句柄和内核对「这轮怎么结束的」那个称呼。
-写入调用一个 id 也不收，宿主既不自己造一个、也不替库记着。唯一可能被宿主握住的是 `NewTopicID`——开轮那次读交回来的那个名字，而它只在两件事上需要：这一轮还没收就想读它自己的事件轨（`SearchL4{TopicID, Kind: event}`），或把它撤回（`DeleteTopic`）。计划树连这个都不必：`PlanState` 读的就是库替你开着的那一轮。轮中写进去的一条事件，在 `Update` 收掉这一轮之前就能按那个名字读到。这套安排的另一半才是「一轮里召回好几次」安全的根据：**没有收束的那一轮根本不出现在场景读里**。话题那一行是**收束时**由 `Update` 建的，开轮只铸 id 不建行，所以 `SceneContext("")` 列出的永远是已收束的那些轮——一个带工具调用的循环不会把自己写了一半的这一轮再喂回模型，而它轮中用 `AppendArchive` 记下的原文，会在 `Update` 收束之后成为这一轮自己的那几条消息（`TestOpenTurnIsAbsentUntilItSettles`）。
+写入调用一个 id 也不收，宿主既不自己造一个、也不替库记着。唯一可能被宿主握住的是 `NewTopicID`——开轮那次读交回来的那个名字，而它只在两件事上需要：这一轮还没收就想读它自己的事件轨（`SearchL4{TopicID, Kind: event}`），或把它撤回（`DeleteTopic`）。计划树连这个都不必：`PlanState` 与 `PlanActive` 读的就是库替你开着的那一轮。轮中写进去的一条事件，在 `Update` 收掉这一轮之前就能按那个名字读到。这套安排的另一半才是「一轮里召回好几次」安全的根据：**没有收束的那一轮根本不出现在场景读里**。话题那一行是**收束时**由 `Update` 建的，开轮只铸 id 不建行，所以 `SceneContext("")` 列出的永远是已收束的那些轮——一个带工具调用的循环不会把自己写了一半的这一轮再喂回模型，而它轮中用 `AppendArchive` 记下的原文，会在 `Update` 收束之后成为这一轮自己的那几条消息（`TestOpenTurnIsAbsentUntilItSettles`）。
 
 宿主剩下的只有八条要知道的事实，不是八个要写的适配器：
 
@@ -359,8 +360,9 @@ worker 属于哪一种由宿主定，库不替它猜。
 - **把场景读折成进 prompt 的几行，是四个判定，这里一次说清。** `SceneContext("")` 交出的清单是
   **刻意摊平到 depth ≤ 2** 的：一个巩固组是 depth-1 的话题，它的摘要作为这个话题自己的一条原文、
   带着 `Role: api.RoleDream` 回来，而被它吞掉的那几轮就是它的 depth-2 子节点——这是唯一会列出这些
-  子的读，也是那些原文唯一还能回来的地方。两条场景读都出自同一份缓存，所以 `Search` 交回的 `Topics` 与这条读的 depth-1 行
-  是同一批行、同一个顺序（`TestInterfaceSceneReadsAgreeOnTheirSharedRows`）——一轮里把场景读两次，不会读到两份互相矛盾的答案。于是：（1）`Depth > 1` 的行丢掉——那些是被某个表浅行吸收过的行：多半是一轮的原文，也可能是**被后一趟巩固折走的更早的一个组**
+  子的读，也是那些原文唯一还能回来的地方。两条场景读都出自同一份缓存：未超正 Search 阈值时，`Search` 交回的 `Topics` 与这条读的 depth-1 行
+  是同一批行、同一个顺序（`TestInterfaceSceneReadsAgreeOnTheirSharedRows`）；超阈值后 Search 是这些行的最新 N 条后缀，
+  `OmittedTopicCount` 报差值，而这条读仍给全量。于是：（1）`Depth > 1` 的行丢掉——那些是被某个表浅行吸收过的行：多半是一轮的原文，也可能是**被后一趟巩固折走的更早的一个组**
   （它自己那条摘要还在、它的子仍然指着它，而它说过的话已经进了后一份摘要）；下沉每趟只把一个表浅行往下带一层，
   所以这条读自己的深度上限不会替读者藏起任何一条话题，它交出来的就是场景还留着的全部；（2）`ChildCount > 0` 的行，取那条 `RoleDream` 当这条记忆的正文；（3）其余的取这一轮
   自己的 `RoleUser`/`RoleAgent` 那两句；（4）一条记忆的时间取这一行自己的 `UserTimestamp`——一轮即它的刺激时刻，一个组即组内最早的那一轮。（1）与
@@ -383,7 +385,9 @@ worker 属于哪一种由宿主定，库不替它猜。
 
 ## 7. 一轮 = 一个话题
 
-一轮就是**恰好一个话题**：`Search` 为它铸出、此后由库自持的那个 id，宿主记录的这一轮的一切都在它下面。对话原文与操作事件是同一类记录、只差一个 `Kind`，所以一轮能装下宿主记下的任意多条，而一次 `Update` 把它们蒸馏成一条关键词轨。
+一轮就是**恰好一个话题**：`Search` 为它铸出、此后由库自持的那个 id，宿主记录的这一轮的一切都在它下面。对话原文与操作事件是同一类记录、只差一个 `Kind`，所以一轮能装下宿主记下的任意多条，而一次 `Update` 把本轮全部 utterance——无论有没有绑定计划步骤——蒸馏成一条关键词轨，事件不进入提炼。
+
+关键词条数与单条长度没有业务上限，提炼 prompt 也不再导向简短。物理边界仍是模型上下文、`LlmConfig.MaxOutputTokens` 与记录格式：装不下就报错，不会静默保存一条截断的关键词轨。
 
 不发生长对话，而以 `Kind: api.KindEvent` 并排存在同一个键下——读的时候各走各的：`SceneContext` 与 `SearchL4(L4Query{TopicID, Kind: &KindUtterance})` 给说了什么，`Kind: &KindEvent` 给做了什么。这些事件之后变成什么由宿主自己决定——引擎不落能力卡，也没有结晶调用。
 
@@ -421,7 +425,7 @@ worker 属于哪一种由宿主定，库不替它猜。
 
 | 工具名（建议） | 调用 | 模型要交的键 | 交回给 prompt 的东西 |
 |---|---|---|---|
-| `memory_search` | `Session.Search` | `scene_id`, `l3_id`, `new_scene` | 画像与其紧凑摘要、场景、已收束的各轮话题、这次开出的话题 id |
+| `memory_search` | `Session.Search` | `scene_id`, `l3_id`, `new_scene` | 画像与其紧凑摘要、场景、最新且有界的已收束话题、`omitted_topic_count`、这次开出的话题 id |
 | `memory_record` | `Session.AppendArchive` | `kind`, `seq`, `content_type`, `role`, `event_type`, `node_seq`, `created_at`, `content` | 这条记录占下的槽位序号 |
 | `memory_close_turn` | `Session.Update` | `input`、`output`、`outcome`、`created_at`——三个文本字段**至少要有一个**，全空即拒 | 这一轮的话题，其字段里带着刚蒸出的关键词轨 |
 | `memory_dream` | `Session.Dream` | `scene_id` | `DreamReport`：各阶段与计数 |
@@ -439,6 +443,7 @@ worker 属于哪一种由宿主定，库不替它猜。
 | `plan_add_step` | `Session.PlanNodeAdd` | `parent_seq`, `title` | 此后指认这一步的序号 |
 | `plan_update_step` | `Session.PlanNodeUpdate` | `seq`, `title`, `status`, `summary` | 无；被拒的重述不动树一下 |
 | `plan_state` | `Session.PlanState` | 无 | 本轮那片森林，`DoneCount`/`TotalCount` 按每一步汇总 |
+| `plan_active` | `Session.PlanActive` | 无 | 本轮只保留 `in_progress` 步骤；终态步骤下的活跃子孙接到最近的活跃祖先，或提升为根 |
 
 这张表是照着形状核出来的，不是靠人眼维护：`TestToolArgumentsDecodeIntoEveryInputShape` 把每个工具的参数对象
 直接解码进对应的入参结构体，要求每个键都必须落到位——模型给的 JSON 与一次调用之间没有翻译层，键被改名或漏掉
@@ -455,9 +460,9 @@ worker 属于哪一种由宿主定，库不替它猜。
 
 ## 8. 各层 API 速查
 
-26 个会话方法按使用者分两类：
+27 个会话方法按使用者分两类：
 
-- **任务面（18 个）**——宿主每轮驱动、LLM 工具绑定的方法：`Search` / `AppendArchive` / `Update` / `Dream`（宿主自动循环）、`GetL0` / `UpdateL0`、`ListL1`、`ListScenes` / `SceneContext`、`GetL3` / `ListL3` / `ImportL3` / `QueryL3Nodes` / `QueryL3Subgraph`、`SearchL4`、`PlanNodeAdd` / `PlanNodeUpdate` / `PlanState`。
+- **任务面（19 个）**——宿主每轮驱动、LLM 工具绑定的方法：`Search` / `AppendArchive` / `Update` / `Dream`（宿主自动循环）、`GetL0` / `UpdateL0`、`ListL1`、`ListScenes` / `SceneContext`、`GetL3` / `ListL3` / `ImportL3` / `QueryL3Nodes` / `QueryL3Subgraph`、`SearchL4`、`PlanNodeAdd` / `PlanNodeUpdate` / `PlanState` / `PlanActive`。
 - **组装/管理面（8 个）**——宿主代码在会话边界与管理通道调用，**不做成 LLM 工具**：`UpdateScene` / `RenameTopic` / `MergeScenes` / `DeleteScene` / `DeleteTopic`、`UpdateL3` / `DeleteL3`、`AgentID`。
 
 文件级生命周期与诊断在 `api.DB` 上（9 个）：`Primary` / `SubAgent` / `Agent` / `Agents`，加 `Checkpoint` / `CompactTo` / `Close` / `IsClosed` / `Stats`（文件字节数 + 全文件可达记录数，压缩决策的数据来源）。整个面上没有任何能力相关的方法：引擎不存卡、不解析卡，宿主读某一轮做过的事就用 `SearchL4{Kind: event}`，之后怎么组织是它自己的事。
@@ -519,7 +524,7 @@ nodes, err := db.ListL1()   // []api.SceneNodeView —— 只读，没有写入�
 | 方法 | 说明 |
 |---|---|
 | `db.ListScenes(l3ID) ([]SceneSlot, error)` | 场景列表（`SceneID / SceneName / L3ID`）；`l3ID` 非空时只列挂到该项目域的场景，`""` 列全部。顺序是记录 id 升序，所以同一份文件每次交出同一份列表——这是「可重复」，不是「按相关性排」 |
-| `db.SceneContext(sceneID) (*SceneContext, error)` | 场景全貌（含各话题的 L4 原文），且**完全不写**——不开轮次，**会话恢复用这个**，一轮开了轮之后每次召回也用它；`sceneID` 留空即读该域正在做的那条会话，重复调用不必持有任何东西。与 `Search` 的取数差异是刻意的：它平铺到 depth 2，因为 Dream 融合组把原文下沉到了子话题，只有这条路能取回。每一行还带着自己的 `UserTimestamp`/`AgentTimestamp`——那一轮的界，或那个组的界——而正文被保留窗扫掉之后，这是唯一还能给这段记忆定日期的东西。认出「一个融合组」看 `ChildCount > 0`（它自己那条唯一的消息带着 role 3，即 Dream 给组摘要盖的记号），`Depth` 只回答这条话题还在不在场景表浅——被后一轮巩固折走的组会与它归并的那几轮同为 depth 2，分不出父子。返回的这些条目本身就是全量计数——根与只有这条路能带回的下沉子条目都在里面 行的顺序是固定的——先 `UserTimestamp`，并列时浅的在前（融合组带的是它吞掉的第一轮的戳，所以并列才是常态），最后按话题 id——宿主因此可以线性读这份列举，不必再自己排一次。 |
+| `db.SceneContext(sceneID) (*SceneContext, error)` | 场景全貌（含各话题的 L4 原文），且**完全不写**——不开轮次，**会话恢复用这个**，一轮开了轮之后每次召回也用它；`sceneID` 留空即读该域正在做的那条会话，重复调用不必持有任何东西。与 `Search` 的取数差异是刻意的：它平铺到 depth 2，因为 Dream 融合组把原文下沉到了子话题，只有这条路能取回；Search 的最新 N 条预算不作用于这条读，转录始终全量。每一行还带着自己的 `UserTimestamp`/`AgentTimestamp`——那一轮的界，或那个组的界——而正文被保留窗扫掉之后，这是唯一还能给这段记忆定日期的东西。认出「一个融合组」看 `ChildCount > 0`（它自己那条唯一的消息带着 role 3，即 Dream 给组摘要盖的记号），`Depth` 只回答这条话题还在不在场景表浅——被后一轮巩固折走的组会与它归并的那几轮同为 depth 2，分不出父子。返回的这些条目本身就是全量计数——根与只有这条路能带回的下沉子条目都在里面 行的顺序是固定的——先 `UserTimestamp`，并列时浅的在前（融合组带的是它吞掉的第一轮的戳，所以并列才是常态），最后按话题 id——宿主因此可以线性读这份列举，不必再自己排一次。 |
 | `db.UpdateScene(sceneID, api.ScenePatch{Name, L3ID, Force}) (SceneSlot, error)` | 一次调用改标题（`Name`）/ 锚定到 L3 项目域（`L3ID`）/ 清除锚定（`L3ID: &""`）；未传的字段保持库里现值，**返回值就是写入后的场景**。把一条已经锚定的场景换到**另一个**域要带 `Force: true`——不带的调用直接拒（`ErrInvalidQuery`）而不是悄悄丢掉旧锚；清除锚定不需要 `Force`，因为那是可逆的。什么都没改的 patch——空 patch，或给的就是现值——**什么都不追加**：文件是纯追加的，这条「不列举域就确认一次」的用法否则每看一次就占一次字节，重试同一份 patch 也一样 |
 | `db.RenameTopic(topicID, name) (TopicSlot, error)` | 话题上唯一由宿主写的标签：引擎不往里派生任何东西，所以巩固与合并都是绕着它改写记录。下一次 `Search` / `SceneContext` 立刻看得见，不等下一次巩固。空名拒——话题生来无名，`""` 是「没有名字」而不是一个名字；话题不存在是 `ErrNotFound`，也不会为它建一条；改成它已经带着的名字则什么都不写 |
 | `db.MergeScenes(primaryID, []secondaryIDs) error` | 把几段对话并成一段：被吞掉的场景，其话题一律改挂到主场景下，它自己的场景记录随之不再。**留下的那一条保有自己的标题**；L3 锚定是「归属」而不是标签，所以它被带走而不是被丢掉：活下来那条若没锚任何项目域，就接手被吞场景原本的锚（合并后的对话仍列在那个域下），若它自己已经锚了就以它为准；而被吞的几条彼此指向不同项目域时，这个调用整个被拒（`ErrInvalidQuery`）且一条都不删——一段对话属于哪个项目是宿主的决定，不是库替你挑一个的理由。宿主在某一条轮次上写的标签在这次改挂中原样保留。被吞掉那一域的 L1 节点当场摘掉，主场景的节点由下一次 `Dream` 按它新拿到的轮次重建；域的记忆也一并挪过去，所以被吞掉那条场景上的轮次此后收不了口（节点与标签两头由 `TestInterfaceMemoryDeletionTakesItsNodeWithIt` 钉住） |
@@ -624,7 +629,7 @@ _, err := db.AppendArchive(api.ArchiveInput{
     CreatedAt: time.Now().UnixMilli(),
 })
 // Seq 与所属话题都由引擎按轮键填好；这一轮开出的计划节点也在同一个键下
-// （NodeSeq 才是把事件绑到某一步的字段，见下面的计划面；裸轮事件留 0）。
+// （NodeSeq 是把任一内容绑到某一步的字段，见下面的计划面；不绑步骤留 0）。
 ```
 
 事件轨用 `SearchL4(L4Query{TopicID: &topicID, Kind: &event})` 按 Seq 序读回。它是**按轮键
@@ -640,15 +645,16 @@ _, err := db.AppendArchive(api.ArchiveInput{
 
 ### L5 计划树（Go 宿主面）
 
-计划属于开出它的那一轮：**库把整棵树种在本轮的话题 id 下**——`Search` 铸出、此后自持的那个——同一个键在 L4 寻址本轮的内容。一步由**轮内自增序号**（`Seq`：库从 1 起发号的 `uint32`，创建口把它返回给宿主，宿主只回传）指认，`ParentSeq` 说明它挂在哪个步骤下（`0` = 根）。序号发在「仍然指着某个序号的那些东西」之上——既包括现存的步骤，也包括这一轮仍然活着、绑到某一步的事件——所以一轮的编号可以出现空洞：一个还有事件指着它的序号不会再被发给新的一步（两者各自老化，被保留窗裁掉的步骤会留下指着它的事件）。既没有计划 id 要铸，也没有路径字符串要拼，计划调用不点名话题 id（都作用在 `Search` 开着的这一轮上），树回来走 `PlanState()`。
+计划属于开出它的那一轮：**库把整棵树种在本轮的话题 id 下**——`Search` 铸出、此后自持的那个——同一个键在 L4 寻址本轮的内容。一步由**轮内自增序号**（`Seq`：库从 1 起发号的 `uint32`，创建口把它返回给宿主，宿主只回传）指认，`ParentSeq` 说明它挂在哪个步骤下（`0` = 根）。序号发在「仍然指着某个序号的那些东西」之上——既包括现存的步骤，也包括这一轮仍然活着、绑到某一步的内容——所以一轮的编号可以出现空洞：一个还有内容指着它的序号不会再被发给新的一步（两者各自老化，被保留窗裁掉的步骤会留下指着它的记录）。既没有计划 id 要铸，也没有路径字符串要拼，计划调用不点名话题 id（都作用在 `Search` 开着的这一轮上），全量树回来走 `PlanState()`，只看进行中的步骤走 `PlanActive()`。
 
 | 调用 | 说明 |
 |---|---|
 | `seq, err := db.PlanNodeAdd(0, title)` | 用第一个根步骤开出本轮的计划树，并交回此后指认该步的序号。一轮的树起初一个步骤也没有，所以本轮第一次有计划也走这个调用；没有单独的「建树」调用 |
 | `seq, err := db.PlanNodeAdd(parentSeq, title)` | 给树加一个步骤并拿到它的序号。`parentSeq` 为 `0` 即把该步挂在顶层，这也是一个森林再加一个根；其他取值必须指认这棵树上已有的步骤——父序号不在树上即 `ErrNotFound`，且不会顺手长出这个父。新建的步骤就是 `in_progress`，所以这里不索要状态；标题可以先留空、之后由 `PlanNodeUpdate` 补，留空时视图按序号显示这一步 |
 | `err := db.PlanNodeUpdate(api.PlanStep{Seq: seq, Status: api.PlanStatusDone, Summary: s})` | 重述一个步骤：它的 `Status` 加上本节点自己的 `Title`/`Summary`。`Status` 每次都必须给出（没有「保持原样」的写法），而 `Title`/`Summary` 留空即保留现值——改一步既不会倒退它的标题。**父节点那句折出来的 `Summary` 是引擎自己那份派生值**：这一枝在其下再变化（已收口的父节点下又添一步、一个已了结的子步换了结论）就再折一次；你要是亲自在父节点上写了 `Summary`，那一句就是宿主的文本，任何汇总都不再改写它。一步到达终态就记下 `FinishedAt`；把一个已定的步骤重述成 `in_progress` 会把它重新打开，并清掉那个完成时间。一个状态为 done 的父节点，其**直接子全部到达终态**后，它的摘要由孩子们折上来，之后这一枝再变就重折。词表外的状态、本轮从未建出的序号（`ErrNotFound`）都在**动节点之前**被拒，树保持得和拒之前一模一样。这个调用不写任何内容 |
-| `tree, err := db.PlanState()` | 读森林视图（`PlanTree.Roots` + `DoneCount` / `TotalCount`，两个计数按**每棵树的每一步**汇总，不是只数根；每个 `PlanNodeView` 带 `Seq` / `ParentSeq` / `Status` / `Summary` / `Children`）——重启恢复计划树也走这个；手上没有开着的轮时它答 `ErrInvalidQuery`——那是「没有进行中的计划」，不是库坏了 |
-| `db.AppendArchive(ev)`（`ev.NodeSeq` 非 0） | 把事件绑到**本轮树上已有的某一步**。那一步必须先存在：一个谁都没建出来的序号、**或一个曾被保留窗扫掉的序号**，都会让整条记录被拒（`ErrInvalidQuery`）且零留痕——判据是「此刻在不在树上」，不是「有没有被建过」，被拒的那次追加同样不吃序号——事件指了一个计划里没有的步骤，就是计划与记录对不上，树是 `PlanNodeAdd` 的事；写错的序号也因此静悄悄多不开一棵树。`EventType` **由宿主自定**，与裸轮次事件同口径——引擎不按它分支，只经 `SearchL4` 原样回显那个名字，空值即 `ErrInvalidQuery`。惯例名（给读者的共享词表，不是许可集）：`plan_step`、`llm_request`、`llm_output`、`tool_call`、`tool_result`、`subagent_spawn`、`subagent_done`、`context_inject`、`ask_user`、`user_reply` |
+| `tree, err := db.PlanState()` | 读全量森林视图（`PlanTree.Roots` + `DoneCount` / `TotalCount`，两个计数按**每棵树的每一步**汇总，不是只数根；每个 `PlanNodeView` 带 `Seq` / `ParentSeq` / `Status` / `Summary` / `Children`）——重启恢复计划树也走这个；手上没有开着的轮时它答 `ErrInvalidQuery`——那是「没有进行中的计划」，不是库坏了 |
+| `tree, err := db.PlanActive()` | 只读 `in_progress` 步骤，done 与 failed 都省略。活跃步骤挂在最近的活跃祖先下；所有祖先都已到终态时提升为根。`ParentSeq` 指向这个可见父，`DoneCount` 恒为 0，`TotalCount` 只数可见步骤 |
+| `db.AppendArchive(in)`（`in.NodeSeq` 非 0） | 把内容绑到**本轮树上已有的某一步**。那一步必须先存在：一个谁都没建出来的序号、**或一个曾被保留窗扫掉的序号**，都会让整条记录被拒（`ErrInvalidQuery`）且零留痕——判据是「此刻在不在树上」，不是「有没有被建过」，被拒的那次追加同样不吃序号——内容指了一个计划里没有的步骤，就是计划与记录对不上，树是 `PlanNodeAdd` 的事；写错的序号也因此静悄悄多不开一棵树。`EventType` **由宿主自定**，与裸轮次事件同口径——引擎不按它分支，只经 `SearchL4` 原样回显那个名字，空值即 `ErrInvalidQuery`。惯例名（给读者的共享词表，不是许可集）：`plan_step`、`llm_request`、`llm_output`、`tool_call`、`tool_result`、`subagent_spawn`、`subagent_done`、`context_inject`、`ask_user`、`user_reply` |
 
 状态只有三个值，各一种字符串写法：`api.PlanStatusInProgress`（`in_progress`）、`api.PlanStatusDone`（`done`）、`api.PlanStatusFailed`（`failed`）。引擎不保留「已计划、未开始」这一态——一步存在是因为宿主建了它，而它一存在就在进行中。
 
@@ -661,7 +667,7 @@ _, err := db.AppendArchive(api.ArchiveInput{
 它自己加整棵子树。所以 token 预算仍归宿主，和召回那条路一样；在被证明需要之前，不会加一条按预算
 裁剪的读口。
 
-计划的写读面在任务面那 18 个方法里——树种在 `Search` 为这个域开着的这一轮上，所以这些调用不点名话题 id。
+计划的写读面在任务面那 19 个方法里——树种在 `Search` 为这个域开着的这一轮上，所以这些调用不点名话题 id。
 
 全零键 `0000000000000000` 是保留值（记录未赋键时的值）：`Search` 绝不会在它上面开轮，而仍收话题 id 的读/纠错口（`SearchL4{TopicID}`、`RenameTopic`、`DeleteTopic`）一律拒绝它。`SearchL4{IDs}` 的清单里带着它同样被拒，而不是少给一行——这条读正是宿主按行数作答的地方。
 `SearchL4{TopicID}` 也拒**场景 id**：场景键与轮次键同出一次 `Search`，把前者当后者递进来会答成空，
@@ -669,7 +675,7 @@ _, err := db.AppendArchive(api.ArchiveInput{
 
 ---
 
-## 9. 导出类型清单（v1.6.6）
+## 9. 导出类型清单（v1.6.7）
 
 | 类别 | 名字 | 用途 |
 |---|---|---|
@@ -879,4 +885,4 @@ agent 框架通常自带一个两方法的端口——每次调用开一轮、�
 6. **单文件多 agent 域**：所有租户驻留同一个 `.meh` 文件——`api.Open` 落定文件被打开所依据的那个域，`DB.SubAgent(llm, profile)` 按名字在其下建/取一个，`DB.Agent(llm, id)` 则按 `Session.AgentID` 交出的 id 取回同一个域（id 的作用域是本文件，因为每个文件的主域都是零号域）——除文件级 L3 公共池外按域完全隔离；旧库（`FormatVersion < 0x0012`）既打不开也不迁移。
 7. **内容与计划自动过期**：Dream 清掉保留窗外的内容与计划节点（窗口默认 7 天，宿主经 `Defaults.ContentRetentionMs` 可配。一棵树要**同时**满足「仍有未到终态的步」与「窗口内有过活动」才豁免——被搁置的在途树照样被扫，这正是 L5 有界的理由；而不豁免的树里每一步各按自己的钟量，所以被一次晚到活动救回的只是那一批新节点，旧的照扫）；显式纠正走 `DeleteTopic` / `DeleteScene`。过了窗的话题只剩关键词轨，而 `Messages` 读回来是**空的**：一次 `Update` 把一轮的两句原文盖的是同一个钟，所以它们成对出局。`Seq` 上的洞是**事件轨**的形状（`SearchL4{TopicID, Kind: event}`）——那里每条记录各带自己的时刻，活下来的那条仍然用写入时那个序号指认，两条读都不做任何重排（`TestSweepKeepsEverySurvivorAtItsOwnSeq`）；宿主若自己指定过某个原文的槽位，`Messages` 上也会出现洞。无论哪一种都是合法的终局，不是读取失败。融合组的摘要按**写下它的那一次巩固**计龄，不按它取代的那几轮，所以它能活过那些原文：子话题的原文被扫走之后，父话题仍可能带着 Dream 自己写的那段文本。一切都按库自持的开轮绑定，所以在这一轮进行中随时追加，收口交给 `Update`——没有要宿主保管或自造的轮键。
 8. **场景与开着的轮都由库自持**：`Search` 续用该域当前场景并开下一轮；写调用（`Update`、`AppendArchive`、计划族）都作用在这一轮上，不点名 id。没有开着的轮时——从没 `Search` 过，或那一轮/那个场景被删了（`DeleteTopic`/`DeleteScene`）或被合并吞掉（`MergeScenes`）——它们返回 `ErrInvalidQuery`，消息含 `no turn is open`。库不会为一次写入自动建场景，也不会在 Dream 里合并场景——合并只走显式 `MergeScenes`，而它会把被并场景连记录删掉，宿主手里的旧 id 随即失效。**合并之前先收口**：开了没收口的轮次还没有话题记录，所以不在被改写的范围之内——它的 id 指着一个已经不存在的场景，此后再也收不了口。每次 `Search` 恰好开启一个轮次：读两次只收口一次，就是跳掉一个轮次号，空洞不产生成本，且已给出的 id 永不重复。
-9. **旋钮留 0 就是「没填」**：`MemHopDefaults` 现在处处按这个读法走（`LlmConfig` 那两个预算早就是这样），一份部分字面量再也不会悄悄把自动巩固关掉。要关掉某项得显式写负数——保留窗口是唯一的例外，那里负数是在 `Open` 处被拒而不是读成「关掉」——而对 `DreamCompressMinTopics` 来说负数是**丢细节的方向**（那个数正是提示词里让场景收敛到的目标）。上下文规模只由 Dream 收敛，不是硬上限，禁用自动巩固就等于让注入无界增长。
+9. **旋钮留 0 就是「没填」**：`MemHopDefaults` 现在处处按这个读法走（`LlmConfig` 那两个预算早就是这样），一份部分字面量再也不会悄悄把自动巩固关掉。要关掉某项得显式写负数——保留窗口是唯一的例外，那里负数是在 `Open` 处被拒而不是读成「关掉」——而对 `DreamCompressMinTopics` 来说负数是**丢细节的方向**（那个数正是提示词里让场景收敛到的目标）。正 `SceneDreamTopicThreshold` 同时是 Search 的硬上限：只返回最新 N 条 depth-1 话题，`omitted_topic_count` 报告其余条数，Dream 的进度与成败都不改变它；这些记忆并未删除，仍可由 `SceneContext` 与 L4 取回。负阈值则显式恢复无界 Search，同时关闭自动 Dream。

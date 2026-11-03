@@ -23,8 +23,8 @@ func CreateNode(ac *domain.Context, agentID uint64, spec NodeSpec) (uint32, erro
 				spec.ParentSeq, common.FormatHash(spec.TopicID)))
 	}
 	now := time.Now().UnixMilli()
-	// The turn's own event track reserves ordinals: a step swept past the retention
-	// window can leave an event naming it, and the new step must not inherit that work.
+	// The turn's own content track reserves ordinals: a step swept past the retention
+	// window can leave a record naming it, and the new step must not inherit that work.
 	seq := ac.Plans.NextSeq(spec.TopicID, ac.L4.MaxNodeSeq(spec.TopicID))
 	idHash := core.HashPlanNode(spec.TopicID, seq)
 	// The ordinal comes from the mirror, whose collection skips records it cannot

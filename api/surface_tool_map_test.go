@@ -50,6 +50,7 @@ var toolRows = []toolRow{
 	{"PlanNodeAdd", "plan_add_step", 2, nil, []string{"parent_seq", "title"}},
 	{"PlanNodeUpdate", "plan_update_step", 1, []reflect.Type{reflect.TypeOf(PlanStep{})}, nil},
 	{"PlanState", "plan_state", 0, nil, nil},
+	{"PlanActive", "plan_active", 0, nil, nil},
 }
 
 // adminFace is the other half of the session surface; none of it belongs in the tool table.

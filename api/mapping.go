@@ -108,11 +108,12 @@ func fromTopicSlot(t internal.TopicSlot) TopicSlot {
 
 func fromSearchResult(r *internal.SearchResult) *SearchResult {
 	return &SearchResult{
-		Profile:      fromProfileSlot(r.Profile),
-		ProfileBrief: r.ProfileBrief,
-		Scene:        fromSceneSlot(r.Scene),
-		Topics:       mapSlice(r.Topics, fromTopicSlot),
-		NewTopicID:   formatID(r.NewTopicID),
+		Profile:           fromProfileSlot(r.Profile),
+		ProfileBrief:      r.ProfileBrief,
+		Scene:             fromSceneSlot(r.Scene),
+		Topics:            mapSlice(r.Topics, fromTopicSlot),
+		OmittedTopicCount: r.OmittedTopicCount,
+		NewTopicID:        formatID(r.NewTopicID),
 	}
 }
 

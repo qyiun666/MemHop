@@ -1,12 +1,12 @@
-.PHONY: build test test-e2e test-integration test-unit test-affected bench lint check-guides fmt clean help doctor
+.PHONY: build test test-e2e test-integration test-quality test-unit test-affected bench lint check-guides fmt clean help doctor
 
 # --- Prerequisites -------------------------------------------------------
 # `make test-unit` is fully offline: the api/internal suites plus the mock-backed
 # files under test/** need no network at all.
 #
-# Only seven test/ files carry the `integration` build tag and require a real
+# Only eight test/ files carry the `integration` build tag and require a real
 # endpoint (that is `make test-e2e`): benchmark / core_cycle / e2e_flow /
-# fidelity / fixture / keyword_extraction_e2e / open. Credentials come from
+# fidelity / fixture / keyword_extraction_e2e / open / quality_locomo. Credentials come from
 # MEMHOP_TEST_LLM_KEY / MEMHOP_TEST_LLM_URL / MEMHOP_TEST_LLM_MODEL (or
 # test/testsupport/key_config.json). There is no embedding model to pull — the
 # engine contacts none.
@@ -29,6 +29,14 @@ test-e2e:
 
 test-integration:
 	go test ./test/... -tags=integration -count=1 -v -timeout=30m
+
+## real-model quality smoke; missing credentials are an error, never a skipped pass
+test-quality:
+	@if [ -z "$$MEMHOP_TEST_LLM_KEY" ] && [ ! -f test/testsupport/key_config.json ]; then \
+		printf '%s\n' 'test-quality requires MEMHOP_TEST_LLM_KEY (optional MEMHOP_TEST_LLM_URL/MODEL) or test/testsupport/key_config.json' >&2; \
+		exit 1; \
+	fi
+	GOWORK=off go test ./test/ -tags=integration -count=1 -v -timeout=30m -run '^(TestKeywordFidelity|TestLoCoMoQASmoke)$$'
 
 ## run tests for Go packages changed since HEAD
 test-affected:
@@ -88,6 +96,7 @@ help:
 	@echo "  test-unit         run only internal unit tests"
 	@echo "  test-e2e          run integration tests (needs Ollama + LLM)"
 	@echo "  test-integration  run integration tests (needs Ollama + LLM)"
+	@echo "  test-quality      run real-model keyword and LoCoMo QA smoke tests"
 	@echo "  bench             run benchmarks (needs Ollama)"
 	@echo "  lint              go vet across all packages"
 	@echo "  check-guides      compile the runnable skeleton embedded in both integration guides"

@@ -3,6 +3,19 @@
 MemHop 遵循语义化版本。本文件记录每个版本的核心改动；完整历史见
 README 的版本表与 git log。
 
+## v1.6.7 — 2026-11-03 — 有界召回、计划化轮次与发布加固
+
+本版在 v1.6.6 的轮次模型上收紧宿主可见上下文与计划归因，并补齐离线、规模与真实模型证据。磁盘格式仍为 `0x0012`；公开面钉为 `api.Session` 27 个业务方法 + `api.DB` 9 个，新增 `PlanActive` 与 `SearchResult.OmittedTopicCount`。
+
+1. **Search 的上下文表面有硬上限**：正 `SceneDreamTopicThreshold` 同时作为自动 Dream 触发阈值与 Search 的最新 depth-1 话题预算，超出部分以 `omitted_topic_count` 报告；省略不是删除，`SceneContext` 仍给完整 depth≤2 转录，L4 仍能取原文。负阈值显式关闭两种行为。由 `TestInterfaceBoundedContext` 与场景读 parity 用例钉住。
+2. **原文与事件共用计划归因**：`ArchiveInput.NodeSeq` 不再只属于事件，utterance 也能绑定本轮已创建的步骤；两种内容都拒绝未知或已被保留窗扫掉的步骤，且拒绝不消耗 Seq。按计划步骤及其子树读取时，原文与事件一起回来（`TestInterfacePlanSubtreeReadsUtterancesAndEvents`、`TestInterfaceAnUtteranceMayOnlyNameAStepOnTheTree`）。
+3. **新增 `PlanActive`**：只保留 `in_progress`，done 与 failed 都省略；活跃子孙接到最近的活跃祖先，所有祖先终态则提升为根，`ParentSeq` 指向可见父，计数只覆盖可见节点。`PlanState` 仍返回全量森林，空结果保持非 nil。
+4. **关键词提炼覆盖整轮原文**：绑定或未绑定计划的 utterance 都进入 Update 的一次提炼，事件不进入；prompt 删除“优先简短”的导向，关键词条数与单条长度没有业务上限，物理边界仍是模型上下文、输出预算与记录格式。长关键词轨在重开后逐字保留（`TestUpdateDistillsEveryUtteranceAndPreservesTrackAfterReopen`）。
+5. **Update 收束改为一次内容批写**：整批先校验、编码，再一次 flush/remap，成功后同步 L4 镜像；单条 Append 也复用同一原语。话题与关键词提炼的先后边界不变，批写不是新事务，失败保留既有原文与重放语义（决策档案 `notes/implemented/simplification/2026-11-02-update-settlement-batch-write.md`）。
+6. **存储关闭与帧解码加固**：Close/Compact 的 unmap、sync、unlock、close 全部执行并传播首个错误；压实副本的清理统一走同一路径。帧头与声明长度先以无符号边界检查再转索引，避免大 offset/长度在整数缩窄后越界；新增生命周期测试与 frame/snapshot fuzz smoke。
+7. **发布观测与工具链更新**：后台 Dream 成功时记录结构化 INFO 摘要（场景、耗时、压缩/清理计数）；新增离线 1k/10k 轮规模基准、CI govulncheck 与短时 fuzz、Dependabot；Go 要求升至 1.27.3，`x/sys` 升至 v0.49.0。普通 integration 在无凭据时跳过，`make test-quality` 缺 key 仍直接失败，不把跳过当质量通过。
+8. **真实模型验收记录风险而非掩盖**：2026-11-03 用 DeepSeek 真实端点跑 11 条集成/质量测试，10 条通过；`TestLoCoMoQASmoke` 为 2/3，第三题参考答案要求 “Psychology, counseling certification”，模型回答 “Counseling and mental health”，评审判为不满足。该样本的召回与回答链路已跑通，但这条答案与参考/评审预期存在分叉，记为已接受的发布风险，不据此声称全数据集准确率或真实测试全绿。
+
 ## v1.6.6 — 2026-09-23 — 一轮只剩一次收束：场景与轮次由域自持，轮中写入不再收宿主填的归属字段
 
 ### 从 v1.6.1 一路升上来要处理什么（合起来看，非某一轮的新增）

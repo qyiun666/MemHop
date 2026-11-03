@@ -221,24 +221,36 @@ func (e *StorageEngine) Close() error {
 // shutdownHandles unmaps, syncs, unlocks and closes the file, running every
 // step even on failure; the first error wins so nothing leaks.
 func (e *StorageEngine) shutdownHandles() error {
-	unmapErr := UnmapFile(e.mmap)
+	err := cleanupHandles(
+		func() error { return UnmapFile(e.mmap) },
+		func() error {
+			if err := e.file.Sync(); err != nil {
+				return common.NewError(common.ErrIO, "sync", err)
+			}
+			return nil
+		},
+		func() error { return unlockFile(e.file) },
+		e.file.Close,
+	)
 	e.mmap = nil
-	syncErr := e.file.Sync()
-	unlockErr := unlockFile(e.file)
-	closeErr := e.file.Close()
-	switch {
-	case unmapErr != nil:
-		return unmapErr
-	case syncErr != nil:
-		return common.NewError(common.ErrIO, "sync", syncErr)
-	case unlockErr != nil:
-		return unlockErr
-	default:
-		return closeErr
-	}
+	return err
 }
 
-// closeNoCheckpoint unmaps and closes without a snapshot or A/B flip; the
+func cleanupHandles(unmap, sync, unlock, closeFile func() error) error {
+	var firstErr error
+	run := func(step func() error) {
+		if err := step(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	run(unmap)
+	run(sync)
+	run(unlock)
+	run(closeFile)
+	return firstErr
+}
+
+// closeNoCheckpoint releases handles without a snapshot or A/B flip; the
 // recovery tests use it to go away mid-log where a real Close tidies up.
 func (e *StorageEngine) closeNoCheckpoint() error {
 	e.mu.Lock()
@@ -247,14 +259,7 @@ func (e *StorageEngine) closeNoCheckpoint() error {
 		return errEngineClosed
 	}
 	e.closed = true
-	if err := UnmapFile(e.mmap); err != nil {
-		return err
-	}
-	e.mmap = nil
-	if err := unlockFile(e.file); err != nil {
-		return err
-	}
-	return e.file.Close()
+	return e.shutdownHandles()
 }
 
 // appendSnapshot writes blob as the single tail snapshot behind the record

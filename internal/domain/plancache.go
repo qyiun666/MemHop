@@ -53,7 +53,7 @@ func (pc *PlanCache) HasSeq(topicID uint64, seq uint32) bool {
 
 // Subtree returns the ordinals of one step and every step nested under it,
 // Seq-ascending and including the step itself. An unknown root yields just itself: a
-// step whose record expired still names its own events. Callers hold Context.Mu.
+// step whose record expired still names its own content. Callers hold Context.Mu.
 func (pc *PlanCache) Subtree(topicID uint64, root uint32) []uint32 {
 	agg := pc.plans[topicID]
 	if agg == nil {
@@ -78,14 +78,14 @@ func (pc *PlanCache) Subtree(topicID uint64, root uint32) []uint32 {
 
 // NextSeq hands out the next ordinal of one topic's tree, above both the live nodes
 // and `reserved` — the highest ordinal this turn's surviving records still name. The
-// address (topic, ordinal) is shared by a step and the events bound to it, while the two
-// age on separate clocks: a step swept past the retention window leaves an event that
-// names it behind, and an ordinal taken from the live nodes alone would hand that event
+// address (topic, ordinal) is shared by a step and the content bound to it, while the two
+// age on separate clocks: a step swept past the retention window leaves a record that
+// names it behind, and an ordinal taken from the live nodes alone would hand that record
 // to a new step — the new step would read as having done the dead step's work. So an
 // ordinal is free again only once nothing speaks of it.
 //
 // The cost is that a turn's numbering can carry a gap: an ordinal reserved by an orphan
-// event is skipped, never reused. Callers hold Context.Mu.
+// record is skipped, never reused. Callers hold Context.Mu.
 func (pc *PlanCache) NextSeq(topicID uint64, reserved uint32) uint32 {
 	var top uint32
 	if agg := pc.plans[topicID]; agg != nil {

@@ -160,6 +160,7 @@ func closedSurface(sess *Session, lib *DB, gid, nodeID, sceneID, topicID string)
 		"Session.PlanNodeAdd":    func() error { _, e := sess.PlanNodeAdd(0, "s"); return e },
 		"Session.PlanNodeUpdate": func() error { return sess.PlanNodeUpdate(PlanStep{Seq: 1, Status: PlanStatusDone}) },
 		"Session.PlanState":      func() error { _, e := sess.PlanState(); return e },
+		"Session.PlanActive":     func() error { _, e := sess.PlanActive(); return e },
 		"Session.AgentID":        func() error { _ = sess.AgentID(); return nil },
 		"DB.Stats":               func() error { _, e := lib.Stats(); return e },
 		"DB.Checkpoint":          func() error { return lib.Checkpoint() },

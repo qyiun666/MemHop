@@ -66,16 +66,16 @@ func EncodeRecord(agentID uint64, recordType, flags uint8, idHash uint64, data [
 // region end or zero-filled space; ErrCorruption on truncated header/body;
 // ErrCRCMismatch on a whole frame whose content disagrees with its checksum.
 func RecordData(mmap []byte, offset uint64) (recordType, flags uint8, data []byte, agentID, idHash uint64, err error) {
-	off := int(offset)
-	if off == len(mmap) {
+	if offset == uint64(len(mmap)) {
 		return 0, 0, nil, 0, 0, io.EOF
 	}
-	if off+RecordHeaderSize > len(mmap) {
+	if offset > uint64(len(mmap)) || uint64(RecordHeaderSize) > uint64(len(mmap))-offset {
 		return 0, 0, nil, 0, 0, common.NewError(
 			common.ErrCorruption,
 			fmt.Sprintf("record header at offset %d exceeds file size %d", offset, len(mmap)),
 		)
 	}
+	off := int(offset)
 	recordType = mmap[off]
 	flags = mmap[off+1]
 	dataLen := binary.LittleEndian.Uint32(mmap[off+2 : off+6])
@@ -87,7 +87,7 @@ func RecordData(mmap []byte, offset uint64) (recordType, flags uint8, data []byt
 	// The declared length comes out of the file, so it is compared in unsigned
 	// arithmetic against what actually remains: narrowed to an int first on a 32-bit
 	// build, a rotted 4 GiB-sized value would flip sign and slice past this frame.
-	frameStart := uint64(off) + RecordHeaderSize
+	frameStart := offset + RecordHeaderSize
 	if uint64(dataLen) > uint64(len(mmap))-frameStart {
 		return 0, 0, nil, 0, 0, common.NewError(
 			common.ErrCorruption,

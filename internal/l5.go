@@ -4,8 +4,8 @@
 // L5 big methods of the composition root. L5 is one turn's plan tree, keyed by the
 // topic id Search issued for that turn and held by the domain, so none of these
 // calls names it: the tree a step is added to is the tree of the turn now open. The
-// events a step produced are L4 content under that same key: the host appends them
-// and reads them back through the L4 surface with a Kind condition. Retention is
+// content attributed to a step is L4 under that same key: the host appends it
+// and reads it back through the L4 surface with a Kind condition. Retention is
 // internal — Dream drops plan records older than the retention window and no delete
 // API is exposed. Every write keeps the domain's PlanCache in sync under the domain
 // lock. The steps themselves live in internal/plan.
@@ -70,4 +70,16 @@ func (db *DB) PlanState(agentID uint64) (*PlanTree, error) {
 	}
 	defer ac.Mu.Unlock()
 	return plan.BuildTree(ac, ac.Turn)
+}
+
+// PlanActive returns only the open turn's in-progress steps. A step whose
+// ancestors are all settled becomes a root; otherwise it hangs under its
+// nearest active ancestor.
+func (db *DB) PlanActive(agentID uint64) (*PlanTree, error) {
+	ac, err := db.lockTurn(agentID)
+	if err != nil {
+		return nil, err
+	}
+	defer ac.Mu.Unlock()
+	return plan.BuildActiveTree(ac, ac.Turn)
 }

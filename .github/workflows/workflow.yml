@@ -31,6 +31,12 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      # Source-mode findings make govulncheck exit nonzero; keep human-readable
+      # output rather than JSON/SARIF, whose finding count is not a gate by itself.
+      - name: Vulnerability scan
+        if: runner.os == 'Linux'
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+
       - name: Check formatting
         if: runner.os != 'Windows'
         run: |
@@ -43,6 +49,14 @@ jobs:
 
       - name: Unit tests (public SDK and internal suites)
         run: go test ./...
+
+      # Short native-fuzz smoke covers the two byte decoders on every CI run. The
+      # 1k/10k scale benchmark remains opt-in and never runs in this workflow.
+      - name: Storage decoder fuzz smoke
+        if: runner.os != 'Windows'
+        run: |
+          go test ./internal/repo/core -run '^$' -fuzz '^FuzzFrameRecord$' -fuzztime=5s
+          go test ./internal/repo/core -run '^$' -fuzz '^FuzzSnapshot$' -fuzztime=5s
 
       # The integration guides carry a runnable skeleton each; `go build` of the
       # packages never compiles it, so a guide a host copies verbatim can rot

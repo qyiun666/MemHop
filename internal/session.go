@@ -159,3 +159,7 @@ func (s *Session) PlanNodeUpdate(step PlanStep) error {
 func (s *Session) PlanState() (*PlanTree, error) {
 	return s.db.PlanState(s.agentID)
 }
+
+func (s *Session) PlanActive() (*PlanTree, error) {
+	return s.db.PlanActive(s.agentID)
+}

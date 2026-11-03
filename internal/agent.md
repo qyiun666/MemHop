@@ -32,8 +32,8 @@ internal/{domain,scene,turn,dream,graph,plan,content}
 | `turn` | 轮次归属：SettleTarget（可沉淀的轮次范围）、ReadProfile（Search 的 L0 读面）；进来的 hex 键已在根上解析完，本包不碰内容 |
 | `dream` | 巩固阶段：SceneSet、PruneContentStage(`l4_prune`) 与 PrunePlanStage(`l5_prune`)（共用 `ContentRetention` 窗口、各读自己的时间戳）、CompressScenes(+组回滚)、StructureStages、L1 各阶段、distillL0Stage（私有）；调参常量随阶段在此 |
 | `graph` | L3 导入/查询：`ImportBatch`（一次批次的 mode + result + 缓存：domain→图、图→标题集、图→边键，外加两份图集「访问过」/「写过内容」；方法 ImportNode/ImportRelations/GraphIDs/StampChanged）、NodeFilter.Matches/CheckSubgraphStart/SubgraphAdjacency/BfsWithinDepth/AllNodesVisited |
-| `plan` | L5 计划树机制（一棵树归属于打开它的轮次；L5 只剩节点记录）：PlanStatus 面（单张词表、双向都查它）、NodeSpec/Step 两个入参形状、CreateNode/UpdateNode/UpdateNodeSummaryLocked、BuildTree/Forest/ToNodeView/RollupTree |
-| `content` | 话题内容与键：ParseTopicID（轮次键的解析与拒零，读写两侧共用）、ValidateAppend（两种 Kind 各自的写入契约）、Append（宿主侧写一条内容的唯一入口，必要时跨 Kind 分配 Seq）、Read（按 Kind 读回）、RenderForDistill（把一个话题的原文渲染成提炼读的转录）、MaxEventPayload/MaxUtterancePayload |
+| `plan` | L5 计划树机制（一棵树归属于打开它的轮次；L5 只剩节点记录）：PlanStatus 面（单张词表、双向都查它）、NodeSpec/Step 两个入参形状、CreateNode/UpdateNode/UpdateNodeSummaryLocked、BuildTree/BuildActiveTree/Forest/ToNodeView/RollupTree |
+| `content` | 话题内容与键：ParseTopicID（轮次键的解析与拒零，读写两侧共用）、ValidateAppend（两种 Kind 各自的写入契约）、Append/AppendBatch（宿主侧写内容的入口，必要时跨 Kind 连续分配 Seq 并预检地址）、Read（按 Kind 读回）、RenderForDistill（把一个话题的原文渲染成提炼读的转录）、MaxEventPayload/MaxUtterancePayload |
 
 ## agentContext（domain.Context）域级锁纪律
 
@@ -74,7 +74,7 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    `triggerSceneDream(ac, sceneID)`（调用方持 `ac.Mu`，留在根里因为它管理
    goroutine 生命周期），goroutine 运行在 `ac.OpCtx` 下——
    `Close` 与空闲回收取消它，任何在飞 Dream 在下一阶段边界退出，
-   不会把生命周期屏障堵在一次完整 LLM 往返上。同一处也定告警的极性：排定的那一趟与宿主交回文件之间本来就有竞争，`ErrClosed` / `ErrCancelled` 说的是「宿主不再要了」而不是「巩固坏了」，这两档不记 WARN（每次正常退出都响一行的告警等于没有告警），其余答复照记——两臂由 `dream_trigger_log_test.go` 各钉一条，且各自先证一句前提（那个状态下确实回那个码）。域锁内的前台 LLM 调用（`Update` 的轮次提炼）同样挂
+   不会把生命周期屏障堵在一次完整 LLM 往返上。成功时写一条 INFO 完成摘要，含 agent/scene、总耗时与 `DreamReport` 的各项计数。同一处也定告警的极性：排定的那一趟与宿主交回文件之间本来就有竞争，`ErrClosed` / `ErrCancelled` 说的是「宿主不再要了」而不是「巩固坏了」，这两档完全无声（每次正常退出都响一行的告警等于没有告警），其余失败照记一条 WARN——三种结果由 `dream_trigger_log_test.go` 各钉一条，失败与收摊还各自先证一句前提（那个状态下确实回那个码）。域锁内的前台 LLM 调用（`Update` 的轮次提炼）同样挂
    `ac.OpCtx`，避免生命周期屏障被一次完整往返阻塞。一次提炼要串多少次往返不在本契约里限定：长输入
    在 `llmops` 里按块走，块数随这一轮转录的长度增长，所以退出点是一块而不是一整轮，而一轮能在锁内
    串起任意多块——内容侧那两条上限量的是单条记录，不量一轮。
@@ -198,7 +198,7 @@ internal/{domain,scene,turn,dream,graph,plan,content}
   「不在」，少它一份就让被删的是幸存那几条、被覆写的正是读不回的那一个。只有「从幸存
   记录重建一份视图或缓存」的扫描才允许跳过它，代价是那一条在这份缓存里缺席，而这个
   缺席与它被保留窗裁掉时形状相同——**前提是这份缺席只影响读**。缓存一旦还决定下一次写
-  落到哪里（计划树的序号由幸存节点与幸存事件点名的序号两处取高，而记录 id 由 (键, 序号) 派生），缺席就不再
+  落到哪里（计划树的序号由幸存节点与幸存内容点名的序号两处取高，而记录 id 由 (键, 序号) 派生），缺席就不再
   是「少看见一条」而是「把别人的地址当成空槽」，这类写入要在落记录前定点读那一个地址。第三类同样容错：只作为一次算法输入的那份读（衰减遍历
   边、蒸馏取样、交给模型的列举），跳过一条的代价是这一轮少算它，盘上不会多出说不清的
   东西——这类扫描不去要求读得回来。
@@ -242,7 +242,10 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    画像继续），不再静默返回缺 L0 的上下文。
 2. **`Search` 零 LLM、零话题写入**：唯一写是那一行场景记录（轮次计数，
    写失败即报错——轮次号是铸 ID 的依据，不能吞），话题从 `ac.L2Meta` 取
-   depth-1。**`Search` 自己这一侧不留残渣**：开了没沉淀的轮次没有话题记录，读两次只沉淀
+   depth-1。正 `SceneDreamTopicThreshold` 下，交回的是定序后最新 N 条，
+   `OmittedTopicCount` 等于完整 depth-1 数减去返回数；负数同时关闭这个读侧上限与轮末自动 Dream。
+   省略只作用于本次结果，不改 L2Meta 或任何记录，`SceneContext` 仍交完整 depth≤2 转录，
+   L4 原文也仍按原键取回。**`Search` 自己这一侧不留残渣**：开了没沉淀的轮次没有话题记录，读两次只沉淀
    一次就是跳号。宿主在那把键下自己写下的内容与计划树另算——它们是真实的记录，只是没有
    话题记录可依附，`DeleteTopic` 认不到，收走它们的只有 Dream 的保留窗清扫。
 3. **`Update` 先收束这一轮，再每轮一次提炼，且提炼排在话题写入前**：它把入参里非空的
@@ -250,7 +253,8 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    `Seq=SeqUser`、`Output` 占 `Seq=SeqAgent`
    （对话主干的两个预留格，所以重关一轮是原地覆写而不是累积两份收束）、`Outcome` 作一条
    `turn_outcome` 事件追加（一次挂起加一次恢复是两条事实，故按调用次数累积）——
-   这几条都在任何落盘之前整批过 `content.ValidateAppend`，一条被拒就一条都不写。
+   这几条都在任何落盘之前整批过 `content.ValidateAppend`，一条被拒就一条都不写；随后只调一次
+   `content.AppendBatch`，整批编码后走一次底层 `WriteRecordBatch`，成功才统一更新 L4 镜像。
    然后读该话题已有的 `Kind=utterance` 记录（几种都行，一轮不再恒两条），渲染成带
    说话者标签的转录交 `llmops.ExtractKeywords`；提炼失败或空结果直接报错，此时话题与
    L2Meta 一个字都没动，而**已落下的那几条与宿主先前 append 的内容原样留着**——回滚它们
@@ -279,7 +283,8 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    自己的原文回到 surface，与取代它的那份组摘要并排出现、组还少一个子
    （`TestCreateTurnTopicL2ReplayKeepsSunkPosition`）。
 4. **巩固按单场景规模触发**：`consolidateScene` 在 depth-1 话题数超
-   `Defaults.SceneDreamTopicThreshold` 时调度该场景 Dream（同一份表在装配处归一过，故
+   `Defaults.SceneDreamTopicThreshold` 时调度该场景 Dream；同一正阈值也是 `Search` 的最新话题数上限，
+   因而 Dream 缓慢、在途或失败都不撤掉读侧边界（同一份表在装配处归一过，故
    「没填」= 默认 24，`t <= 0` 只剩「宿主显式写了负数」这一种来路）。被拒的那趟不改表层计数，于是下一次收轮仍然超阈、再问一次，而本库不记「上次拒过」——那要新造一份会出错的持久真相；这条花费的上界是每场景每趟一次巩固调用（`DreamInFlight` 吸收在飞期间的那几次收轮，`TestDeclinedConsolidationAsksOncePerScenePerPass` 数着调用次数钉住），而 `DreamCompressMinTopics` 判在问模型之前，默认 20 低于触发 24，所以它对已被触发的场景不构成第二道闸。单个融合组是
    "摘要内容 → 提炼关键词 → 建父话题 → 下沉子话题"的串写，任一步
    失败都回滚本组已写的记录（`dream.discardFusedGroup` 按父话题键整删它名下的
@@ -333,7 +338,7 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    硬 `ErrIO`；索引在 `domain.NewContext` 从记录重建，故重启自愈、运行期不
    自愈。镜像的同一处容错还管到**分配**：`Seq=0` 那一格是本包替宿主选的，而它数的是幸存
    记录，解不开的那条虽不在镜像里、槽位号仍在派生 id 上——所以分配的写入落笔前定点读那一格
-   （`content.Append`），除「不存在」以外不写；宿主点名 `Seq` 的覆写照旧不查，那是它自己
+   （`content.AppendBatch`），除「不存在」以外不写；宿主点名 `Seq` 的覆写照旧不查，那是它自己
    选的重放语义。一个话题内读回顺序只看 `Seq`：按惯例用户说的占 1、回复占 2，所以「问在前、
    答在后」由写入侧选的槽位保证，不需要时间戳、更不需要拿 `Role` 打平（事件的
    `Role` 未设即 0，正是 `RoleUser`，一旦混进对话读法就会把一次工具调用显示成
@@ -389,17 +394,17 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    一个图一次写而不是每条记录一次），改名走同一个偏更新原语（`name=nil`），
    只读到没写过的图不动它——skip 模式重导同一批节点因此不会让这张图看起来变新。
 10. **内容只有两个写入口，且都落到同一个原语**：宿主侧的内容一律经
-   `content.Append`（调用者两个：`AppendArchive` 逐条写，`Update` 写它自己那三条
-   收束记录——对话原文与事件都走这一条，`NodeSeq` 就写在记录上）；巩固组那份摘要是唯一不经该边界的写入——
+   `content.Append` / `content.AppendBatch`（`AppendArchive` 逐条写，`Update` 把它自己那三条
+   收束记录合成一次批写——对话原文与事件都走这一条，`NodeSeq` 就写在记录上）；巩固组那份摘要是唯一不经该边界的写入——
    `dream.applyOneGroup` 直接落 `repo.AppendArchiveL4`，因为它要占 `Seq=SeqUser`
    那一格与库自有的 `RoleDream`，而 `ValidateAppend` 恰恰拒调用方给 `RoleDream`
    （否则宿主能伪造巩固产物）。`RoleDream` 只由巩固那一处戳写，两入口之下的原语只有
    一个。`content.ValidateAppend` 是宿主侧写入的唯一校验点，且**排在任何落盘之前**——
    被拒的写入一条记录也不留；巩固侧对应的判据是空摘要不成组，它同样排在组落盘之前。
    计划写面不碰内容：三个写口只动树，一步做过什么永远是宿主自己 append 的那些记录。
-   事件若绑了 `NodeSeq`，本话题的树上必须已有那一步
+   内容若绑了 `NodeSeq`，本话题的树上必须已有那一步
    （`ac.Plans.HasSeq`）：一个序号指向计划里没有的步骤，是宿主的计划与它的记录
-   对不上，报出来比顺手长出一棵树诚实。这道检查也排在落盘之前。
+   对不上，报出来比顺手长出一棵树诚实。这道检查对两种 Kind 都排在落盘之前。
    两种 Kind 各自的字段归属、预算（事件的 4 KiB 量的是**整条记录**——
    `EventType` 与 `Content` 合起来算，分开各量一道就等于给批量写入留一个免检的口袋）
    与跨 Kind 的 Seq 覆写语义记在
@@ -416,9 +421,9 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    （`sameFile` 走绝对路径归一）与拒已存在的目标，绝不覆盖任何既有文件。
 12. **节点只由创建口带出来，重述口只改字段**：`PlanNodeAdd` 是唯一
    能让一个步骤存在的入口（parentSeq 0 即开树），序号由 `PlanCache.NextSeq` 发号，宿主只回传、不自造。
-   发号取两处的高：该轮幸存节点的最高序号，**与**这一轮幸存事件里被点名的最高序号——一步
-   与指着它的那条事件共用同一个 (轮, 序号) 地址，而两者各自老化，所以被裁掉的步骤留下的
-   事件仍占着那个序号；代价是一轮的序号可能出现空洞，那是比把别人的工作算到新步上更便宜的结果。
+   发号取两处的高：该轮幸存节点的最高序号，**与**这一轮幸存内容里被点名的最高序号——一步
+   与指着它的那条记录共用同一个 (轮, 序号) 地址，而两者各自老化，所以被裁掉的步骤留下的
+   内容仍占着那个序号；代价是一轮的序号可能出现空洞，那是比把别人的工作算到新步上更便宜的结果。
    `parentSeq` 指向树上没有的一步是 `ErrNotFound`：一步
    的父是谁只有宿主知道，为它补出一个父节点是猜，猜错就长出一枝没人计划过的树。
    `PlanNodeUpdate` 只改已存在的这一步——`Status` 每次必须给（留空会被
@@ -455,7 +460,8 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    `edge_ids` 里会点着一条已无起点的边**。`TestInterfaceL1AfterDeletingOneOfTwoRelatedScenes`
    两半各钉一条（节点随删除立刻走／引用延后到巩固），并给「这个窗口真存在」配了前置守卫；
    两份指南 L1 那行据此写明：`edge_ids` 不是活的连接键。
-14. **`SceneContext` 的说话顺序是读出来的语义**：融合父话题的时间戳就是它吞掉
+14. **`SceneContext` 的说话顺序是读出来的语义**：它不受 `Search` 的最新 N 条读侧预算影响，
+    始终交回完整 depth≤2 转录。融合父话题的时间戳就是它吞掉
    的第一轮的 `UserTimestamp`，两者必然同值，所以排序在时间戳之后加
    `Depth` 次键（浅的在前）。只按时间戳排时 `slices.SortFunc` 不稳定，一组的
    摘要会随机落到它所总结的原文中间。同一条读**只渲染 utterance**（`content.Read(..., KindUtterance)`），
@@ -490,9 +496,9 @@ internal/{domain,scene,turn,dream,graph,plan,content}
 `internal/repo/agent.md` 中受影响的条目；在小方法包里改动契约时，同步该包
 自己的 `agent.md`。
 
-- 关键词提炼无本地兜底：LLM 输出不可解析即 `ErrLLM`（这一轮不产生话题），`internal` 根不初始化任何分词器。一轮的提炼与 Dream 的融合提炼共用 `llmops.ExtractKeywords`——它只吃一段文本，不认识记录结构。
+- 关键词提炼无本地兜底：LLM 输出不可解析即 `ErrLLM`（这一轮不产生话题），`internal` 根不初始化任何分词器。一轮的提炼覆盖该轮全部 utterance（含绑定与未绑定计划步骤的），事件不进入；关键词条数与单条长度没有业务上限，prompt 不再导向简短，解析只去空白与去重。物理上仍受模型上下文、`LlmConfig.MaxOutputTokens` 与记录格式约束，装不下即报错，不保存截断轨；`TestUpdateDistillsEveryUtteranceAndPreservesTrackAfterReopen` 钉住全量输入与重开后逐字一致。一轮的提炼与 Dream 的融合提炼共用 `llmops.ExtractKeywords`——它只吃一段文本，不认识记录结构。
 - L0 蒸馏同样无兜底，且**「答非所问」与「答得少」分开判**：回包里 `emotion`/`mbti` 缺整块即 `ErrLLM`（这一轮不动画像），解码出的零值不去盖库里已蒸馏的那半；`per_node` 只认本次样本集里的 id，认不出的行在 `llmops` 内丢掉——带下去只会让一次抄错的 hex 被 L1 回填报成「一条记录读不回」，从此每次 Dream 都停在最后一步。三类调用（关键词、巩固、蒸馏）要多少输出都不越 `LlmConfig.MaxOutputTokens` 声明的端点上限（越过去是一次被端点直接拒掉的请求），截断升级花的是「端点上限减去 `llmops.ConsolidationMaxTokens`」那一段——宿主没抬过 `MaxOutputTokens` 时那一段是零，此时一条装不下的融合摘要就是该场景这次巩固的 `ErrLLM`（上限与升级路径写在 `llmops` 那一条上）；巩固 prompt 里的目标条数就是 `Defaults.DreamCompressMinTopics`，并且任何数字都排在「不同主题禁并」这条规则之后。
 - `ImportL3` 的批校验：Title/Domain 必填在 composition root 判，导入模式在批次构造处判（`core.L3ImportMode.Valid()` 是唯一列词表的地方）——两者都排在任何读与写之前，拒批即一字节不写。批次创建时又把整池的三张索引一次读全（图槽 name→id、每图标题集、每图边键）——三者中任何一条记录读不回都让**整批**在第一个写入之前被拒、错误带着那条记录的 id。一个派生地址已被别的记录占着的条目（标签正好拼出某节点 id 那一类）是**单条**拒绝，走 `result.Errors`，同批其余照旧落地。
-- 宿主面测试覆盖 26 个会话方法 + 8 个 `DB` 方法（`IsClosed` 由 `api/surface_closed_test.go` 管），按层分文件：`test/api_interface_scene_test.go`（L2 场景生命周期）、`api_interface_plan_test.go`（L5 按步骤逐个建的树、Model A 折叠与节点字段回读、事件键到自己那一轮、重开后读回）、`api_interface_turn_test.go`（一轮之下原文与事件各归各的读法）、`api_interface_multi_test.go`（租户隔离与 `CompactTo`）。这些用例里轮次与场景一律不回传——写入开着的轮靠的是 `Search` 之后库的自持字段，
+- 宿主面测试覆盖 27 个会话方法 + 8 个 `DB` 方法（`IsClosed` 由 `api/surface_closed_test.go` 管），按层分文件：`test/api_interface_scene_test.go`（L2 场景生命周期）、`api_interface_plan_test.go`（L5 按步骤逐个建的树、全量与活跃视图、Model A 折叠与节点字段回读、事件键到自己那一轮、重开后读回）、`api_interface_turn_test.go`（一轮之下原文与事件各归各的读法）、`api_interface_multi_test.go`（租户隔离与 `CompactTo`）。这些用例里轮次与场景一律不回传——写入开着的轮靠的是 `Search` 之后库的自持字段，
 只有读侧与改侧（`SearchL4{TopicID}`、`RenameTopic`、`DeleteTopic`、`SceneContext`）
 还拿着库铸给宿主的 id。

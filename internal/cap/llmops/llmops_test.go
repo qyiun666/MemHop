@@ -67,6 +67,17 @@ func TestSystemConsolidateStatesTheConfiguredFloor(t *testing.T) {
 	}
 }
 
+func TestSystemKeywordsDoesNotSteerEntriesShorter(t *testing.T) {
+	for _, unwanted := range []string{"Keep each entry concise", "avoid full sentences"} {
+		if strings.Contains(systemKeywords, unwanted) {
+			t.Fatalf("keyword prompt still steers entries shorter: %q", unwanted)
+		}
+	}
+	if !strings.Contains(systemKeywords, "No limit on count") {
+		t.Fatal("keyword prompt no longer states that count is unbounded")
+	}
+}
+
 // The MBTI type word is re-derived from the four dimensions, so a reply whose
 // type contradicts its own numbers does not get to keep it. The dimensions
 // themselves are clamped: an out-of-range signal would otherwise flow straight

@@ -839,12 +839,10 @@ func TestAppendEventCannotForgeContentFields(t *testing.T) {
 		t.Fatalf("event must carry the step it actually bound to, got %d", landed.NodeSeq)
 	}
 
-	// The axes stay apart: an utterance that names an event, hangs on a step, or
-	// claims the consolidation role is refused outright, and so is a record whose
-	// kind nobody can name.
+	// The axes stay apart: an utterance that names an event or claims the
+	// consolidation role is refused outright, and so is a record whose kind nobody can name.
 	for name, slot := range map[string]core.ArchiveSlot{
 		"utterance with an event name": {Kind: core.KindUtterance, Role: core.RoleUser, EventType: "tool_call", Content: "x", CreatedAt: 1},
-		"utterance on a plan step":     {Kind: core.KindUtterance, Role: core.RoleUser, NodeSeq: 1, Content: "x", CreatedAt: 1},
 		"host-written dream role":      {Kind: core.KindUtterance, Role: core.RoleDream, Content: "x", CreatedAt: 1},
 		"undefined kind":               {Kind: core.ArchiveKind(7), EventType: "tool_call", Content: "x", CreatedAt: 1},
 		"empty content":                {Kind: core.KindEvent, EventType: "tool_call", CreatedAt: 1},

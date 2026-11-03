@@ -36,10 +36,9 @@ Rules:
 4. Use both individual keywords AND short phrases — phrases preserve context that single words lose (e.g. "cancel picnic due to rain" is more meaningful than just "rain" + "picnic")
 5. No limit on count — extract everything meaningful; for long text, extract proportionally more; never truncate or summarize — only remove noise (greetings, filler, repetition)
 6. Colloquial variants — for important terms, include common synonyms or colloquial alternatives (e.g. "肚子疼" → also add "胃痛"; "bug" → also add "缺陷") so one idea is not split across differently worded turns
-7. Keep each entry concise: prefer keywords and short phrases, avoid full sentences
-8. Preserve original language; keep mixed-language terms as-is; preserve numbers and proper nouns exactly
-9. Exclude: greetings, filler words, question words (when/where/what/why/how/who/which), generic verbs (go/do/get/run/make/have/want/like/think) unless tied to a specific action
-10. Output ONLY valid JSON: {"keywords":[...]}, no markdown, no code fences`
+7. Preserve original language; keep mixed-language terms as-is; preserve numbers and proper nouns exactly
+8. Exclude: greetings, filler words, question words (when/where/what/why/how/who/which), generic verbs (go/do/get/run/make/have/want/like/think) unless tied to a specific action
+9. Output ONLY valid JSON: {"keywords":[...]}, no markdown, no code fences`
 
 // keywordFormatRetry is appended to the user prompt for the format-constrained
 // retry: long inputs drift toward natural-language summaries.

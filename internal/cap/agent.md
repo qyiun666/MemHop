@@ -14,7 +14,8 @@
   与一趟两小时同一个重要性上（`TestNodeDecayComposesAcrossPasses`：回戳停在本次时刻、两趟等于一趟、
   区间里这口钟被推进过的节点不为整段买单）。
 - `llmops/`：三类 LLM 调用点的 prompt 契约、输出解析与自愈重试预算
-  （`ExtractKeywords`/`Consolidate`/`Distill`）；传输经注入的 `Chat` 接口。
+  （`ExtractKeywords`/`Consolidate`/`Distill`）；传输经注入的 `Chat` 接口。关键词 prompt
+  不设条数或单条长度的业务上限，答复只去空白与去重，输出预算仍受 `Chat` 的上限约束。
 - `profile/`：L0 画像的紧凑摘要（`Brief`）、蒸馏样本与排名（`Samples`）、蒸馏结果
   写回（`MergeDistill`）。样本的关键词按节点名下的话题逐个读回来，读不回的那一个让这一行
   **掉出样本集**，而不是以空关键词入列：prompt 要模型从每行带的词推情感与人格，一行什么都不带

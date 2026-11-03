@@ -22,13 +22,16 @@ type SearchQuery struct {
 }
 
 // SearchResult carries the L0 profile plus the read surface of one scene: the
-// scene record, its depth-1 topics, and NewTopicID — the topic this read opened.
+// scene record, its latest bounded depth-1 topics, and NewTopicID — the topic this
+// read opened. OmittedTopicCount reports older surface topics omitted by the read
+// budget; omission does not delete them.
 type SearchResult struct {
-	Profile      ProfileSlot `json:"profile"`
-	ProfileBrief string      `json:"profile_brief"`
-	Scene        SceneSlot   `json:"scene"`
-	Topics       []TopicSlot `json:"topics"`
-	NewTopicID   uint64      `json:"new_topic_id"`
+	Profile           ProfileSlot `json:"profile"`
+	ProfileBrief      string      `json:"profile_brief"`
+	Scene             SceneSlot   `json:"scene"`
+	Topics            []TopicSlot `json:"topics"`
+	OmittedTopicCount int         `json:"omitted_topic_count"`
+	NewTopicID        uint64      `json:"new_topic_id"`
 }
 
 // TurnEnd is what one turn leaves behind when its host closes it. Input and Output

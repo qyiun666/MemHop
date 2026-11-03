@@ -69,6 +69,36 @@ func BuildTree(ac *domain.Context, topicID uint64) (*PlanTree, error) {
 	return &PlanTree{Roots: views, DoneCount: done, TotalCount: total}, nil
 }
 
+// BuildActiveTree omits settled steps. An active descendant takes its nearest
+// active ancestor, or becomes a root when every ancestor is settled.
+func BuildActiveTree(ac *domain.Context, topicID uint64) (*PlanTree, error) {
+	full, err := BuildTree(ac, topicID)
+	if err != nil {
+		return nil, err
+	}
+	roots := activeForest(full.Roots)
+	done, total := CountForest(roots)
+	return &PlanTree{Roots: roots, DoneCount: done, TotalCount: total}, nil
+}
+
+func activeForest(nodes []PlanNodeView) []PlanNodeView {
+	return activeNodes(nodes, 0)
+}
+
+func activeNodes(nodes []PlanNodeView, parentSeq uint32) []PlanNodeView {
+	out := make([]PlanNodeView, 0, len(nodes))
+	for _, n := range nodes {
+		if n.Status != PlanInProgress {
+			out = append(out, activeNodes(n.Children, parentSeq)...)
+			continue
+		}
+		n.ParentSeq = parentSeq
+		n.Children = activeNodes(n.Children, n.Seq)
+		out = append(out, n)
+	}
+	return out
+}
+
 // aggregate returns the nodes of one turn's plan from the domain's plan cache
 // (nil when no node lives under that topic). The aggregate carries nodes only:
 // what happened during a step is not a property of the node.

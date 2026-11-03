@@ -24,7 +24,10 @@ import (
 // Search reads the domain's conversation and opens the turn the host is about to
 // run: it returns the scene record, its depth-1 topics in turn order (the host's
 // context), the domain's L0 profile and the topic id this read minted for the new
-// turn — Update closes that turn, and everything the turn records (its L4 content,
+// turn. A positive SceneDreamTopicThreshold caps that surface to the latest topics
+// and OmittedTopicCount reports how many older ones were left out; nothing is
+// deleted, and SceneContext still reads the full transcript. Update closes that
+// turn, and everything the turn records (its L4 content,
 // its L5 plan tree) keys on it. Which scene and which turn are the domain's to
 // remember, so a host running one agent over one library carries no id across
 // calls. Naming a SceneID scopes this read to that scene instead, and an L3ID
@@ -54,6 +57,11 @@ func (db *DB) Search(agentID uint64, q SearchQuery) (*SearchResult, error) {
 		return nil, err
 	}
 	topics := scene.SurfaceTopics(ac, sceneSlot.SceneID)
+	omitted := 0
+	if limit := db.config.Defaults.SceneDreamTopicThreshold; limit > 0 && len(topics) > limit {
+		omitted = len(topics) - limit
+		topics = topics[len(topics)-limit:]
+	}
 	opened := core.ComputeTurnTopicID(sceneSlot.SceneID, sceneSlot.TurnSeq)
 	if opened == 0 {
 		// Zero is what the domain uses to say "no turn is open", so a turn key that
@@ -65,11 +73,12 @@ func (db *DB) Search(agentID uint64, q SearchQuery) (*SearchResult, error) {
 	}
 	ac.Scene, ac.Turn = sceneSlot.SceneID, opened
 	return &SearchResult{
-		Profile:      slot,
-		ProfileBrief: profile.Brief(slot),
-		Scene:        *sceneSlot,
-		Topics:       topics,
-		NewTopicID:   opened,
+		Profile:           slot,
+		ProfileBrief:      profile.Brief(slot),
+		Scene:             *sceneSlot,
+		Topics:            topics,
+		OmittedTopicCount: omitted,
+		NewTopicID:        opened,
 	}, nil
 }
 

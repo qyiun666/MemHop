@@ -30,7 +30,8 @@ type (
 	// leave a knob at 0 and the library default answers, as it does for
 	// `LlmConfig`'s two budgets; a negative is the explicit "switch this off",
 	// except the content window, which has no off spelling because retention is
-	// what bounds the file.
+	// what bounds the file. For SceneDreamTopicThreshold, a negative disables both the
+	// automatic Dream trigger and Search's latest-topic cap.
 	MemHopDefaults = internal.MemHopDefaults
 )
 
@@ -288,15 +289,19 @@ type TopicSlot struct {
 	AgentTimestamp int64    `json:"agent_timestamp"`
 }
 
-// SearchResult is the read surface of one scene. NewTopicID is the topic this read
-// opened for the turn the host is about to run: Update closes that turn into it, and
-// the turn's L4 records and L5 plan tree key on it.
+// SearchResult is the read surface of one scene. A positive SceneDreamTopicThreshold
+// keeps Topics to the latest depth-1 rows, and OmittedTopicCount says how many older
+// rows were omitted rather than deleted; SceneContext and L4 reads still reach the
+// full memory. NewTopicID is the topic this read opened for the turn the host is
+// about to run: Update closes that turn into it, and the turn's L4 records and L5
+// plan tree key on it.
 type SearchResult struct {
-	Profile      ProfileSlot `json:"profile"`
-	ProfileBrief string      `json:"profile_brief"`
-	Scene        SceneSlot   `json:"scene"`
-	Topics       []TopicSlot `json:"topics"`
-	NewTopicID   string      `json:"new_topic_id"`
+	Profile           ProfileSlot `json:"profile"`
+	ProfileBrief      string      `json:"profile_brief"`
+	Scene             SceneSlot   `json:"scene"`
+	Topics            []TopicSlot `json:"topics"`
+	OmittedTopicCount int         `json:"omitted_topic_count"`
+	NewTopicID        string      `json:"new_topic_id"`
 }
 
 // AgentInfo is one agent domain of the file as DB.Agents lists it. ID is the same 16-hex

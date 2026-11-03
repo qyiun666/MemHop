@@ -110,8 +110,8 @@ func (db *DB) SearchL4(agentID uint64, q L4Query) ([]core.ArchiveSlot, error) {
 // Seq 0 allocates a slot above everything the topic holds, above Seq 1 and 2 which
 // belong to the turn's dialogue; the slot taken is what this call returns, and
 // naming that slot again is an overwrite, not an error — that is what lets a
-// replayed append converge instead of accumulating versions. An event may name the
-// plan step it belongs to (NodeSeq), which has to exist already: the tree is what
+// replayed append converge instead of accumulating versions. Either kind may name
+// the plan step it belongs to (NodeSeq), which has to exist already: the tree is what
 // the plan write face creates, so an ordinal nobody created is refused, not grown.
 // A record that does not satisfy the write contract is refused before anything is
 // stored.
@@ -121,10 +121,9 @@ func (db *DB) AppendArchive(agentID uint64, slot core.ArchiveSlot) (uint64, erro
 		return 0, err
 	}
 	defer ac.Mu.Unlock()
-	if slot.Kind == core.KindEvent && slot.NodeSeq != 0 &&
-		!ac.Plans.HasSeq(ac.Turn, slot.NodeSeq) {
+	if slot.NodeSeq != 0 && !ac.Plans.HasSeq(ac.Turn, slot.NodeSeq) {
 		return 0, common.NewError(common.ErrInvalidQuery,
-			fmt.Sprintf("the event names step %d, which is not on this turn's plan tree",
+			fmt.Sprintf("the content names step %d, which is not on this turn's plan tree",
 				slot.NodeSeq))
 	}
 	return content.Append(ac, agentID, ac.Turn, slot)

@@ -1,10 +1,11 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// The Session methods split by audience. The runtime/task face (18) is what the host
+// The Session methods split by audience. The runtime/task face (19) is what the host
 // drives every turn and what LLM tools bind to: Search, Update, Dream, AppendArchive,
 // SceneContext, ListScenes, GetL0, UpdateL0, ListL1, SearchL4, GetL3, ListL3,
-// ImportL3, QueryL3Nodes, QueryL3Subgraph, PlanNodeAdd, PlanNodeUpdate, PlanState. The
+// ImportL3, QueryL3Nodes, QueryL3Subgraph, PlanNodeAdd, PlanNodeUpdate, PlanState,
+// PlanActive. The
 // assembly/admin face (8) is host code at session boundaries and management channels
 // rather than the per-turn loop: UpdateScene, RenameTopic, MergeScenes, DeleteTopic,
 // DeleteScene, UpdateL3, DeleteL3, AgentID.
@@ -47,6 +48,11 @@ type Session struct {
 // continues, named or not, it is refused (ErrInvalidQuery) rather than dropped: an
 // anchor that did nothing must not look adopted. UpdateScene moves the anchor of a
 // scene that exists, and only when ScenePatch.Force names the move.
+// A positive SceneDreamTopicThreshold also caps Topics to the latest depth-1 rows;
+// OmittedTopicCount reports how many older rows were left out, without deleting
+// them. SceneContext still returns the complete depth-1/depth-2 transcript, and L4
+// reads reach the originals. A negative threshold disables both this cap and the
+// automatic Dream trigger.
 func (s *Session) Search(q SearchQuery) (*SearchResult, error) {
 	res, err := s.session.Search(q)
 	if err != nil {
@@ -296,16 +302,16 @@ func (s *Session) SearchL4(q L4Query) ([]ArchiveSlot, error) {
 // An event names itself with a non-empty EventType and has no speaker, so its Role and
 // ContentType are the library's (0 and text) whatever you set the second one to. An
 // utterance declares Role (RoleUser / RoleAgent / RoleSystem) and ContentType and
-// carries neither EventType nor NodeSeq; RoleDream is refused. Content over budget is
+// carries no EventType; RoleDream is refused. Content over budget is
 // refused, not truncated — 4 KiB per event, 64 KiB per utterance — because a shortened
 // record reads back exactly like a complete one, and an unbounded utterance turns one
 // distillation into an unbounded number of LLM calls holding the domain lock. Every
 // rule is refused before any record or plan node is touched.
 //
-// NodeSeq attributes an event to one step of this turn's plan tree, and that step has
-// to exist already: PlanNodeAdd is the only write that creates a step, so an ordinal
-// nobody created is refused rather than answered with a fresh branch, and a mistyped
-// one cannot open a second tree. 0 attributes the event to no step at all.
+// NodeSeq attributes either kind of content to one step of this turn's plan tree, and
+// that step has to exist already: PlanNodeAdd is the only write that creates a step, so
+// an ordinal nobody created is refused rather than answered with a fresh branch, and a
+// mistyped one cannot open a second tree. 0 attributes the record to no step at all.
 //
 // EventType is the host's own word for the step: the engine never branches on it, and
 // these conventions are a shared vocabulary for the reader, not an accepted set —
@@ -326,11 +332,11 @@ func (s *Session) AppendArchive(in ArchiveInput) (uint64, error) {
 // The returned ordinal is the library's to hand out and the host's to keep: never
 // derived from a title, and no two steps of one turn are ever live at the same
 // ordinal. It is issued above both this turn's live steps and the highest ordinal its
-// surviving events still name — a step and the events bound to it share one address,
+// surviving content still names — a step and the content bound to it share one address,
 // while the two age separately — so an ordinal is free again only once nothing speaks
 // of it. A turn's numbering can therefore carry a gap, and density is not something a
 // host may read back out of it. It is still not unique across turns: a retention sweep
-// frees a swept step's ordinal once the events naming it go too, so a host returning
+// frees a swept step's ordinal once the content naming it goes too, so a host returning
 // to a turn older than the retention window treats an ordinal it held before as a new
 // step's address, not as the same step.
 //
@@ -358,8 +364,8 @@ func (s *Session) PlanNodeAdd(parentSeq uint32, title string) (uint32, error) {
 // Summary folds up from its children's — that text is the engine's own derivation, so it
 // follows the branch: a step planned under a parent that had already closed, or a settled
 // child finished with different words, re-folds it. State a Summary on the parent yourself
-// and the field becomes yours: from then on no rollup rewrites it. This call writes no content: the events a step
-// produced are L4 records, appended with AppendArchive on the same turn.
+// and the field becomes yours: from then on no rollup rewrites it. This call writes no content: the records
+// attributed to a step are L4 content, appended with AppendArchive on the same turn.
 func (s *Session) PlanNodeUpdate(step PlanStep) error {
 	return s.session.PlanNodeUpdate(toInternalPlanStep(step))
 }
@@ -367,6 +373,19 @@ func (s *Session) PlanNodeUpdate(step PlanStep) error {
 // PlanState returns the plan tree of the turn Search opened for this domain.
 func (s *Session) PlanState() (*PlanTree, error) {
 	t, err := s.session.PlanState()
+	if err != nil {
+		return nil, err
+	}
+	out := fromPlanTree(t)
+	return &out, nil
+}
+
+// PlanActive returns only the open turn's in-progress steps; done and failed
+// steps are omitted. An active descendant remains under its nearest active
+// ancestor, or becomes a root when every ancestor is settled. ParentSeq is
+// rewritten to that visible parent, and DoneCount is always zero.
+func (s *Session) PlanActive() (*PlanTree, error) {
+	t, err := s.session.PlanActive()
 	if err != nil {
 		return nil, err
 	}

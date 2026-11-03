@@ -42,7 +42,6 @@ func TestValidateAppendRefusals(t *testing.T) {
 		{"event without a name", core.ArchiveSlot{Kind: core.KindEvent, Content: "c", CreatedAt: 1}},
 		{"event over budget", core.ArchiveSlot{Kind: core.KindEvent, EventType: "x", Content: long, CreatedAt: 1}},
 		{"utterance with an event name", core.ArchiveSlot{Kind: core.KindUtterance, Role: core.RoleUser, EventType: "x", Content: "c", CreatedAt: 1}},
-		{"utterance on a plan step", core.ArchiveSlot{Kind: core.KindUtterance, Role: core.RoleUser, NodeSeq: 1, Content: "c", CreatedAt: 1}},
 		{"utterance as the library's dream role", core.ArchiveSlot{Kind: core.KindUtterance, Role: core.RoleDream, Content: "c", CreatedAt: 1}},
 		{"utterance with an unnameable role", core.ArchiveSlot{Kind: core.KindUtterance, Role: 77, Content: "c", CreatedAt: 1}},
 	}
@@ -56,6 +55,7 @@ func TestValidateAppendRefusals(t *testing.T) {
 	for _, ok := range []core.ArchiveSlot{
 		{Kind: core.KindEvent, EventType: "x", Content: "c", CreatedAt: 1},
 		{Kind: core.KindUtterance, Role: core.RoleUser, Content: "c", CreatedAt: 1},
+		{Kind: core.KindUtterance, Role: core.RoleUser, NodeSeq: 1, Content: "c", CreatedAt: 1},
 		{Kind: core.KindUtterance, Role: core.RoleSystem, ContentType: core.ContentImage, Content: "a.png", CreatedAt: 1},
 		// the same payload an event may not carry is fine as an utterance
 		{Kind: core.KindUtterance, Role: core.RoleUser, Content: long, CreatedAt: 1},
@@ -196,5 +196,59 @@ func TestReadReportsSeqGaps(t *testing.T) {
 	}
 	if len(got) != 2 || got[0].Seq != 1 || got[1].Seq != 3 {
 		t.Fatalf("gap not visible in the reported Seq: %+v", got)
+	}
+}
+
+func TestAppendBatchAllocatesConsecutiveSeqAndRefusesWholeBatch(t *testing.T) {
+	engine, ac := newReadFixture(t)
+	const topicID uint64 = 0xfeed
+	records := []core.ArchiveSlot{
+		{Kind: core.KindEvent, EventType: "first", Content: "one", CreatedAt: 1000},
+		{Kind: core.KindEvent, EventType: "second", Content: "two", CreatedAt: 1000},
+	}
+	seqs, err := AppendBatch(ac, core.DefaultAgentID, topicID, records)
+	if err != nil {
+		t.Fatalf("AppendBatch: %v", err)
+	}
+	if len(seqs) != 2 || seqs[0] != 3 || seqs[1] != 4 {
+		t.Fatalf("allocated Seq = %v, want consecutive [3 4]", seqs)
+	}
+
+	_, err = AppendBatch(ac, core.DefaultAgentID, topicID, []core.ArchiveSlot{
+		{Kind: core.KindEvent, EventType: "valid", Content: "must not land", CreatedAt: 1001},
+		{Kind: core.KindEvent, Content: "missing its event name", CreatedAt: 1001},
+	})
+	if err == nil {
+		t.Fatal("a batch containing an invalid record must be refused")
+	}
+	if got := len(core.CollectAllArchives(engine, core.DefaultAgentID)); got != 2 {
+		t.Fatalf("the refused batch left %d records, want only the first pair", got)
+	}
+	seq, err := Append(ac, core.DefaultAgentID, topicID, core.ArchiveSlot{
+		Kind: core.KindEvent, EventType: "third", Content: "three", CreatedAt: 1002,
+	})
+	if err != nil || seq != 5 {
+		t.Fatalf("Append after a refused batch = Seq %d, %v; want the unburned Seq 5", seq, err)
+	}
+}
+
+func TestAppendBatchPrechecksEveryAllocatedAddressBeforeWriting(t *testing.T) {
+	engine, ac := newReadFixture(t)
+	const topicID uint64 = 0xfeed
+	// The mirror cannot see this malformed record, but its derived address still
+	// occupies Seq 4. The first automatic slot (3) is free; the second is not.
+	if _, err := engine.WriteRecord(core.DefaultAgentID, core.RecL4Archive,
+		core.HashContent(topicID, 4), []byte(`{"id":`)); err != nil {
+		t.Fatalf("occupy the second automatic address: %v", err)
+	}
+	_, err := AppendBatch(ac, core.DefaultAgentID, topicID, []core.ArchiveSlot{
+		{Kind: core.KindEvent, EventType: "first", Content: "must not land", CreatedAt: 1000},
+		{Kind: core.KindEvent, EventType: "second", Content: "occupied", CreatedAt: 1000},
+	})
+	if err == nil {
+		t.Fatal("the batch must refuse an allocated address it cannot read")
+	}
+	if got := core.CollectAllArchives(engine, core.DefaultAgentID); len(got) != 0 {
+		t.Fatalf("the first record landed before the second address was checked: %+v", got)
 	}
 }

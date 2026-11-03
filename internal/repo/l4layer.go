@@ -5,6 +5,7 @@ package repo
 
 import (
 	"cmp"
+	"encoding/json"
 	"slices"
 	"strings"
 
@@ -20,17 +21,39 @@ import (
 // enumerated again. QueryArchivesL4 reads by that key or by any AND-ed
 // combination of filters.
 
-// AppendArchiveL4 writes one content slot. The caller owns every field of the
-// record except the id: this is where (topic, Seq) becomes
-// core.HashContent(TopicID, Seq). Nothing reports an overwrite as distinct
-// from a first write, and no handle comes back: the address is the
-// (topic, Seq) the caller already holds.
-func AppendArchiveL4(engine *core.StorageEngine, agentID uint64, idx *index.L4Index, arc *core.ArchiveSlot) error {
+type recordBatchWriter interface {
+	WriteRecordBatch([]core.RecordEntry) ([]uint64, error)
+}
+
+// AppendArchiveL4 writes one content slot through the same primitive as a batch.
+// The caller owns every field except the id, derived here from (topic, Seq).
+func AppendArchiveL4(engine recordBatchWriter, agentID uint64, idx *index.L4Index, arc *core.ArchiveSlot) error {
 	arc.IDHash = core.HashContent(arc.TopicID, arc.Seq)
-	if err := core.WriteArchiveSlot(engine, agentID, arc.IDHash, arc); err != nil {
-		return err
+	return AppendArchiveBatchL4(engine, agentID, idx, []core.ArchiveSlot{*arc})
+}
+
+// AppendArchiveBatchL4 derives every address and encodes every record before
+// asking the engine for one flush+remap cycle. The content mirror follows only
+// a successful batch: a failed write must not name records the disk cannot read.
+func AppendArchiveBatchL4(engine recordBatchWriter, agentID uint64, idx *index.L4Index, arcs []core.ArchiveSlot) error {
+	writes := make([]core.RecordEntry, len(arcs))
+	for i := range arcs {
+		arcs[i].IDHash = core.HashContent(arcs[i].TopicID, arcs[i].Seq)
+		data, err := json.Marshal(&arcs[i])
+		if err != nil {
+			return common.NewError(common.ErrSerialization, "marshal ArchiveSlot", err)
+		}
+		writes[i] = core.RecordEntry{
+			AgentID: agentID, RecordType: core.RecL4Archive, IDHash: arcs[i].IDHash, Data: data,
+		}
 	}
-	idx.Append(arc.TopicID, arc.Seq, arc.IDHash, arc.Kind, arc.CreatedAt, arc.NodeSeq)
+	if _, err := engine.WriteRecordBatch(writes); err != nil {
+		return common.NewError(common.CodeOf(err), "append l4 content batch", err)
+	}
+	for i := range arcs {
+		arc := &arcs[i]
+		idx.Append(arc.TopicID, arc.Seq, arc.IDHash, arc.Kind, arc.CreatedAt, arc.NodeSeq)
+	}
 	return nil
 }
 

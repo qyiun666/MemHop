@@ -169,7 +169,8 @@ func surfaceReadFixture(t *testing.T) (*DB, *Session, map[string]func() any) {
 		// The plan forest is the one read served out of the domain's own cache, and it is
 		// nested — the case where handing back a shared slice would be both easiest to do
 		// and hardest to notice.
-		"PlanState": func() any { return mustRead(sess.PlanState()) },
+		"PlanState":  func() any { return mustRead(sess.PlanState()) },
+		"PlanActive": func() any { return mustRead(sess.PlanActive()) },
 	}
 
 	return m, sess, taken

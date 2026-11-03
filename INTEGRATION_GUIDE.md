@@ -1,7 +1,7 @@
 # MemHop Host Integration Guide (Go API)
 
 > How to embed MemHop **as a Go module** from your host
-> process. Applies to **v1.6.6**. Module path `github.com/qyiun666/MemHop` — you
+> process. Applies to **v1.6.7**. Module path `github.com/qyiun666/MemHop` — you
 > only ever import the `api` package.
 
 > This guide describes the surface as it is now: `api.Open` → `api.DB`, domains held
@@ -102,7 +102,7 @@ the default, and refuses a window past the one the sweep can represent.
 
 | Field | Default | Meaning |
 |---|---|---|
-| SceneDreamTopicThreshold | 24 | Once a scene's depth-1 topic count passes this, `Update` schedules that scene's Dream in the background. A negative disables the trigger. A refused pass changes nothing, so the count still passes next time and the scene is asked again — checked at every round close, and one consolidation call per scene per pass is its ceiling — a Dream already in flight for that scene absorbs the intervening closes (`TestDeclinedConsolidationAsksOncePerScenePerPass`). `DreamCompressMinTopics` is checked *before* the model is asked, so a scene under it spends nothing — but by default that floor (20) sits below this trigger (24), and every settled round adds a depth-1 row while the model keeps refusing, so raising the floor delays these asks rather than bounding them (it is also the number the consolidation prompt tells the model to converge toward). The one lever that bounds the spend is this field negative, then driving `Dream` on a cadence you choose. |
+| SceneDreamTopicThreshold | 24 | Once a scene's depth-1 topic count passes this, `Update` schedules that scene's Dream in the background. A positive value also caps every `Search` to the latest N depth-1 topics, with `OmittedTopicCount` reporting the older rows left out, whether Dream succeeds, is slow or in flight, or fails. A negative disables both the trigger and the Search cap. Omission is not deletion: `SceneContext` still returns the full depth-1/depth-2 transcript and L4 reads still reach the originals. A refused pass changes nothing, so the count still passes next time and the scene is asked again — checked at every round close, and one consolidation call per scene per pass is its ceiling — a Dream already in flight for that scene absorbs the intervening closes (`TestDeclinedConsolidationAsksOncePerScenePerPass`). `DreamCompressMinTopics` is checked *before* the model is asked, so a scene under it spends nothing — but by default that floor (20) sits below this trigger (24), and every settled round adds a depth-1 row while the model keeps refusing, so raising the floor delays these asks rather than bounding them (it is also the number the consolidation prompt tells the model to converge toward). The one lever that bounds the Dream spend is this field negative, then driving `Dream` on a cadence you choose. |
 | DreamCompressMinTopics | 20 | Topics per scene before Dream will compress. It is also the number the model is told to converge toward, so a negative — no floor, merge as far as the model's own rules allow — is the aggressive spelling, not the conservative one. |
 | AgentIdleTTLMs | 3600000 | An agent domain whose context has been idle this long is freed from memory (it rebuilds from its records on next use). A negative disables the sweep. The default domain and the shared L3 pool are never reclaimed. One fact is not rebuildable: the turn that was open. A domain reclaimed mid-round refuses that round's remaining writes and its close until the host opens a new turn — nothing lands silently on the fresh turn — and what the round had already appended stays stored under a topic no read names, since it never settled. Keep this longer than your longest round, or set a negative. |
 | ContentRetentionMs | 604800000 (7 days) | How long a turn's records (L4 content and L5 plan nodes) outlive it before a Dream sweeps them. 0 means the library default; a negative is refused with `ErrConfig` instead of being folded onto it, because a host writing one is asking for a sweep that never runs. There is no "keep everything" spelling either: the longest window the sweep can measure is 9223372036854 ms (about 292 years), and past that the millisecond count overflows a `time.Duration` — the cutoff lands in the future and every record in the domain reads as expired — so `Open` refuses it too. The window is wall-clock, not round-count: records stamped older than it (a backfill, a test seed) are swept by the first Dream that runs, before any read gets a chance at them. A round that is still open is no exemption - the sweep reads the stamp, not the round's state; what a Dream never does is drop the open turn, so the pending close still settles it (its own pair is fresh, so it survives). **L3 is not a turn's record, and no window reaches it**: the knowledge graph is the file's shared pool on its own content clock, so the sweep that empties a domain leaves the project nodes a tool call reads — and their content — intact |
@@ -230,7 +230,8 @@ No `ctx` parameter — the read path holds no cancellable LLM or network work �
 | `Profile` | L0 profile snapshot | can go into the system prompt |
 | `ProfileBrief` | the profile as a **bounded** digest: at most 6 lines, every free-text field capped at 160 runes and each preference value at 120 (a truncated one ends in `…`), the 5 lowest preference keys, in that order, and 2100 runes as the ceiling it never exceeds | light per-turn injection; fetch full `Profile` only when needed |
 | `Scene` | the scene just read (`SceneID` / `SceneName` / `L3ID`) | read-side and corrections only — `SceneContext`, `UpdateScene`, `MergeScenes` take it; the write path never needs it, the library holds the open scene |
-| `Topics` | the scene's depth-1 topics in user-timestamp order, each with its `FusedKeywords` | **the memory injected into this turn's prompt**; originals are addressed by a turn's own topic id — `SearchL4(L4Query{TopicID})` |
+| `Topics` | the scene's depth-1 topics in user-timestamp order, each with its `FusedKeywords`; a positive `SceneDreamTopicThreshold` keeps only the latest N when there are more | **the bounded memory injected into this turn's prompt**; originals are addressed by a turn's own topic id — `SearchL4(L4Query{TopicID})` |
+| `OmittedTopicCount` | how many older depth-1 topics the positive Search threshold omitted; 0 when nothing was omitted or the threshold is negative | tells the host this is a window, not the whole scene; use `SceneContext` for the full depth-1/depth-2 transcript or L4 reads for originals |
 | `NewTopicID` | the topic this read opened for the turn about to run | the read/correction key for this turn's content (`SearchL4{TopicID}`, `DeleteTopic`); the write calls (`AppendArchive`, `Update`, the plan family) do **not** take it — the library holds the open turn |
 
 An unknown `SceneID` returns `ErrNotFound` (the library will not create a scene you asked to read); an empty one continues the domain's current scene, creating one only when it holds none. `NewScene: true` skips all of that and opens a fresh scene. `SceneID` and `NewScene` are not sent together: one names a conversation to go on, the other asks for a different one, and the read is refused (`ErrInvalidQuery`) rather than answered by dropping a flag a host believes it set.
@@ -259,7 +260,7 @@ seq, err := db.AppendArchive(api.ArchiveInput{
     Content:   userRawText,       // required
     CreatedAt: userTS,            // Unix milliseconds — a seconds- or microsecond-scale stamp is refused
 })
-// An event names itself instead of taking a speaker, and may hang on a plan step:
+// An event names itself instead of taking a speaker; either kind may hang on a plan step:
 seq, err = db.AppendArchive(api.ArchiveInput{
     Kind:      api.KindEvent,
     EventType: "tool_call",       // event only; free-form, no whitelist
@@ -288,7 +289,7 @@ step — only `PlanNodeAdd` does, and parentSeq 0 opens the turn's tree): an und
 milliseconds: a seconds-scale record is already older than the retention window, so the
 next consolidation sweeps the turn's transcript, and a microsecond-scale one never
 expires), an undefined `ContentType`, an event with no `EventType`, an utterance
-carrying an `EventType` or a `NodeSeq`, an event whose `NodeSeq` names a step this turn
+carrying an `EventType`, or content whose `NodeSeq` names a step this turn
 never created, **or one a retention sweep has since taken away** (`ErrInvalidQuery`, and nothing
 lands; a refused append consumes no ordinal either), the consolidation role `3` (the
 library marks its own summaries with it), and content over budget — `MaxEventPayloadBytes`
@@ -352,7 +353,7 @@ named. (`TestInterfaceDreamScopesConsolidationButNotRetention`,
 Usually **the host does not need to call it**: once a scene's depth-1 topic count passes `Defaults.SceneDreamTopicThreshold` (default 24), `Update` schedules that scene's Dream in the background (one in flight per scene).
 
 Runs L2→L1→L0 compression / decay / profile distillation (several LLM calls, slow) — keep it in a goroutine or between turns.
-Returns a structured `*DreamReport`: `L4RecordsPruned / L5NodesPruned / ConsolidatedScenes / L2TopicsCompressed / L1NodesAdded|Removed / L1EdgesAdded|Removed / L0Updated` plus `Stages []DreamStage{Name, Status, DurationMs}` (status `ok | skipped | cancelled | error`). Three of those figures are easy to misread: `L2TopicsCompressed` counts the topics sunk into fused groups, not the number of groups; `L1NodesAdded` counts the scene nodes the sync wrote, which includes an existing node re-stamped because its topic set moved, not only newly created ones; and `L1EdgesAdded` counts the co-occurrence edges created **or strengthened** by the pass. The two removal counters span both stages that remove — the stale rebuild and the decay — and count the edges each took with it as well as the nodes. An empty report is not an error; a mid-pipeline failure returns the partial report with the error. What a host reads back is bounded by convergence, not by a cap: passing the threshold schedules that scene's Dream, and Dream only merges the groups the model judges one — topics it never picked stay at depth 1.
+Returns a structured `*DreamReport`: `L4RecordsPruned / L5NodesPruned / ConsolidatedScenes / L2TopicsCompressed / L1NodesAdded|Removed / L1EdgesAdded|Removed / L0Updated` plus `Stages []DreamStage{Name, Status, DurationMs}` (status `ok | skipped | cancelled | error`). Three of those figures are easy to misread: `L2TopicsCompressed` counts the topics sunk into fused groups, not the number of groups; `L1NodesAdded` counts the scene nodes the sync wrote, which includes an existing node re-stamped because its topic set moved, not only newly created ones; and `L1EdgesAdded` counts the co-occurrence edges created **or strengthened** by the pass. The two removal counters span both stages that remove — the stale rebuild and the decay — and count the edges each took with it as well as the nodes. An empty report is not an error; a mid-pipeline failure returns the partial report with the error. Dream still merges only the groups the model judges one, but `Search` does not depend on that convergence for a bound: the same positive threshold returns only the latest N depth-1 topics and reports `OmittedTopicCount`, even while a pass is slow or after one fails. The omitted memories remain stored and readable through `SceneContext` and L4.
 The first two are the retention sweep (清单 5/6 里的「删除 7 天以上」): a host cannot rebuild them afterwards —
 the records are gone, and the same pass writes other records, so no before/after diff of `Stats` separates them.
 
@@ -379,7 +380,7 @@ bookkeeping of its own:
 | decides to start a round | `Search(SearchQuery{})` — nothing goes in, the scene's next turn comes open |
 | runs its arms (model call, tool call, sandbox answer) | one `AppendArchive` per fact worth keeping, on the turn now open |
 | ends the round with a status word | `Update(TurnEnd{Input, Output, Outcome, CreatedAt})` — each text field is optional and writes only its own record (a scheduled or resumed round may send `Output` alone), and one that sends none is refused |
-| plans the round step by step | `PlanNodeAdd` / `PlanNodeUpdate` / `PlanState`, all on the open turn |
+| plans the round step by step | `PlanNodeAdd` / `PlanNodeUpdate` / `PlanState` / `PlanActive`, all on the open turn |
 | sleeps (a timer may fire mid-round) | `Dream` — it neither drops the turn the domain holds open nor sweeps what that turn has already written |
 
 `Outcome` takes the kernel's own word for which arm ended the round: the engine stores it
@@ -410,7 +411,7 @@ the round ended. Nothing there is carried by the host's memory: the write calls 
 at all. The one key a loop may hold is `NewTopicID` — the name the round-opening read returned —
 and it is needed only to read this round's own event track while the round is still running
 (`SearchL4{TopicID, Kind: event}`) or to retract it (`DeleteTopic`). The plan tree does not even
-need that: `PlanState` reads the turn the library holds open. An event appended mid-round is
+need that: `PlanState` and `PlanActive` read the turn the library holds open. An event appended mid-round is
 readable by that id before `Update` closes the turn.
   The other half of that arrangement is what makes a mid-round recall safe: **the round in
   progress is not in the scene read at all.** A turn's topic row is created by the close, not by the
@@ -461,9 +462,9 @@ What is left for the host is eight facts to know, not eight adapters to write:
   group is a depth-1 topic whose summary rides as its own utterance marked `Role: api.RoleDream`,
   and the turns that group swallowed are its depth-2 children — this read is the only one that names
   those children, and the only place their originals come back. Both scene reads come off that same
-  cache, so `Search`'s `Topics` and this read's depth-1 rows are the same rows in the same order
-  (`TestInterfaceSceneReadsAgreeOnTheirSharedRows`) — a loop that reads the scene twice never meets two
-  answers of one scene. So: (1) drop rows with `Depth > 1`,
+  cache. Below the positive Search threshold, `Search`'s `Topics` and this read's depth-1 rows are the
+  same rows in the same order (`TestInterfaceSceneReadsAgreeOnTheirSharedRows`); above it, Search is the
+  latest-N suffix of those rows with `OmittedTopicCount` giving the difference, while this read stays full. So: (1) drop rows with `Depth > 1`,
   those are the rows a surface row already absorbed — usually an original turn, but sometimes an earlier group that a later pass folded away (it keeps its own summary and its children still name it, while what it said went into the newer summary); sinking takes one surface row down exactly one level per pass, so this read's own depth cap cannot hide a topic from a reader — what it lists is everything the scene still holds; (2) where `ChildCount > 0`, take that
   `RoleDream` line as the memory's text; (3) otherwise take the turn's own `RoleUser`/`RoleAgent`
   lines; (4) date a memory by the row's own `UserTimestamp` — for a turn that is when its user
@@ -509,7 +510,13 @@ What is left for the host is eight facts to know, not eight adapters to write:
 A turn is one topic: the id `Search` minted for it and now holds, and everything the host records
 about it lives under that id. Dialogue originals and operation events are the same
 kind of record differing only by `Kind`, so a turn can hold as many of either as the
-host recorded, and one `Update` distills them into one keyword track.
+host recorded, and one `Update` distills all of its utterances — whether bound to a plan
+step or not — into one keyword track. Events are not distillation input.
+
+There is no business cap on keyword count or entry length, and the extraction prompt does
+not steer entries to be shorter. The physical bounds remain the model's context,
+`LlmConfig.MaxOutputTokens`, and the record format: a reply that does not fit is an error,
+not a silently truncated keyword track.
 
 What happens *while* the turn runs (tool calls, intermediate output, subagent results)
 is not conversation, so it goes in as `Kind: api.KindEvent` beside the utterances —
@@ -562,7 +569,7 @@ when an admin-face method wanders in here.
 
 | tool name (suggested) | call | keys the model fills | what comes back for the prompt |
 |---|---|---|---|
-| `memory_search` | `Session.Search` | `scene_id`, `l3_id`, `new_scene` | profile + its brief, the scene, its settled topics, the topic id now open |
+| `memory_search` | `Session.Search` | `scene_id`, `l3_id`, `new_scene` | profile + its brief, the scene, its latest bounded settled topics, `omitted_topic_count`, the topic id now open |
 | `memory_record` | `Session.AppendArchive` | `kind`, `seq`, `content_type`, `role`, `event_type`, `node_seq`, `created_at`, `content` | the slot the record took |
 | `memory_close_turn` | `Session.Update` | `input`, `output`, `outcome`, `created_at` — **at least one of the three text fields**, all-empty is refused | the turn's topic, its keyword track among its fields |
 | `memory_dream` | `Session.Dream` | `scene_id` | the `DreamReport`: stages and counts |
@@ -580,6 +587,7 @@ when an admin-face method wanders in here.
 | `plan_add_step` | `Session.PlanNodeAdd` | `parent_seq`, `title` | the ordinal that step is addressed by from now on |
 | `plan_update_step` | `Session.PlanNodeUpdate` | `seq`, `title`, `status`, `summary` | nothing; a refused update leaves the tree untouched |
 | `plan_state` | `Session.PlanState` | none | the open turn's forest, with `DoneCount`/`TotalCount` summed over every step; while no turn is open it answers `ErrInvalidQuery` — that is "nothing in progress", not a storage failure |
+| `plan_active` | `Session.PlanActive` | none | only the open turn's in-progress steps; active descendants of settled steps move to their nearest active ancestor or become roots |
 
 The table is checked against the shapes rather than trusted: `TestToolArgumentsDecodeIntoEveryInputShape`
 decodes each tool's argument object straight into the input struct and requires every key to land — a
@@ -600,9 +608,9 @@ needs the host's approval path, not a tool schema.
 
 ## 8. Layer API quick reference
 
-The 26 session methods split by audience:
+The 27 session methods split by audience:
 
-- **Runtime/task face (18)** — the host drives these every turn and LLM tools bind to them: `Search` / `AppendArchive` / `Update` / `Dream` (the host-driven loop), `GetL0` / `UpdateL0`, `ListL1`, `ListScenes` / `SceneContext`, `GetL3` / `ListL3` / `ImportL3` / `QueryL3Nodes` / `QueryL3Subgraph`, `SearchL4`, `PlanNodeAdd` / `PlanNodeUpdate` / `PlanState`.
+- **Runtime/task face (19)** — the host drives these every turn and LLM tools bind to them: `Search` / `AppendArchive` / `Update` / `Dream` (the host-driven loop), `GetL0` / `UpdateL0`, `ListL1`, `ListScenes` / `SceneContext`, `GetL3` / `ListL3` / `ImportL3` / `QueryL3Nodes` / `QueryL3Subgraph`, `SearchL4`, `PlanNodeAdd` / `PlanNodeUpdate` / `PlanState` / `PlanActive`.
 - **Assembly/admin face (8)** — host code at session boundaries and management channels only, never an LLM tool: `UpdateScene` / `RenameTopic` / `MergeScenes` / `DeleteScene` / `DeleteTopic`, `UpdateL3` / `DeleteL3`, `AgentID`.
 
 The file-level lifecycle and diagnostics sit on `api.DB` instead (9): `Primary` / `SubAgent` / `Agent` / `Agents`, then `Checkpoint` / `CompactTo` / `Close` / `IsClosed` / `Stats` (file size plus reachable record count across the file — the numbers a compaction decision is made from). There is no capability surface anywhere: the engine neither stores nor parses cards, so a host reads the events of a turn with `SearchL4{Kind: event}` and organizes them itself.
@@ -695,7 +703,7 @@ deleted topic still listed until the next pass rebuilds the snapshot
 | Method | Meaning |
 |---|---|
 | `db.ListScenes(l3ID) ([]SceneSlot, error)` | scene list (`SceneID / SceneName / L3ID`); a non-empty `l3ID` keeps only the scenes anchored to that project domain, `""` lists all. The order is record-id ascending, so the same file answers the same listing on every call — it is a repeatable answer, not a relevance ranking |
-| `db.SceneContext(sceneID) (*SceneContext, error)` | the scene's whole transcript (topics + their L4 originals) and **no write at all** — no turn is opened; **use for session resume**, and for every recall a round makes after the one that opened its turn. An empty `sceneID` reads the scene this domain is working, so nothing has to be held to call it again. Unlike `Search` it flattens to depth 2, because a Dream-fused group keeps its originals on the children it sank, and this is the only read that brings them back. Each row also carries its own `UserTimestamp`/`AgentTimestamp` — the bounds of that turn, or of the group it belongs to — which is the only date left once retention has swept its messages. `ChildCount > 0` is what marks a fused group (its own single message carries role 3, the mark Dream puts on a fused group's summary); `Depth` only says whether the topic is still on the scene's surface — a group a later pass folded away sits at 2 level with the turns it summarizes. Rows arrive in a fixed order — `UserTimestamp`, then shallower-first (a fused group carries the timestamp of the first turn it swallowed, so ties are the normal case), then the topic id — so a host reads the listing linearly and never re-sorts it. The entries returned are the whole count — roots and the sunk children this read alone brings back|
+| `db.SceneContext(sceneID) (*SceneContext, error)` | the scene's whole transcript (topics + their L4 originals) and **no write at all** — no turn is opened; **use for session resume**, and for every recall a round makes after the one that opened its turn. An empty `sceneID` reads the scene this domain is working, so nothing has to be held to call it again. Unlike `Search` it flattens to depth 2, because a Dream-fused group keeps its originals on the children it sank, and this is the only read that brings them back. Search's latest-N budget never applies here: this transcript remains complete. Each row also carries its own `UserTimestamp`/`AgentTimestamp` — the bounds of that turn, or of the group it belongs to — which is the only date left once retention has swept its messages. `ChildCount > 0` is what marks a fused group (its own single message carries role 3, the mark Dream puts on a fused group's summary); `Depth` only says whether the topic is still on the scene's surface — a group a later pass folded away sits at 2 level with the turns it summarizes. Rows arrive in a fixed order — `UserTimestamp`, then shallower-first (a fused group carries the timestamp of the first turn it swallowed, so ties are the normal case), then the topic id — so a host reads the listing linearly and never re-sorts it. The entries returned are the whole count — roots and the sunk children this read alone brings back|
 | `db.UpdateScene(sceneID, api.ScenePatch{Name, L3ID, Force}) (SceneSlot, error)` | title it (`Name`), anchor it to an L3 project domain (`L3ID`), or clear the anchor (`L3ID: &""`); nil fields keep their stored value, and the **written scene comes back**. Moving a scene that already has one to a **different** domain needs `Force: true` — without it the call is refused (`ErrInvalidQuery`) rather than quietly losing the old anchor; clearing needs no Force because it is reversible. A patch that changes nothing — an empty one, or values the scene already holds — **appends nothing**: the file is append-only, so the confirm-without-listing use this call documents would otherwise cost bytes per look, and a retried patch per retry |
 | `db.RenameTopic(topicID, name) (TopicSlot, error)` | the one host-authored label a topic carries: the engine derives nothing into it, so consolidating or merging rewrites the record around the name. Visible to the next `Search` / `SceneContext` immediately, not at the next consolidation. An empty name is refused — topics are born unnamed, so `""` is the absence of a label, not one — an unknown topic is `ErrNotFound` and nothing is created for it, and renaming to the name it already carries writes nothing |
 | `db.MergeScenes(primaryID, []secondaryIDs) error` | fold conversations into one: each secondary's topics are retargeted under the primary and its scene record goes. **The survivor keeps its own title**, and an L3 anchor is carried rather than lost: a survivor that
@@ -849,7 +857,7 @@ modes to choose between. The order is what a query spans: `Seq` within one topic
 of that order. So the reads a host
 wants after a turn are one call each: `SearchL4(L4Query{TopicID: &topicID, Kind:
 &utterance})` gives what was said, the same with `Kind: &event` gives what happened,
-and without `Kind` both; adding `NodeSeq: 2` cuts that event track down to the records
+and without `Kind` both; adding `NodeSeq: 2` cuts those records down to the ones
 attributed to one plan step and every step under it, so a step's work reads back without
 pulling the whole turn; `L4Query{IDs: []string{id}}` gets a single record back by
 id (a missing id yields an empty slice, a malformed one `ErrInvalidQuery`). An empty
@@ -869,8 +877,8 @@ _, err := db.AppendArchive(api.ArchiveInput{
 })
 // Seq and the owning topic are engine-assigned: what you append lands on the open
 // turn, and that turn's plan nodes live under the same key.
-// `NodeSeq` is what binds an event to a step — see the plan surface below;
-// leave it 0 for a plain turn event.
+// `NodeSeq` is what binds either kind of content to a step — see the plan surface below;
+// leave it 0 for content bound to no step.
 ```
 
 The track reads back with `SearchL4(L4Query{TopicID: &topicID, Kind: &event})`, in Seq
@@ -897,21 +905,22 @@ turn's content in L4. A step is addressed by a **per-turn
 ordinal** (`Seq`, a `uint32` the library hands out from 1 and the host only ever echoes
 back: the create calls return it), and `ParentSeq` says which step it hangs under
 (`0` = a root). An ordinal is issued above everything that still names one — the surviving
-steps and this turn's surviving events bound to a step — so a turn's numbering can carry a gap:
-an ordinal an event still speaks of is never handed to a new step (the two age separately, and a
-step swept by the retention window can leave an event naming it). There is no plan id and no path
+steps and this turn's surviving content bound to a step — so a turn's numbering can carry a gap:
+an ordinal a record still speaks of is never handed to a new step (the two age separately, and a
+step swept by the retention window can leave a record naming it). There is no plan id and no path
 string to mint, the plan calls name no topic id (they act on the turn `Search` opened), and
-`PlanState()` is how a tree comes back, and it reads the turn `Search` opened: with no turn open it
-refuses with `ErrInvalidQuery`, which a caller should read as an empty answer rather than a
-broken library.
+`PlanState()` is how the full tree comes back, while `PlanActive()` reads only its in-progress
+steps. Both read the turn `Search` opened: with no turn open they refuse with `ErrInvalidQuery`,
+which a caller should read as an empty answer rather than a broken library.
 
 | Call | Meaning |
 |---|---|
 | `seq, err := db.PlanNodeAdd(0, title)` | open this turn's tree by creating its first root step, and take back the ordinal that step is addressed by from here on. A turn's tree starts with no steps, so this is also how a plan first appears under a turn; there is no separate "create the tree" call |
 | `seq, err := db.PlanNodeAdd(parentSeq, title)` | add one step to the tree and get its ordinal. `parentSeq` `0` hangs it at the top level, so this is also how a second root joins the forest; any other value must name a step this tree already holds — `PlanNodeAdd` under an unknown parent is `ErrNotFound` and grows nothing. A step is created `in_progress`, so no status is asked for here; a title may be left empty and filled in later, and the view falls back to the ordinal until the host names the step |
 | `err := db.PlanNodeUpdate(api.PlanStep{Seq: seq, Status: api.PlanStatusDone, Summary: s})` | restate one step: its `Status` plus the node's own `Title`/`Summary`. `Status` is stated every time (there is no "leave it as it was" spelling) while a blank `Title`/`Summary` keeps what the node holds, so updating a step never rewinds its title. A parent's folded `Summary` is the one text the engine owns and re-derives: once every direct child of a Done parent is terminal it is folded from theirs, and it keeps following the branch — a step planned under a parent that had already closed, or a settled child finished with different words, re-folds it. State a `Summary` on the parent yourself and it becomes your text: no rollup rewrites it. A step reaching a terminal status records `FinishedAt`; restating a settled step as `in_progress` re-opens it and drops that timestamp. Once every direct child of a parent whose status is done reaches a terminal status itself, that parent's summary folds up from its children's. A status outside `in_progress` / `done` / `failed`, or an ordinal this turn never created (`ErrNotFound`), is refused **before the node is touched** and leaves the tree exactly as it was. This call writes no content |
-| `tree, err := db.PlanState()` | read the forest view (`PlanTree.Roots` + `DoneCount` / `TotalCount`, which are summed over every step of every tree; every `PlanNodeView` carries `Seq` / `ParentSeq` / `Status` / `Summary` / `Children`) — also the restart recovery path |
-| `db.AppendArchive(ev)` with a non-zero `ev.NodeSeq` | record a step event against one step of this turn's tree. The step has to exist already: an ordinal nobody created refuses the whole record (`ErrInvalidQuery`) and stores nothing, because an event naming a step the plan never holds is the plan and the record disagreeing — the tree is `PlanNodeAdd`'s to build, and a mistyped ordinal cannot quietly open a second one. `EventType` is **the host's own name for the step**, on this path exactly as on a bare turn event — the engine never branches on it (the name comes back verbatim through `SearchL4`) and only refuses an empty one. Convention names for readers: `plan_step`, `llm_request`, `llm_output`, `tool_call`, `tool_result`, `subagent_spawn`, `subagent_done`, `context_inject`, `ask_user`, `user_reply` |
+| `tree, err := db.PlanState()` | read the full forest view (`PlanTree.Roots` + `DoneCount` / `TotalCount`, which are summed over every step of every tree; every `PlanNodeView` carries `Seq` / `ParentSeq` / `Status` / `Summary` / `Children`) — also the restart recovery path |
+| `tree, err := db.PlanActive()` | read only the in-progress steps, omitting both done and failed ones. An active step stays under its nearest active ancestor; when every ancestor is settled it becomes a root. `ParentSeq` names that visible parent, `DoneCount` is zero, and `TotalCount` counts only the visible steps |
+| `db.AppendArchive(in)` with a non-zero `in.NodeSeq` | record content against one step of this turn's tree. The step has to exist already: an ordinal nobody created refuses the whole record (`ErrInvalidQuery`) and stores nothing, because content naming a step the plan never holds is the plan and the record disagreeing — the tree is `PlanNodeAdd`'s to build, and a mistyped ordinal cannot quietly open a second one. `EventType` is **the host's own name for the step**, on this path exactly as on a bare turn event — the engine never branches on it (the name comes back verbatim through `SearchL4`) and only refuses an empty one. Convention names for readers: `plan_step`, `llm_request`, `llm_output`, `tool_call`, `tool_result`, `subagent_spawn`, `subagent_done`, `context_inject`, `ask_user`, `user_reply` |
 
 Status has three values and one string encoding each: `api.PlanStatusInProgress`
 (`in_progress`), `api.PlanStatusDone` (`done`), `api.PlanStatusFailed` (`failed`). The
@@ -930,7 +939,7 @@ direct children reach a terminal status (and re-folds when that branch changes u
 token budget therefore stays the host's, exactly as on the recall path, and a budget-shaped
 read is not added before a host is shown needing one.
 
-The plan write surface sits on `api.Session`'s 18 task-face methods: a tree is built on
+The plan methods sit on `api.Session`'s 19 task-face methods: a tree is built on
 the turn `Search` opened for the domain, so these calls name no topic id.
 
 The all-zero key `0000000000000000` is reserved (it is the value a record leaves its key
@@ -943,7 +952,7 @@ an empty answer, because a turn that is still open has content before it has a t
 
 ---
 
-## 9. Exported types (v1.6.6)
+## 9. Exported types (v1.6.7)
 
 | Kind | Names | Use |
 |---|---|---|
@@ -1277,7 +1286,8 @@ since `ErrIO` alone cannot tell a busy file from a broken disk.
     the explicit negative spelling — the retention window being the one exception, where a negative is refused at
     `Open` rather than read as "off" — and for `DreamCompressMinTopics` a negative is the
     *lossy* direction, since that number is what the consolidation prompt asks the scene
-    to converge toward. Context size is held in check only by Dream converging each scene
-    towards `DreamCompressMinTopics` (default 20) — a target, not a ceiling a scene is kept
-    under — so disabling automatic consolidation lets the injected context grow without
-    limit.
+    to converge toward. A positive `SceneDreamTopicThreshold` is also Search's hard cap:
+    only the latest N depth-1 topics are returned and `omitted_topic_count` reports the rest,
+    regardless of Dream's progress or outcome. Those memories are not deleted — `SceneContext`
+    and L4 still retrieve them. A negative threshold explicitly restores the unbounded Search
+    surface while also disabling automatic Dream.
