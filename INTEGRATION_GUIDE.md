@@ -1,7 +1,7 @@
 # MemHop Host Integration Guide (Go API)
 
 > How to embed MemHop **as a Go module** from your host
-> process. Applies to **v1.6.7**. Module path `github.com/qyiun666/MemHop` — you
+> process. Applies to **v1.6.8**. Module path `github.com/qyiun666/MemHop` — you
 > only ever import the `api` package.
 
 > This guide describes the surface as it is now: `api.Open` → `api.DB`, domains held
@@ -952,7 +952,7 @@ an empty answer, because a turn that is still open has content before it has a t
 
 ---
 
-## 9. Exported types (v1.6.7)
+## 9. Exported types (v1.6.8)
 
 | Kind | Names | Use |
 |---|---|---|

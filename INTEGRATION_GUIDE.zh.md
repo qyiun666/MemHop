@@ -1,7 +1,7 @@
 # MemHop 宿主集成指南（Go API 方式）
 
 > 面向直接以 **Go module 内嵌**方式集成 MemHop 的宿主程序。
-> 适用版本：**v1.6.7**。模块路径 `github.com/qyiun666/MemHop`，只允许 import `api` 包。
+> 适用版本：**v1.6.8**。模块路径 `github.com/qyiun666/MemHop`，只允许 import `api` 包。
 
 > 本指南描述的就是当前的面：`api.Open` → `api.DB`，域以句柄持有（`Primary` /
 > `SubAgent` / `Agent`，第三条收的是 `Session.AgentID` 交出的 id，宿主只原样回传），
@@ -675,7 +675,7 @@ _, err := db.AppendArchive(api.ArchiveInput{
 
 ---
 
-## 9. 导出类型清单（v1.6.7）
+## 9. 导出类型清单（v1.6.8）
 
 | 类别 | 名字 | 用途 |
 |---|---|---|

@@ -3,6 +3,14 @@
 MemHop 遵循语义化版本。本文件记录每个版本的核心改动；完整历史见
 README 的版本表与 git log。
 
+## v1.6.8 — 2026-11-11 — 依赖与 CI 动作跟进（库代码零改动）
+
+本版不改库行为、公开面与磁盘格式：`FormatVersion` 仍为 `0x0012`，公开面仍为 `api.Session` 27 个业务方法 + `api.DB` 9 个。三处版本号跟进，动机是别把小版本攒到发版那天变成一次大跳。
+
+1. **`golang.org/x/sys` v0.49.0 → v0.50.0**（`go.mod`/`go.sum`，库代码一字未动）。本仓用到它的面只有四个调用：`internal/repo/core/filelock_unix.go` 的 `unix.Flock` 加锁与解锁、`internal/repo/core/mmap_unix.go` 的 `unix.Mmap` 与 `unix.Munmap`；`x/sys/windows` 全仓没有 import，Windows 那半走标准库。0.50.0 的十个提交分别落在 freebsd/386 的 sendfile 写计数、Linux getdents 的零 inode 目录项、`ParseUnixCredentials` 拒绝短载荷、新增 `IoctlGetUint64`、cpu 的 wasm32、Windows 的 SyscallN 统一与 PSAPI 位访问器/386 字段删除、ppc64x 的 R12 寄存器——没有一个碰到这四个符号。
+2. **CI 两个动作跟进**（`.github/workflows/workflow.yml`）：`actions/checkout` v4 → v7、`actions/setup-go` v5 → v7。两条 breaking 各自判过适用性：checkout v7 禁止在 `pull_request_target` 与 `workflow_run` 下检出 fork PR，而本 workflow 只有 `push: main` 与 `pull_request` 两个触发器、机器人升级分支同在本仓不是 fork，故不适用；setup-go 跳过 v6，而 v6 重写了工具链选择逻辑，本 workflow 用 `go-version-file: go.mod` 读版本，因此实测升级后真正装上的工具链——日志三行依次为 `Setup go version spec 1.27.3`、`Successfully set up Go version 1.27.3`、`go version go1.27.3 linux/amd64`，与模块要求一致、无漂移。两者共同要求的 node24 runner 下限 v2.327.1 由托管机满足。
+3. **验证跑满**：`go build ./...`、`go vet ./...`、`gofmt -l api internal test`（无输出）、`go test ./api/... ./internal/...`（16 个包 ok、零 FAIL）与零额度的 `go test ./test/` 全部 exit 0；三平台 CI 在合并后的树上跑满 12 步，含 govulncheck、解码器 fuzz smoke、`go test -race ./...` 与两份指南骨架编译。
+
 ## v1.6.7 — 2026-11-03 — 有界召回、计划化轮次与发布加固
 
 本版在 v1.6.6 的轮次模型上收紧宿主可见上下文与计划归因，并补齐离线、规模与真实模型证据。磁盘格式仍为 `0x0012`；公开面钉为 `api.Session` 27 个业务方法 + `api.DB` 9 个，新增 `PlanActive` 与 `SearchResult.OmittedTopicCount`。

@@ -20,7 +20,7 @@
 </p>
 
 <p align="center">
-  <strong>当前版本：v1.6.7</strong>
+  <strong>当前版本：v1.6.8</strong>
 </p>
 
 ---
@@ -269,6 +269,7 @@ make check-guides                       # 编译两份指南里的可运行骨�
 
 | 版本 | 日期                 | 亮点 | 核心改动 |
 |------|----------------------|------|---------|
+| v1.6.8 | 2026-11-11 | 依赖与 CI 动作跟进，库代码零改动 |1. **`golang.org/x/sys` v0.49.0 → v0.50.0**——本仓用到它的面只有四个调用（`unix.Flock` 加解锁、`unix.Mmap`/`Munmap`），0.50.0 的十个提交没有一个碰到它们，`x/sys/windows` 全仓无 import。公开面仍为 `Session` 27 + `DB` 9，磁盘格式仍为 `0x0012`。<br>2. **CI 两个动作跟进**——`actions/checkout` v4 → v7、`actions/setup-go` v5 → v7。checkout v7 的 fork PR 限制不适用（本 workflow 只有 `push: main` 与 `pull_request`）；setup-go v6 重写了工具链选择逻辑，而本 workflow 从 `go.mod` 读版本，因此实测了升级后装的工具链：`go1.27.3 linux/amd64`，无漂移。|
 | v1.6.7 | 2026-11-03 | 有界召回、计划化轮次与一次实测驱动的发布加固 |1. **Search 有硬表面预算**——正 `SceneDreamTopicThreshold` 只返回最新 N 条 depth-1 话题并报告 `omitted_topic_count`；负数同时关闭上限与自动 Dream，`SceneContext` 与 L4 仍保留完整记忆。<br>2. **计划覆盖整轮内容**——原文与事件统一用 `NodeSeq` 归因并支持子树读取；新增 `PlanActive` 省略 done/failed，活跃子孙接到最近的活跃祖先或提升为根。<br>3. **关键词保留整轮语义**——所有原文都进入提炼，prompt 不再导向简短，条数与单条长度无业务上限，长关键词轨重开后逐字保留。<br>4. **收束与存储加固**——`Update` 内容合并为一次 flush/remap；Close/Compact 执行全部清理并返回首个错误；帧解码用越界检查避免整数缩窄。<br>5. **发布证据扩充**——Dream 完成指标、离线规模基准、fuzz/漏洞 CI、Dependabot、Go 1.27.3 与 x/sys 0.49；真实模型 LoCoMo smoke 为 2/3，已记录为接受的发布风险。|
 | v1.6.6 | 2026-09-23 | 一轮只剩一次收束：域自持场景与轮次，写入形状不再收归属字段 |1. **一次 `Update(TurnEnd{Input,Output,Outcome,CreatedAt})` 收束一轮**——`Settle` 退役；Input/Output 原地覆写该轮话题的 Seq 1/2，Outcome 按调用次数追加成 `turn_outcome` 事件。场景与轮次键由域自持：`Search` 续用当前场景并开出这一轮，`AppendArchive` 的写入形状（`ArchiveInput`）不带地址——写到宿主没在做的轮这条路被形状关死。<br>2. **一个域只需存一件标识符**：`Session.AgentID` 读回该域库发号的 id，`DB.Agent(llm, id)` 按它取回同一个域（不建任何东西——未知或非 hex 一律拒），`DB.Agents()` 列出文件里的每个域。<br>3. **父步骤折出的摘要是派生值**：计划节点带 `summary_folded` 标记，分支变了派生摘要跟着重折，宿主写的文本任何汇总都不改写。<br>4. **修复真缺陷：合并吞掉对话的项目归属**——没锚的场景并掉锚定的那条后，整段对话从项目列举消失；现在幸存者没锚就接手被吞场景的锚，锚冲突整次拒且在任何删除之前。<br>5. **修复 Linux CI 抓出的真缺陷：同一毫秒连开两轮时，重开回到哪段会话由 id 哈希决定**——域内 `last_used_at` 戳改为严格递增。|
 | v1.6.5 | 2026-09-22 | MCP 面整体退役，Go module 是唯一对外形态 |1. **`cmd/memhop-mcp` 整包删除**：25 个工具、多租户 HTTP（SSE + streamable-http）、租户注册表与限制域数量的 `--tenants` 一并消失。2. **直接依赖 4 → 3**：它是唯一读 `modelcontextprotocol/go-sdk` 的地方，`go mod tidy` 连带清掉它带入的 7 个间接依赖。3. **Go 面一字不动**：`Session` 25 + `DB` 7 原样，`api.CodeOf` 保留为宿主读错误码的门面口。4. `make build-mcp`/`test-mcp` 删除，CI 与本地门禁的包清单去掉 `cmd`。5. 所有「仅 Go 侧」的说法改成对调用方的约束（`CompactTo` 入参是任意写路径，目的地由宿主限定），并纠正一处归因：`SceneContextTopic.messages` 在 JSON 里缺键是 `omitempty` 的性质，不是某个工具的选择。磁盘格式 `0x0012` 不变|
